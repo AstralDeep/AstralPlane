@@ -66,11 +66,11 @@ class Settings(BaseSettings):
     MCP_SERVERS: List[Dict[str, Any]] = [
 
         {
-            "id": "mcp_chatviewreasoning",  # Keep existing example if needed
-            "name": "MCP Reasoning Chat Server",
+            "id": "mcp_knowledge_graph_server",  # Keep existing example if needed
+            "name": "MCP Knowledge Graph",
             "description": "Connects to the standalone mcp_server.py via SSE.",
             "transport": "sse",
-            "url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8126/sse")
+            "url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8127/sse")
         }
 
     ]

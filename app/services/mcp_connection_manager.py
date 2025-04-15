@@ -25,6 +25,7 @@ from mcp.types import (
     CancelledNotificationParams
 )
 from mcp.shared.exceptions import McpError
+from pydantic import ValidationError
 
 # --- App Specific Imports (Direct - No Fallbacks) ---
 from app.config import Settings
@@ -272,117 +273,121 @@ class MCPConnectionManager:
             logger.error(f"[{server_id}] Error executing handler for method '{method_name}': {handler_exc}",
                          exc_info=True)
 
-    # Add this function inside MCPConnectionManager class in mcp_connection_manager.py
-
-        # In class MCPConnectionManager within app/services/mcp_connection_manager.py
-
-    # In class MCPConnectionManager within app/services/mcp_connection_manager.py
-
     async def _handle_mcp_log_message(self, server_id: str, params: Union[LoggingMessageNotificationParams, Dict, Any]):
         """
-        Handles 'notifications/message' (logs) from MCP server.
-        CHECKS if the 'logger' field matches the expected stream binding format.
-        If yes, treats 'data' as the chunk and 'logger' as the targetBinding
-        for a PrimitiveContentUpdateMessage.
-        Otherwise, formats and sends to the standard log binding.
+        Handles 'notifications/message'. Routes to specific UI bindings if the 'logger'
+        field contains a binding path ('mcp_stream:...'), otherwise routes to the default log view.
+
+        *** CORRECTED FIELD ACCESS LOGIC FOR PYDANTIC OBJECTS ***
         """
-        # Ensure self.connection_manager is available before proceeding
-        if not hasattr(self, 'connection_manager') or self.connection_manager is None:
-            logger.error(f"[{server_id}] ConnectionManager not available in _handle_mcp_log_message. Cannot proceed.")
-            return
+        logger.debug(
+            f"[{server_id}] Handling MCP Log Notification ('notifications/message'). Params Type: {type(params)}, Value: {params!r}")
+        stream_id = f"mcp:{server_id}"
+        default_log_binding = f"mcp_stream:{server_id}:log_messages"
+        TARGETED_BINDING_PREFIX = f"mcp_stream:{server_id}:"
+        expected_stream_logger_binding = f"{TARGETED_BINDING_PREFIX}raw_llm_stream"
 
-        logger.debug(f"[{server_id}] Handling MCP Log Notification ('notifications/message'). Params: {params!r}")
-
-        stream_id = f"mcp:{server_id}"  # WebSocket stream ID
-        default_log_binding = f"mcp_stream:{server_id}:log_messages"  # For standard logs
-        # Define the expected prefix/value for the logger field when it carries stream data
-        expected_stream_logger_binding = f"mcp_stream:{server_id}:raw_llm_stream"
-
-        is_stream_chunk = False
-        target_binding = None
-        chunk_text = None
+        target_binding = default_log_binding
+        is_targeted_update = False
+        is_raw_stream_chunk = False
+        final_content = None
+        update_type = "append"
 
         try:
-            # Extract level, data, and logger safely
-            log_level_raw = getattr(params, 'level', 'log') if not isinstance(params, dict) else params.get('level',
-                                                                                                            'log')
-            log_data = getattr(params, 'data', None) if not isinstance(params, dict) else params.get('data')
-            logger_name = getattr(params, 'logger', None) if not isinstance(params, dict) else params.get('logger')
+            # --- Safely extract fields using getattr (works for objects) ---
+            # Provide default values in case the attributes are missing (though they shouldn't be for valid logs)
+            log_level_raw = getattr(params, 'level', 'log')  # Default level 'log'
+            log_data = getattr(params, 'data', None)  # Default data None
+            logger_name = getattr(params, 'logger', None)  # Default logger None
+            # --- End Safe Extraction ---
 
-            # <<< Check if the logger field matches our specific stream binding >>>
-            if logger_name == expected_stream_logger_binding:
-                is_stream_chunk = True
-                target_binding = logger_name  # The logger name *is* the target binding
-                chunk_text = str(log_data) if log_data is not None else ""  # Data field holds the chunk
-                logger.debug(
-                    f"[{server_id}] Detected stream chunk via logger name: '{logger_name}'. Data: '{chunk_text[:100]}...'")
-            else:
-                # If logger field doesn't match, treat as a standard log message
-                is_stream_chunk = False
-                log_data_str = str(log_data) if log_data is not None else ""  # Use data as the log message content
-                logger.debug(f"[{server_id}] Treating as standard log message (logger='{logger_name}').")
+            if log_data is None:  # Check if data is missing early
+                logger.warning(
+                    f"[{server_id}] Log/Update message has None or missing 'data'. Ignoring. Logger='{logger_name}'")
+                return
 
-            # --- Process based on whether it's identified as a stream chunk ---
-            if is_stream_chunk:
-                # --- It's our embedded stream chunk ---
-                if chunk_text is None:  # Should have been caught above, but double check
-                    logger.warning(
-                        f"[{server_id}] Stream chunk detected but data field is missing/None. Logger='{target_binding}'. Ignoring.")
-                    return
-
-                logger.info(f"[{server_id}] Sending raw chunk to binding '{target_binding}': '{chunk_text[:100]}...'")
-
-                # Construct payload for PrimitiveContentUpdateMessage targeting the specific binding
-                update_payload = PrimitiveContentUpdatePayload(
-                    targetBinding=target_binding,  # Use the logger name as the binding
-                    content=chunk_text,  # Use the data field as the content
-                    updateType="append"
-                )
-                update_message = PrimitiveContentUpdateMessage(payload=update_payload)
-
-                # Send to frontend
-                if self.connection_manager.get_connection_count(stream_id) > 0:
-                    json_message = update_message.model_dump_json(exclude_none=True)
-                    await self.connection_manager.send_text(json_message, stream_id)
-                    logger.debug(
-                        f"[{server_id}] Relayed stream chunk (from log channel) to binding '{target_binding}'.")
+            # --- Determine the actual target binding (Logic remains the same) ---
+            if isinstance(logger_name, str) and logger_name.startswith(TARGETED_BINDING_PREFIX):
+                if logger_name == expected_stream_logger_binding:
+                    is_raw_stream_chunk = True
+                    target_binding = logger_name
+                    final_content = str(log_data)  # Ensure string for raw stream
+                    update_type = "append"
+                    logger.debug(f"[{server_id}] Detected raw stream chunk via specific logger name: '{logger_name}'.")
                 else:
-                    logger.debug(f"[{server_id}] No clients for stream {stream_id}, skipping relay of stream chunk.")
-
+                    is_targeted_update = True
+                    target_binding = logger_name
+                    final_content = log_data  # Keep original type (dict, str, etc.)
+                    update_type = "replace"
+                    logger.debug(f"[{server_id}] Detected targeted UI update via logger name: '{target_binding}'.")
             else:
-                # --- It's a standard log message ---
+                target_binding = default_log_binding
+                final_content = log_data
+                update_type = "append"
+                logger.debug(
+                    f"[{server_id}] Treating as standard log message (logger='{logger_name}'). Targeting default: '{target_binding}'")
+
+            # --- Construct and send the update message (Logic remains the same) ---
+
+            # Prepare payload based on target type
+            content_to_send = None
+            if is_targeted_update or is_raw_stream_chunk:
+                content_to_send = final_content
                 logger.info(
-                    f"[{server_id}] Processing standard log message for binding '{default_log_binding}'. Logger='{logger_name}'")
+                    f"[{server_id}] Sending '{update_type}' update to binding '{target_binding}'. Data Type: {type(content_to_send).__name__}")
+            else:  # Standard log message for the default view
                 log_level = str(log_level_raw).lower()
                 valid_levels = {"error", "warning", "info", "debug", "log"}
                 if log_level not in valid_levels: log_level = "log"
+                log_data_str = str(final_content)
+                try:
+                    # Ensure MCPLogEntry is imported if used
+                    from app.models.schemas import MCPLogEntry
+                    log_entry = MCPLogEntry(level=log_level, message=log_data_str, timestamp=datetime.now())
+                    content_to_send = log_entry.model_dump(exclude_none=True)
+                    logger.debug(f"[{server_id}] Sending structured log entry to '{target_binding}'.")
+                except ImportError:
+                    content_to_send = f"[{log_level.upper()}] {log_data_str}"
+                    logger.warning(
+                        f"[{server_id}] MCPLogEntry schema not found, sending plain text log to '{target_binding}'.")
+                except Exception as log_entry_err:
+                    content_to_send = f"[LOG_ERROR] {log_data_str}"  # Fallback if MCPLogEntry fails
+                    logger.error(f"[{server_id}] Error creating MCPLogEntry: {log_entry_err}", exc_info=True)
 
-                # Format as MCPLogEntry and send to the standard log view binding
-                log_entry = MCPLogEntry(level=log_level, message=log_data_str, timestamp=datetime.now())  # type: ignore
-                log_payload = PrimitiveContentUpdatePayload(
-                    targetBinding=default_log_binding,  # Target the default log view
-                    content=log_entry.model_dump(exclude_none=True),
-                    updateType="append"
-                )
-                log_message_obj = PrimitiveContentUpdateMessage(payload=log_payload)
+            if content_to_send is None:
+                logger.error(
+                    f"[{server_id}] Failed to determine content_to_send for notification. Params: {params!r}, Target: {target_binding}")
+                return
 
-                if self.connection_manager.get_connection_count(stream_id) > 0:
-                    json_message = log_message_obj.model_dump_json(exclude_none=True)
-                    await self.connection_manager.send_text(json_message, stream_id)
-                    logger.debug(f"[{server_id}] Sent standard log entry to binding '{default_log_binding}'.")
-                else:
-                    logger.debug(
-                        f"[{server_id}] No clients for stream {stream_id}, skipping send of standard log entry.")
+            # Create the final message
+            update_payload = PrimitiveContentUpdatePayload(
+                targetBinding=target_binding,
+                content=content_to_send,
+                updateType=update_type
+            )
+            update_message = PrimitiveContentUpdateMessage(payload=update_payload)
 
+            # Send to frontend if connected
+            if self.connection_manager.get_connection_count(stream_id) > 0:
+                json_message = update_message.model_dump_json(exclude_none=True)
+                await self.connection_manager.send_text(json_message, stream_id)
+                logger.debug(f"[{server_id}] Sent primitive_content_update to binding '{target_binding}'.")
+            else:
+                logger.debug(
+                    f"[{server_id}] No clients for stream {stream_id}, skipping send for binding '{target_binding}'.")
+
+        except AttributeError as ae:
+            logger.error(
+                f"[{server_id}] AttributeError processing 'notifications/message': {ae}. Params Type: {type(params)}, Params: {params!r}",
+                exc_info=True)
+        except ValidationError as ve:
+            logger.error(
+                f"[{server_id}] ValidationError processing 'notifications/message': {ve}. Params Type: {type(params)}, Params: {params!r}",
+                exc_info=True)
         except Exception as e:
-            logger.error(f"[{server_id}] Error processing 'notifications/message': {e}", exc_info=True)
-
-    # In class MCPConnectionManager within app/services/mcp_connection_manager.py
-
-    # In app/services/mcp_connection_manager.py -> MCPConnectionManager class
-
-    # In app/services/mcp_connection_manager.py -> MCPConnectionManager class
-    # (Ensure this function matches the version expecting data in 'data' field)
+            logger.error(
+                f"[{server_id}] Unexpected error processing 'notifications/message': {e}. Params Type: {type(params)}, Params: {params!r}",
+                exc_info=True)
 
     async def _handle_streaming_update(self, server_id: str, params: Union[Dict, Any]):
         """
