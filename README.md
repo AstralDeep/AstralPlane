@@ -20,6 +20,13 @@ This backend manages connections and translates requests between the frontend cl
 * **Project Management:** Provides APIs to organize work or sessions into distinct projects.
 * **Asynchronous Processing:** Built using FastAPI and asynchronous libraries for efficient handling of concurrent connections and I/O operations.
 
+
+## How to Run
+1. Create a virtual environment and install dependencies.
+2. Run one (or multiple) of the servers in the ```mcp_servers``` directory.
+3. Run the ```main.py``` script to start the AstralPlane server.
+4. You are ready to accept connections to AstralProjection or other frontends.
+
 ## Architecture
 
 AstralPlane employs a layered architecture:

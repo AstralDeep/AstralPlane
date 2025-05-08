@@ -1,20 +1,14 @@
-# app/mcp_async_demo.py
-
-import logging
 import asyncio
-import time
 import json
-import uuid
-from typing import List, Dict, Any, Optional, Set, Union
-import contextvars
-import uvicorn
+import logging
+import time
+from typing import List, Dict, Any, Optional
 
 # MCP Imports
 import mcp.types as types
+import uvicorn
 from mcp.server.fastmcp import FastMCP
-from mcp.shared.context import RequestContext # Assuming Context is accessed via FastMCP.get_context()
-from mcp.shared.exceptions import McpError
-from pydantic.networks import AnyUrl # Needed for type hinting potentially
+from pydantic.networks import AnyUrl  # Needed for type hinting potentially
 
 # --- Configuration ---
 HOST = "127.0.0.1"
@@ -40,10 +34,10 @@ mcp_async = FastMCP(
 active_tasks: Dict[str, asyncio.Task] = {}
 active_tasks_lock = asyncio.Lock()
 
-# --- UI Structure Function (MODIFIED: Added Streaming Elements) ---
+# --- UI Structure Function (Removed Status View) ---
 def construct_async_ui_layout() -> dict:
     """Constructs the UI layout dictionary with explanations and result views."""
-    server_logger.info(f"[{SERVER_NAME}] Constructing Final Async Demo UI Layout (Rev 11 - Streaming Added)...")
+    server_logger.info(f"[{SERVER_NAME}] Constructing Final Async Demo UI Layout (Rev 10)...")
     # Define base binding strings
     base_binding = f"mcp_stream:{SERVER_NAME}"
     log_binding = f"{base_binding}:log_messages"
@@ -56,15 +50,13 @@ def construct_async_ui_layout() -> dict:
     res_list_change_result_binding = f"{base_binding}:trigger_resource_list_change_result"
     prompt_list_change_result_binding = f"{base_binding}:trigger_prompt_list_change_result"
     trigger_resource_update_result_binding = f"{base_binding}:trigger_resource_update_result"
-    # <<< NEW BINDING for the streaming text result view >>>
-    stream_text_data_result_binding = f"{base_binding}:stream_text_data_result"
 
     return {
         "id": "async-root-layout", "type": "StackLayout",
         "config": {"direction": "vertical", "padding": "16px", "gap": "16px"},
         "children": [
             {"id": "title", "type": "TextView", "config": {"initialText": "MCP Async Demo Server", "variant":"headline"}},
-            {"id": "explanation_main", "type": "TextView", "config": {"initialText": "This server demonstrates asynchronous MCP features. Use buttons to trigger actions. Observe feedback in 'Outputs & Logs' section (Logs, Progress, Results). Sending standard notifications using SDK helper methods. Also includes custom streaming notification example.", "variant":"body"}}, # Updated text
+            {"id": "explanation_main", "type": "TextView", "config": {"initialText": "This server demonstrates asynchronous MCP features. Use buttons to trigger actions. Observe feedback in 'Outputs & Logs' section (Logs, Progress, Results). Sending standard notifications using SDK helper methods.", "variant":"body"}}, # Updated text
             {"id": "actions-layout", "type": "StackLayout", "config": {"direction": "horizontal", "gap": "10px", "wrap": "wrap", "style": {"marginTop": "10px", "marginBottom": "20px"}},
              "children": [
                  {"id": "send-logs-btn", "type": "Button", "config": {"label": "Send Logs"}, "actionId": "send_log_messages"},
@@ -72,8 +64,6 @@ def construct_async_ui_layout() -> dict:
                  {"id": "trigger-tool-list-btn", "type": "Button", "config": {"label": "Trigger Tool List Change"}, "actionId": "trigger_tool_list_change"},
                  {"id": "trigger-res-list-btn", "type": "Button", "config": {"label": "Trigger Resource List Change"}, "actionId": "trigger_resource_list_change"},
                  {"id": "trigger-prompt-list-btn", "type": "Button", "config": {"label": "Trigger Prompt List Change"}, "actionId": "trigger_prompt_list_change"},
-                 # <<< NEW BUTTON for streaming >>>
-                 {"id": "stream-data-btn", "type": "Button", "config": {"label": "Stream Text Data"}, "actionId": "stream_text_data"},
              ]},
             {"id": "res-update-section", "type": "StackLayout", "config": {"direction": "vertical", "gap": "8px", "padding": "10px", "border": True, "style": {"borderColor": "#e0e0e0"}},
               "children": [
@@ -90,9 +80,7 @@ def construct_async_ui_layout() -> dict:
              "children": [
                  {"id": "outputs_title", "type": "TextView", "config": {"initialText": "Outputs & Logs", "variant": "titleSmall"}},
                  {"id": "progress-text", "type": "TextView", "config": {"initialText": "Progress updates appear here.", "variant": "body"}, "updateBinding": progress_binding},
-                 # <<< NEW TextView for streaming results >>>
-                 {"id": "stream-data-result-view", "type": "TextView", "config": {"initialText": "Streamed data appears here...", "variant": "body", "style": {"whiteSpace": "pre-wrap", "fontFamily": "monospace"}}, "updateBinding": stream_text_data_result_binding}, # Use the new binding
-                 # -- Existing TextViews for specific tool results --
+                 # -- TextViews for specific tool results --
                  {"id": "trigger-resource-update-result-view", "type": "TextView", "config": {"initialText": "Resource Update Result...", "variant": "body", "style": {"fontStyle": "italic", "color": "grey"}}, "updateBinding": trigger_resource_update_result_binding},
                  {"id": "send-logs-result-view", "type": "TextView", "config": {"initialText": "Send Logs Result...", "variant": "body", "style": {"fontStyle": "italic", "color": "grey"}}, "updateBinding": send_logs_result_binding},
                  {"id": "long-task-result-view", "type": "TextView", "config": {"initialText": "Long Task Result...", "variant": "body", "style": {"fontStyle": "italic", "color": "grey"}}, "updateBinding": long_task_result_binding},
@@ -144,10 +132,7 @@ async def send_log_messages() -> List[types.TextContent]:
 
     await ctx.info(completion_log_message) # Log completion status
 
-    # --- Return result to the correct binding ---
-    # Binding is defined as f"{base_binding}:send_log_messages_result"
     return [types.TextContent(type="text", text="Log messages action completed.")]
-
 
 @mcp_async.tool(
     name="long_task",
@@ -201,7 +186,6 @@ async def long_task() -> List[types.TextContent]:
                 if hasattr(ctx, 'session') and hasattr(ctx.session, 'send_notification'):
                      try:
                         # Keep params for Cancelled notification as it requires requestId
-                        # Assume types.CancelledNotification and types.CancelledNotificationParams exist
                         await ctx.session.send_notification(
                              types.CancelledNotification(
                                  method="notifications/cancelled",
@@ -211,8 +195,6 @@ async def long_task() -> List[types.TextContent]:
                         await ctx.info(f"Attempted server-initiated cancellation notification for {stored_request_id}")
                      except AttributeError:
                           await ctx.error("NotificationError: ctx.session.send_notification method not found.")
-                     except NameError:
-                          await ctx.error("NotificationError: mcp.types CancelledNotification/Params not found.")
                      except Exception as e:
                           await ctx.error(f"NotificationError: Failed sending outward cancellation ({type(e).__name__}).")
                 else:
@@ -224,26 +206,19 @@ async def long_task() -> List[types.TextContent]:
         completion_timestamp = time.strftime('%H:%M:%S')
         completion_message = f"[{completion_timestamp}] Long task (ID: {str(stored_request_id)[-6:]}...) completed successfully."
         await ctx.info(completion_message) # Log completion status
-        # --- Return result to the correct binding ---
-        # Binding is f"{base_binding}:long_task_result"
         return [types.TextContent(type="text", text="Long task finished.")]
 
     except asyncio.CancelledError:
         cancel_timestamp = time.strftime('%H:%M:%S')
         cancel_message = f"[{cancel_timestamp}] Long task (ID: {str(stored_request_id)[-6:]}...) was cancelled."
         await ctx.warning(cancel_message) # Log cancel status
-        # If cancelled, MCP typically handles the error response, no explicit return needed?
-        # If you want to force a message to the result binding on cancel:
-        # return [types.TextContent(type="text", text="Long task cancelled.")]
         raise # Re-raise the standard asyncio.CancelledError
 
     except Exception as e:
         error_timestamp = time.strftime('%H:%M:%S')
         error_message = f"[{error_timestamp}] Task (ID: {str(stored_request_id)[-6:]}...) failed: {type(e).__name__}"
         await ctx.error(error_message) # Log error status
-        # If an error occurs, return error message to the result binding
-        # return [types.TextContent(type="text", text=f"Long task failed: {type(e).__name__}")]
-        raise # Re-raise the exception
+        raise
 
     finally:
         async with active_tasks_lock:
@@ -272,8 +247,6 @@ async def trigger_tool_list_change() -> List[types.TextContent]:
     else:
         await ctx.warning("No session or send_tool_list_changed method available for outward ToolListChanged.")
 
-    # --- Return result to the correct binding ---
-    # Binding is f"{base_binding}:trigger_tool_list_change_result"
     return [types.TextContent(type="text", text="ToolListChanged action completed.")]
 
 
@@ -297,8 +270,6 @@ async def trigger_resource_list_change() -> List[types.TextContent]:
     else:
         await ctx.warning("No session or send_resource_list_changed method available for outward ResourceListChanged.")
 
-    # --- Return result to the correct binding ---
-    # Binding is f"{base_binding}:trigger_resource_list_change_result"
     return [types.TextContent(type="text", text="ResourceListChanged action completed.")]
 
 
@@ -322,8 +293,6 @@ async def trigger_prompt_list_change() -> List[types.TextContent]:
     else:
         await ctx.warning("No session or send_prompt_list_changed available for outward PromptListChanged.")
 
-    # --- Return result to the correct binding ---
-    # Binding is f"{base_binding}:trigger_prompt_list_change_result"
     return [types.TextContent(type="text", text="PromptListChanged action completed.")]
 
 
@@ -336,8 +305,7 @@ async def trigger_resource_update(uri: str) -> List[types.TextContent]:
     if not uri:
          error_message = f"[{timestamp}] Error: Missing URI for Resource Update."
          await ctx.error("URI parameter is required for trigger_resource_update.")
-         # Return error to the correct binding
-         # Binding is f"{base_binding}:trigger_resource_update_result"
+         # No need to log twice await ctx.error(error_message) # Log error status
          return [types.TextContent(type="text", text="Error: Missing URI parameter.")]
 
     status_message = f"[{timestamp}] 'Resource Update' action executed locally for URI: '{uri}'"
@@ -347,94 +315,25 @@ async def trigger_resource_update(uri: str) -> List[types.TextContent]:
         try:
             # --- Use the specific helper method, passing the URI ---
             # Convert string URI to AnyUrl if required by the helper method signature
+            # (Assuming AnyUrl can parse common URI strings)
             try:
-                pydantic_uri = AnyUrl(uri) # Assumes pydantic.networks.AnyUrl is available
-            except Exception as uri_err:
-                 await ctx.error(f"Invalid URI format: {uri}. Error: {uri_err}")
+                pydantic_uri = AnyUrl(uri)
+            except Exception:
+                 await ctx.error(f"Invalid URI format: {uri}")
                  return [types.TextContent(type="text", text=f"Error: Invalid URI format '{uri}'.")]
 
             await ctx.session.send_resource_updated(uri=pydantic_uri)
             await ctx.info(f"Attempted notifications/resources/updated notification outward for URI: {uri} via helper.") # Changed log
         except AttributeError:
             await ctx.error("NotificationError: ctx.session.send_resource_updated method not found.")
-        except NameError:
-             await ctx.error("NotificationError: pydantic.networks.AnyUrl not found.")
         except Exception as e:
              simple_error_msg = f"NotificationError: Failed sending outward ResourceUpdated ({type(e).__name__})."
              await ctx.error(simple_error_msg)
+             # await ctx.error(f"{status_message} (Outward notification attempt failed!)") # Log failure context - covered by simple_error_msg
     else:
         await ctx.warning(f"No session or send_resource_updated method available for outward ResourceUpdated for URI: {uri}")
 
-    # --- Return result to the correct binding ---
-    # Binding is f"{base_binding}:trigger_resource_update_result"
     return [types.TextContent(type="text", text=f"Resource update action for '{uri}' completed.")]
-
-
-# <<< NEW STREAMING TOOL FUNCTION >>>
-@mcp_async.tool(
-    name="stream_text_data",
-    description="Simulates streaming text data chunks via custom notifications."
-)
-async def stream_text_data() -> List[types.TextContent]:
-    """MCP Tool: Streams text chunks using custom notifications."""
-    ctx = mcp_async.get_context() # FastMCP Context
-    timestamp = time.strftime('%H:%M:%S')
-    await ctx.info(f"[{timestamp}] Starting 'stream_text_data' action...")
-
-    # Define the target binding for the TextView where chunks will appear
-    update_binding_string = f"mcp_stream:{SERVER_NAME}:stream_text_data_result"
-    # Define the custom notification method name
-    custom_method_string = "custom/partialResultChunk"
-    # Define the final result binding for this tool's own completion message
-    # (This matches the TextView id: stream-data-result-view + _result convention,
-    # but we're using the stream-data-result-view binding directly for updates.
-    # Let's send the *final* completion message to a different, implicit binding
-    # that MCP associates with the tool call itself, usually based on actionId.
-    # Let's assume MCP handles this or sends it to the default output if no explicit binding is provided.)
-
-    num_chunks = 5
-    for i in range(num_chunks):
-        try:
-            data_chunk = f"Chunk {i+1}/{num_chunks} received at {time.strftime('%H:%M:%S')}\n"
-
-            # Construct the payload for the custom notification
-            params = {"updateBinding": update_binding_string, "chunk": data_chunk}
-
-            # Create the Notification object (assuming types.Notification exists)
-            try:
-                notification = types.Notification(method=custom_method_string, params=params)
-            except NameError:
-                 await ctx.error("Streaming Error: mcp.types.Notification not found.")
-                 return [types.TextContent(type="text", text="Error: Streaming failed (Internal Type Missing).")]
-            except Exception as type_err:
-                 await ctx.error(f"Streaming Error creating Notification object: {type_err}")
-                 return [types.TextContent(type="text", text="Error: Streaming failed (Notification Creation).")]
-
-
-            # Check if the session exists and has the send_notification method
-            if hasattr(ctx, 'session') and ctx.session and hasattr(ctx.session, 'send_notification'):
-                await ctx.session.send_notification(notification)
-                await ctx.info(f"Sent chunk {i+1}/{num_chunks} via {custom_method_string}")
-            else:
-                await ctx.warning(f"Chunk {i+1}/{num_chunks} NOT sent: No active session or send_notification method.")
-                # Stop if we can't send
-                return [types.TextContent(type="text", text="Error: Cannot send stream updates (No Session).")]
-
-            # Simulate work/delay between chunks
-            await asyncio.sleep(1.0)
-
-        except asyncio.CancelledError:
-            await ctx.warning(f"Streaming task cancelled during chunk {i+1}.")
-            raise # Re-raise cancellation
-        except Exception as e:
-            await ctx.error(f"Error during streaming chunk {i+1}: {type(e).__name__} - {e}")
-            return [types.TextContent(type="text", text=f"Error: Streaming failed during chunk {i+1}.")]
-
-    completion_timestamp = time.strftime('%H:%M:%S')
-    await ctx.info(f"[{completion_timestamp}] Streaming task finished.")
-
-    # Return a final message to the *tool's* result binding (MCP handles routing this)
-    return [types.TextContent(type="text", text="Streaming action completed.")]
 
 
 # --- Client->Server Notification Handlers ---
@@ -488,25 +387,37 @@ async def handle_client_cancellation(params: Optional[Dict[str, Any]]):
 
 
 # --- Register Notification Handlers ---
-# (Keep existing registration logic)
+# Registering handlers directly via internal dict access.
+# This is necessary if the FastMCP layer or the underlying lowlevel server
+# does not provide specific decorators (@server.cancelled_notification(), etc.)
+# for all desired notification types in this SDK version.
 try:
+    # Ensure the internal server object exists
     if not hasattr(mcp_async, '_mcp_server'):
          raise AttributeError("Internal '_mcp_server' not found on FastMCP instance.")
 
+    # Register RootsListChanged handler
     if hasattr(types, "RootsListChangedNotification"):
         mcp_async._mcp_server.notification_handlers[types.RootsListChangedNotification] = handle_roots_changed
         server_logger.info(f"[{SERVER_NAME}] Registered handler for notifications/roots/list_changed")
-    else: server_logger.error(f"[{SERVER_NAME}] mcp.types.RootsListChangedNotification not found.")
+    else:
+         server_logger.error(f"[{SERVER_NAME}] mcp.types.RootsListChangedNotification not found. Cannot register handler.")
 
+    # Register CancelledNotification handler
     if hasattr(types, "CancelledNotification"):
         mcp_async._mcp_server.notification_handlers[types.CancelledNotification] = handle_client_cancellation
         server_logger.info(f"[{SERVER_NAME}] Registered handler for notifications/cancelled (Client Initiated)")
-    else: server_logger.error(f"[{SERVER_NAME}] mcp.types.CancelledNotification not found.")
+    else:
+        server_logger.error(f"[{SERVER_NAME}] mcp.types.CancelledNotification not found. Cannot register handler.")
 
-except AttributeError as e: server_logger.error(f"[{SERVER_NAME}] Failed to access internal _mcp_server or notification_handlers dictionary: {e}. SDK structure might differ.")
-except KeyError as e: server_logger.error(f"[{SERVER_NAME}] KeyError during notification handler registration: {e}. SDK might be incomplete or changed.")
-except NameError: server_logger.error(f"[{SERVER_NAME}] Failed to find 'types' module while registering handlers.")
-except Exception as e: server_logger.error(f"[{SERVER_NAME}] Unexpected error during notification handler registration: {e}", exc_info=True)
+except AttributeError as e:
+    server_logger.error(f"[{SERVER_NAME}] Failed to access internal _mcp_server or notification_handlers dictionary: {e}. SDK structure might differ.")
+except KeyError as e:
+     server_logger.error(f"[{SERVER_NAME}] KeyError during notification handler registration: {e}. SDK might be incomplete or changed.")
+except NameError:
+     server_logger.error(f"[{SERVER_NAME}] Failed to find 'types' module while registering handlers.")
+except Exception as e:
+     server_logger.error(f"[{SERVER_NAME}] Unexpected error during notification handler registration: {e}", exc_info=True)
 
 
 # --- Main execution block ---
@@ -522,9 +433,8 @@ if __name__ == "__main__":
     log_level = mcp_async.settings.log_level.lower()
 
     print(f"Attempting to listen on: http://{run_host}:{run_port}")
-    print("This server demonstrates MCP async features, including custom streaming.")
+    print("This server demonstrates MCP async features. Check Logs, Progress, and Results views for feedback.")
     print("Using specific SDK session helper methods for standard notifications...")
-    print("Using low-level session.send_notification for custom 'partialResultChunk'...")
     print("----------------------------------------------------")
 
     try:

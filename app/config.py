@@ -1,10 +1,9 @@
-# app/config.py
-import os
-import json
-from typing import List, Dict, Any, Union, Optional
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
 import logging
+import os
+from typing import List, Dict, Any, Optional
+
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
 
 # Load environment variables from .env file
 load_dotenv()
@@ -16,6 +15,8 @@ class Settings(BaseSettings):
 
     # ... (Keep existing settings like APP_NAME, DEBUG, HOST, PORT, CORS, JWT, etc.) ...
     APP_NAME: str = "AI Agent Interface Backend"
+    APP_DESCRIPTION: str = "AI Agents using MCP!"
+    APP_VERSION: str = "0.0.1"
     APP_ENV: str = os.getenv("APP_ENV", "development")
     DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "t")
     HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -31,7 +32,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     WS_PING_INTERVAL: int = int(os.getenv("WS_PING_INTERVAL", "20"))
 
-    '''
+    # --- MCP Server Configuration ---
+    MCP_SERVERS: List[Dict[str, Any]] = [
+
         {
             "id": "mcp_mock_chatviewbasic",  # Keep existing example if needed
             "name": "Mock MCP Chat Server",
@@ -59,18 +62,6 @@ class Settings(BaseSettings):
             "description": "Connects to the standalone mcp_server.py via SSE.",
             "transport": "sse",
             "url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8126/sse")
-        }   
-    '''
-
-    # --- MCP Server Configuration ---
-    MCP_SERVERS: List[Dict[str, Any]] = [
-
-        {
-            "id": "mcp_knowledge_graph_server",  # Keep existing example if needed
-            "name": "MCP Knowledge Graph",
-            "description": "Connects to the standalone mcp_server.py via SSE.",
-            "transport": "sse",
-            "url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8127/sse")
         }
 
     ]
