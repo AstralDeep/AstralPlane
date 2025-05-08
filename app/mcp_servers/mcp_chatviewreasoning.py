@@ -9,21 +9,20 @@
 # - Uses standard logging channel workaround for streaming.
 # Assumes MCP SDK and OpenAI SDK are installed.
 
-import logging
 import asyncio
-import sys
-import time
 import json
-import uuid
+import logging
 import os
 import re
-from typing import List, Dict, Any, Optional, Set, Union
-import uvicorn
+import time
+import uuid
+from typing import List, Dict, Any, Optional
 
 # --- Imports ---
 import openai
+import uvicorn
 from openai import AsyncOpenAI
-from pydantic import BaseModel # Import Pydantic BaseModel
+from pydantic import BaseModel  # Import Pydantic BaseModel
 
 # --- MCP Imports ---
 try:

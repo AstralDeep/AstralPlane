@@ -9,7 +9,7 @@ from mcp.shared.context import RequestContext
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SERVER_URL = "http://127.0.0.1:8123/sse"
+SERVER_URL = "http://127.0.0.1:8124/sse"
 
 # 1. Define the sampling callback to mock the LLM response
 async def mock_llm_sampling_callback(
