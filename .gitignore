@@ -1,5 +1,7 @@
 .idea/
 __pycache__/
 venv/
+.venv/
 logs/*
 app/logs/*
+app/mcp_servers/logs/
