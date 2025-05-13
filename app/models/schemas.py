@@ -321,5 +321,28 @@ class MCPLogEntry(BaseModel):
     timestamp: Optional[datetime] = Field(default_factory=datetime.now) # Add timestamp during relay
 
 
-# Final rebuild if any forward references were added/affected by new models
-# UIElement.model_rebuild() # Already called earlier, likely not needed again unless complex refs added
+class MCPServerConfigBase(BaseModel): # Your Pydantic BaseModel
+    name: str
+    url: str # You could use pydantic.HttpUrl if the URL must be HTTP/S
+    description: Optional[str] = None
+    is_active: bool = True
+    # Add other configurable fields that mirror your SQLAlchemy model (excluding id, created_at, updated_at)
+
+class MCPServerConfigCreate(MCPServerConfigBase):
+    pass # Inherits all fields from base
+
+class MCPServerConfigUpdate(BaseModel): # For partial updates
+    name: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Add other updatable fields
+
+class MCPServerConfigResponse(MCPServerConfigBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    # Pydantic V2 uses from_attributes by default if BaseModel.Config has it
+    class Config:
+        from_attributes = True
