@@ -11,6 +11,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette import status
 from starlette.websockets import WebSocketState
 
 from app.api import mcp_server_management
@@ -26,7 +27,8 @@ from app.models.schemas import (
 )
 from app.services.auth_service import authenticate_websocket
 from app.services.connection_manager import ConnectionManager, get_connection_manager
-from app.services.mcp_connection_manager import MCPConnectionManager, get_mcp_connection_manager
+from app.services.mcp_connection_manager import MCPConnectionManager, get_mcp_connection_manager, \
+	get_mcp_connection_manager_ws
 from app.services.project_service import ProjectViewsService
 from app.utils.logging_config import configure_logging
 from app.utils.websocket_logger import WebSocketLogger
@@ -48,15 +50,23 @@ app = FastAPI(
 
 # --- CORS Middleware ---
 app.add_middleware(
-	CORSMiddleware,
-	allow_origins=settings.CORS_ORIGINS, allow_credentials=True,
-	allow_methods=["*"], allow_headers=["*"],
+   CORSMiddleware,
+   allow_origins=["*"], # <--- MODIFIED: Allow all origins for development
+   allow_credentials=True,
+   allow_methods=["*"],
+   allow_headers=["*"],
 )
+# app.add_middleware(
+# 	CORSMiddleware,
+# 	allow_origins=settings.CORS_ORIGINS, allow_credentials=True,
+# 	allow_methods=["*"], allow_headers=["*"],
+# )
 
 # --- API Routers ---
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projects/Servers"])
-app.include_router(mcp_server_management.router, prefix="/api/mcp-servers", tags=["MCP Server Management"]) # New router
+app.include_router(mcp_server_management.router, prefix="/api/mcp-servers",
+				   tags=["MCP Server Management"])  # New router
 if hasattr(websockets, 'router'):
 	app.include_router(websockets.router, prefix="/api/ws", tags=["WebSocket Utils"])
 
@@ -155,72 +165,69 @@ async def health_check(mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_
 @app.websocket("/api/ws/stream/{stream_path_param:path}")
 async def websocket_endpoint(
 		websocket: WebSocket,
-		stream_path_param: str = Path(..., description="Stream identifier, e.g., 'mcp:<database_server_id>'"),
-		# For UI client connections, assuming get_ui_connection_manager_dependency is correctly set up
+		stream_path_param: str = Path(..., description="Stream identifier, e.g., 'mcp:<server_id>'"),
 		connection_manager: ConnectionManager = Depends(get_connection_manager),
-		# This now uses the get_mcp_connection_manager defined in main.py that pulls from app.state
-		mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager)
+		mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager_ws)
 ):
 	"""Handles WebSocket connections for streaming UI updates and MCP interaction."""
 	ws_client_info = WebSocketLogger.get_client_info(websocket)
-	# The ws_stream_id IS stream_path_param, e.g., "mcp:1" where "1" is the DB ID.
-	ws_stream_id = stream_path_param
+	ws_stream_id = stream_path_param  # e.g., "mcp:1"
 	logger.info(f">>> [WS/{ws_stream_id}] Accepted connection from {ws_client_info} <<<")
 
 	views_service: Optional[ProjectViewsService] = None
 	try:
+		# Accessing ProjectViewsService from app.state (initialized in main.py lifespan)
 		views_service = websocket.app.state.project_views_service
 		if not views_service:
 			logger.error(f"[WS/{ws_stream_id}] ProjectViewsService not available. Cannot generate UI.")
-			await websocket.close(code=1011, reason="Internal server error: UI Service unavailable")
+			await websocket.close(code=status.WS_1011_INTERNAL_ERROR,
+								  reason="Internal server error: UI Service unavailable")
 			return
 	except AttributeError:
 		logger.error(f"[WS/{ws_stream_id}] 'project_views_service' not found on app state.")
-		await websocket.close(code=1011, reason="Internal server error: UI Service not configured")
+		await websocket.close(code=status.WS_1011_INTERNAL_ERROR,
+							  reason="Internal server error: UI Service not configured")
 		return
 
-	mcp_server_db_id: Optional[str] = None  # This will be the string representation of MCPServerConfig.id
-	session_established_with_mcp = False  # Tracks if we have a live MCP session
+	mcp_server_db_id: Optional[str] = None
+	session_established_with_mcp = False
 	user_id = "<unauthenticated>"
-	is_authenticated = False
-	disconnect_reason = "Handler Exit"
+	is_authenticated = False  # Default, will be set by authenticate_websocket
+	disconnect_reason = "Handler normal exit"  # Default reason
 
 	try:
-		# --- WebSocket Authentication (remains the same) ---
-		logger.debug(f"[WS/{ws_stream_id}] Attempting WebSocket authentication...")
-		is_authenticated, user_data, error_message = await authenticate_websocket(websocket)
-		if not is_authenticated:
-			logger.warning(f"[WS/{ws_stream_id}] WebSocket Auth FAILED: {error_message}")
-			disconnect_reason = f"Authentication Failed: {error_message}"
-			await websocket.close(code=4003, reason=disconnect_reason)
-			return
-		user_id = user_data.get("id", "<error_id>") if isinstance(user_data, dict) else "<invalid_data>"
-		logger.info(f"[WS/{ws_stream_id}] WebSocket Auth successful for user '{user_id}'.")
+		logger.debug(f"[WS/{ws_stream_id}] WebSocket authentication SKIPPED for development.")
+		# is_authenticated, user_data, auth_error_message = await authenticate_websocket(websocket) # <--- COMMENTED OUT/MODIFIED
+		# For development, we'll simulate successful authentication:
+		user_data = {"id": user_id, "username": "dev_user"}  # Mock user_data
+		auth_error_message = None
 
-		# --- Parse Target MCP Server Database ID ---
+		# if not is_authenticated: # This block will now be skipped
+		#    logger.warning(f"[WS/{ws_stream_id}] WebSocket Auth FAILED: {auth_error_message}")
+		#    disconnect_reason = f"Authentication Failed: {auth_error_message}"
+		#    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
+		#    return
+		# user_id = user_data.get("id", "<error_id>") if isinstance(user_data, dict) else "<invalid_data>" # <--- MODIFIED ABOVE
+		logger.info(f"[WS/{ws_stream_id}] WebSocket Auth SKIPPED. Proceeding as user '{user_id}'.")
+
 		if not stream_path_param.startswith("mcp:"):
 			logger.error(f"[WS/{ws_stream_id}] Invalid stream path format. Expected 'mcp:<server_db_id>'.")
 			disconnect_reason = "Invalid target stream format"
-			await websocket.close(code=1008, reason=disconnect_reason)
+			await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
 			return
 
 		mcp_server_db_id = stream_path_param.split(":", 1)[1]
-		if not mcp_server_db_id:  # Or if not mcp_server_db_id.isdigit() for basic validation if ID is integer
+		if not mcp_server_db_id:  # Add more validation if IDs have specific format (e.g., numeric)
 			logger.error(f"[WS/{ws_stream_id}] Missing or invalid MCP server database ID in path.")
 			disconnect_reason = "Missing or invalid target server ID"
-			await websocket.close(code=1008, reason=disconnect_reason)
+			await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
 			return
 		logger.info(f"[WS/{ws_stream_id}] Target MCP Server Database ID: '{mcp_server_db_id}'")
 
-		# --- Register WebSocket with UI ConnectionManager (remains the same) ---
 		await connection_manager.connect(websocket, ws_stream_id)
 		WebSocketLogger.log_connection(websocket, ws_stream_id, user_id)
 		logger.debug(f"[WS/{ws_stream_id}] UI WebSocket registered with its ConnectionManager.")
 
-		# --- Handshake: Receive Client Capabilities (remains the same) ---
-		# ... (your existing handshake logic: register_capabilities, timeout, etc.) ...
-		# This part is about the UI client's capabilities, not directly MCP.
-		# (Assuming your handshake logic from original main.py is here)
 		handshake_timeout = 10.0
 		logger.info(f"[WS/{ws_stream_id}] Waiting for 'register_capabilities' (Timeout: {handshake_timeout}s)...")
 		try:
@@ -230,66 +237,58 @@ async def websocket_endpoint(
 			if handshake_data.get("type") == "register_capabilities":
 				supported_primitives = handshake_data.get("payload", {}).get("supported_primitives", [])
 				if isinstance(supported_primitives, list):
-					connection_manager.store_supported_primitives(websocket,
-																  supported_primitives)  # Store against UI connection manager
+					connection_manager.store_supported_primitives(websocket, supported_primitives)
 					logger.info(f"[WS/{ws_stream_id}] Handshake OK. Client capabilities: {supported_primitives}")
 				else:
-					disconnect_reason = "Invalid capabilities format"
-					raise WebSocketDisconnect(code=1003, reason=disconnect_reason)
+					disconnect_reason = "Invalid capabilities format (not a list)"
+					raise WebSocketDisconnect(code=status.WS_1003_UNSUPPORTED_DATA, reason=disconnect_reason)
 			else:
-				disconnect_reason = "Protocol error: Expected capabilities"
-				raise WebSocketDisconnect(code=1002, reason=disconnect_reason)
+				disconnect_reason = "Protocol error: Expected 'register_capabilities' message"
+				raise WebSocketDisconnect(code=status.WS_1002_PROTOCOL_ERROR, reason=disconnect_reason)
 		except asyncio.TimeoutError:
 			disconnect_reason = "Handshake timeout"
-			raise WebSocketDisconnect(code=1008, reason=disconnect_reason)
+			logger.warning(f"[WS/{ws_stream_id}] {disconnect_reason}")
+			raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION,
+									  reason=disconnect_reason)  # Or another appropriate code
 		except json.JSONDecodeError:
 			disconnect_reason = "Invalid handshake JSON"
-			raise WebSocketDisconnect(code=1003, reason=disconnect_reason)
-		except WebSocketDisconnect as wsd:
-			logger.warning(f"[WS/{ws_stream_id}] Disconnecting during handshake: {wsd.reason}")
-			raise wsd
-		except Exception as handshake_err:
-			logger.error(f"[WS/{ws_stream_id}] Handshake error: {handshake_err}", exc_info=True)
-			disconnect_reason = "Handshake error"
-			raise WebSocketDisconnect(code=1011, reason=disconnect_reason)
+			logger.warning(f"[WS/{ws_stream_id}] {disconnect_reason}")
+			raise WebSocketDisconnect(code=status.WS_1003_UNSUPPORTED_DATA, reason=disconnect_reason)
+		except WebSocketDisconnect as wsd:  # Re-raise to be caught by outer handler
+			logger.warning(f"[WS/{ws_stream_id}] Handshake failed: {wsd.reason}")
+			disconnect_reason = wsd.reason
+			raise
+		except Exception as handshake_err:  # Catch any other unexpected errors
+			disconnect_reason = "Unexpected handshake error"
+			logger.error(f"[WS/{ws_stream_id}] {disconnect_reason}: {handshake_err}", exc_info=True)
+			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR, reason=disconnect_reason)
 
-		# --- Get MCP Session from MCPConnectionManager ---
 		logger.info(f"[WS/{ws_stream_id}] Attempting to get MCP session for server DB ID '{mcp_server_db_id}'...")
-		# mcp_conn_manager is the refactored instance.
-		# get_or_create_session now takes the database ID string.
-		# It returns Tuple[Optional[ClientSession], Optional[str]]
 		mcp_client_session, mcp_session_error = await mcp_conn_manager.get_or_create_session(mcp_server_db_id)
 
 		if mcp_session_error or not mcp_client_session:
 			error_detail = f"Failed to get MCP session for server '{mcp_server_db_id}': {mcp_session_error or 'Session object is None.'}"
 			logger.error(f"[WS/{ws_stream_id}] {error_detail}")
+			server_name_for_error = mcp_server_db_id  # Default
 			try:
-				# Try to get server name for a friendlier message
 				server_details_for_error = await mcp_conn_manager.get_connection_details(mcp_server_db_id)
-				server_name_for_error = server_details_for_error.get("name",
-																	 mcp_server_db_id) if server_details_for_error else mcp_server_db_id
-
+				if server_details_for_error:
+					server_name_for_error = server_details_for_error.get("name", mcp_server_db_id)
 				await websocket.send_text(json.dumps({"type": "error", "payload": {
 					"message": f"Target service '{server_name_for_error}' (ID: {mcp_server_db_id}) not available: {mcp_session_error}"
 				}}))
 			except Exception as send_err:
 				logger.error(f"[WS/{ws_stream_id}] Error sending MCP session acquisition error to client: {send_err}")
 			disconnect_reason = f"MCP Session Error: {mcp_session_error}"
-			raise WebSocketDisconnect(code=1011, reason=disconnect_reason)  # Use 1011 for internal server error
+			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR, reason=disconnect_reason)
 
 		session_established_with_mcp = True
-		# mcp_client_session is the actual session object from the MCP SDK, not just a wrapper dict.
 		logger.info(f"[WS/{ws_stream_id}] Successfully obtained MCP session for server DB ID '{mcp_server_db_id}'.")
 
-		# --- Generate Initial UI State & Send Tool Schemas (largely same, uses new mcp_server_db_id) ---
 		logger.info(f"[WS/{ws_stream_id}] Generating initial UI state and sending tool schemas...")
 		try:
-			# get_project_ui_hierarchy might need to know how to use mcp_client_session or mcp_server_db_id
-			# The stream_id passed is "mcp:<db_id>"
 			root_element: Optional[UIElement] = await views_service.get_project_ui_hierarchy(
-				websocket=websocket,  # For client capabilities
-				stream_id=ws_stream_id,
-				mcp_session=mcp_client_session
+				websocket=websocket, stream_id=ws_stream_id, mcp_session=mcp_client_session
 			)
 			if root_element:
 				initial_state_message = InitialUIStateMessage(payload=InitialUIStatePayload(rootElement=root_element))
@@ -300,16 +299,21 @@ async def websocket_endpoint(
 
 				logger.info(
 					f"[{ws_stream_id}] Attempting to send tool schemas for server DB ID '{mcp_server_db_id}'...")
-				# get_discovered_tools uses the DB ID string
-				discovered_tools = mcp_conn_manager.get_discovered_tools(mcp_server_db_id)
+				discovered_tools = mcp_conn_manager.get_discovered_tools(mcp_server_db_id)  # This is synchronous
 				if discovered_tools:
-					# ... (your existing logic to build ToolSchemasMessage from discovered_tools) ...
-					# This part should be mostly the same as your original.
 					tool_schemas_for_payload: Dict[str, ToolSchemaInfo] = {}
 					for tool_name, tool_data in discovered_tools.items():
-						# ... (validation and ToolSchemaInfo creation) ...
-						tool_schemas_for_payload[tool_name] = ToolSchemaInfo(
-							**tool_data)  # Assuming tool_data matches schema
+						try:
+							# Assuming tool_data structure matches ToolSchemaInfo or has necessary fields
+							tool_schemas_for_payload[tool_name] = ToolSchemaInfo(
+								name=tool_data.get('name', tool_name),
+								description=tool_data.get('description'),
+								input_schema=tool_data.get('input_schema'),
+								# Pydantic alias 'inputSchema' handled by model
+								output_schema=tool_data.get('output_schema')  # Pydantic alias 'outputSchema'
+							)
+						except Exception as e_schema:
+							logger.error(f"Error processing tool schema for {tool_name}: {e_schema}")
 					if tool_schemas_for_payload:
 						schemas_payload = ToolSchemasPayload(server_id=mcp_server_db_id, tools=tool_schemas_for_payload)
 						schemas_message = ToolSchemasMessage(payload=schemas_payload)
@@ -318,159 +322,179 @@ async def websocket_endpoint(
 						WebSocketLogger.log_text_sent(ws_stream_id, schemas_json)
 						logger.info(
 							f"[{ws_stream_id}] Successfully sent tool schemas for {len(tool_schemas_for_payload)} tools.")
-				# ... (else clauses for no valid schemas)
+					else:
+						logger.warning(
+							f"[{ws_stream_id}] No valid tool schemas processed to send for server '{mcp_server_db_id}'.")
 				else:
 					logger.warning(
-						f"[{ws_stream_id}] No discovered tools found for server DB ID '{mcp_server_db_id}'. Cannot send schemas.")
+						f"[{ws_stream_id}] No discovered tools for '{mcp_server_db_id}'. Sending empty tool list.")
+					schemas_payload = ToolSchemasPayload(server_id=mcp_server_db_id, tools={})  # Send empty
+					schemas_message = ToolSchemasMessage(payload=schemas_payload)
+					await websocket.send_text(schemas_message.model_dump_json(exclude_none=True, by_alias=True))
 			else:
 				logger.warning(
 					f"[{ws_stream_id}] No UI hierarchy generated for '{mcp_server_db_id}'. Informing client.")
-			# ... (send status message to client)
-		except Exception as ui_gen_err:
-			# ... (handle UI generation/schema sending error, disconnect) ...
-			logger.error(f"[WS/{ws_stream_id}] Error during UI generation/schema sending phase: {ui_gen_err}",
-						 exc_info=True)
-			disconnect_reason = "UI Generation/Schema Error";
-			raise WebSocketDisconnect(code=1011, reason=disconnect_reason)
+				await websocket.send_text(
+					json.dumps({"type": "status", "payload": {"message": "UI could not be generated for the target."}}))
 
-		# --- Main Message Loop (interactions use mcp_server_db_id) ---
+		except Exception as ui_gen_err:
+			logger.error(f"[WS/{ws_stream_id}] Error during UI generation/schema sending: {ui_gen_err}", exc_info=True)
+			disconnect_reason = "UI Generation/Schema Error"
+			# Consider sending an error to client before disconnecting
+			try:
+				await websocket.send_text(json.dumps({"type": "error", "payload": {"message": disconnect_reason}}))
+			except Exception:
+				pass  # Ignore if send fails
+			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR, reason=disconnect_reason)
+
 		logger.info(f"[WS/{ws_stream_id}] Entering main message loop for user '{user_id}'...")
 		while True:
 			message_text = await websocket.receive_text()
 			WebSocketLogger.log_text_received(websocket, ws_stream_id, message_text)
-			# ... (JSON parsing of message_text) ...
-			parsed_message_data = json.loads(message_text)  # Add try-except for JSONDecodeError
-			message_type = parsed_message_data.get("type")
+			try:
+				parsed_message_data = json.loads(message_text)
+				message_type = parsed_message_data.get("type")
 
-			if message_type == "ui_action":
-				action_id = "<parsing_failed>"
-				try:
-					payload = parsed_message_data.get("payload", {})
-					action_id = payload.get("actionId")  # This is the tool name
-					# ... (extract sourceElementId, arguments) ...
-					arguments_to_pass = payload.get("arguments", {})
+				if message_type == "ui_action":
+					action_id = "<parsing_failed>";
+					arguments_to_pass = {}
+					try:
+						payload = parsed_message_data.get("payload", {})
+						action_id = payload.get("actionId")
+						arguments_to_pass = payload.get("arguments", {})
+						if not action_id:
+							logger.warning(f"[WS/{ws_stream_id}] 'ui_action' received with no actionId.")
+							continue  # Or send an error response
 
-					logger.info(
-						f"[WS/{ws_stream_id}] Received ui_action '{action_id}'. Calling MCPConnectionManager.execute_tool for server DB ID '{mcp_server_db_id}'.")
+						logger.info(
+							f"[WS/{ws_stream_id}] ui_action '{action_id}'. Calling execute_tool for server DB ID '{mcp_server_db_id}'.")
+						mcp_payload_content, mcp_error_obj = await mcp_conn_manager.execute_tool(
+							server_id=mcp_server_db_id, tool_name=action_id,
+							params=arguments_to_pass, ws_stream_id=ws_stream_id,
+						)
+						update_binding = f"mcp_stream:{mcp_server_db_id}:{action_id}_result"  # Example binding
+						if mcp_error_obj:
+							logger.error(f"[WS/{ws_stream_id}] MCP tool error '{action_id}': {mcp_error_obj}")
+							error_text_for_ui = "Error executing action."
+							if isinstance(mcp_error_obj, str):
+								error_text_for_ui = mcp_error_obj
+							elif hasattr(mcp_error_obj, 'message'):
+								error_text_for_ui = mcp_error_obj.message
+							elif isinstance(mcp_payload_content, dict) and 'message' in mcp_payload_content:
+								error_text_for_ui = mcp_payload_content['message']
+							error_ui_content = {"role": "error", "text": error_text_for_ui}
+							error_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
+																		  content=error_ui_content, updateType="append")
+							error_msg_to_send = PrimitiveContentUpdateMessage(payload=error_payload)
+							await websocket.send_text(error_msg_to_send.model_dump_json(exclude_none=True))
+						else:
+							result_role_from_tool = "assistant"  # Default role
 
-					# execute_tool now takes server_id (db_id string), tool_name, params
-					mcp_payload_content, mcp_error_obj = await mcp_conn_manager.execute_tool(
-						server_id=mcp_server_db_id,  # Pass the DB ID
-						tool_name=action_id,
-						params=arguments_to_pass,
-						ws_stream_id=ws_stream_id,  # For logging/correlation within manager
-					)
+							if mcp_payload_content and isinstance(mcp_payload_content, list) and len(
+									mcp_payload_content) > 0:
+								first_item = mcp_payload_content[0]
+								# Check if the first item looks like a TextContent object
+								# (has 'text' and 'type' attributes, and type is 'text')
+								if hasattr(first_item, 'text') and hasattr(first_item, 'type') and getattr(first_item, 'type') == 'text':
+									actual_text_from_tool = getattr(first_item, 'text', "Error: Missing text in response.")
+								# You might also want to get the role if the tool could return different roles,
+								# but chatbot_query implies an assistant response.
+								else:
+									logger.warning(
+										f"[WS/{ws_stream_id}] Tool '{action_id}' returned list, but item is not TextContent: {first_item}")
+									actual_text_from_tool = f"Tool '{action_id}' returned unexpected item structure."
+							elif mcp_payload_content is not None:  # It's not a list or not the expected list
+								logger.warning(
+									f"[WS/{ws_stream_id}] Tool '{action_id}' returned unexpected response format: {type(mcp_payload_content)} - {str(mcp_payload_content)[:200]}")
+								actual_text_from_tool = f"Tool '{action_id}' returned unparsable data."
+							else:  # mcp_payload_content is None
+								logger.warning(f"[WS/{ws_stream_id}] Tool '{action_id}' returned no content (None).")
+								actual_text_from_tool = f"Tool '{action_id}' returned no response."
 
-					# --- Process mcp_payload_content and mcp_error_obj ---
-					# Your "REFINED FIX LOGIC" for handling the result of execute_tool (mcp_payload_content)
-					# and mcp_error_obj (which might be an ErrorData instance or a string message)
-					# will largely remain the same.
-					# Ensure it correctly checks the type of mcp_payload_content (e.g., list of SamplingMessage-like objects)
-					# and mcp_error_obj.
-					# Example snippet (adapt your full logic here):
-					update_binding = f"mcp_stream:{mcp_server_db_id}:{action_id}_result"  # Determine binding
-					if mcp_error_obj:
-						logger.error(f"[WS/{ws_stream_id}] MCP tool error '{action_id}': {mcp_error_obj}")
-						error_text_for_ui = "Error executing action."
-						if isinstance(mcp_error_obj, str):
-							error_text_for_ui = mcp_error_obj
-						elif hasattr(mcp_error_obj, 'message'):
-							error_text_for_ui = mcp_error_obj.message  # For ErrorData
-						elif isinstance(mcp_payload_content, dict) and 'message' in mcp_payload_content:
-							error_text_for_ui = mcp_payload_content['message']  # Fallback if error was in payload
+							result_ui_content = {"role": result_role_from_tool, "text": actual_text_from_tool}
+							result_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
+																		   content=result_ui_content,
+																		   updateType="append")
+							result_msg_to_send = PrimitiveContentUpdateMessage(payload=result_payload)
+							await websocket.send_text(result_msg_to_send.model_dump_json(exclude_none=True))
+					except ValidationError as e_val:  # Pydantic validation for incoming ui_action
+						logger.warning(f"[WS/{ws_stream_id}] Invalid ui_action payload for '{action_id}': {e_val}")
+					# Optionally send error back to client
+					except Exception as action_err:
+						logger.error(f"[WS/{ws_stream_id}] Error processing ui_action '{action_id}': {action_err}",
+									 exc_info=True)
+					# Optionally send error back to client
 
-						error_ui_content = {"role": "error", "text": error_text_for_ui}
-						# ... (construct PrimitiveContentUpdateMessage and send)
-						error_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
-																	  content=error_ui_content, updateType="append")
-						error_msg_to_send = PrimitiveContentUpdateMessage(payload=error_payload)
-						await websocket.send_text(error_msg_to_send.model_dump_json(exclude_none=True))
-					else:
-						# Your logic for processing successful mcp_payload_content
-						# (the "REFINED FIX LOGIC" part from your original code)
-						# This expects mcp_payload_content to be structured as per the tool's output,
-						# e.g., List[SamplingMessage] or similar that your refined logic parses.
-						actual_text_from_tool = "Processed: " + str(
-							mcp_payload_content)  # Placeholder for your complex extraction
-						result_role_from_tool = "assistant"  # Placeholder
-						# ... (your logic to extract actual_text_from_tool and result_role_from_tool from mcp_payload_content)
-						result_ui_content = {"role": result_role_from_tool, "text": actual_text_from_tool}
-						result_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
-																	   content=result_ui_content, updateType="append")
-						result_msg_to_send = PrimitiveContentUpdateMessage(payload=result_payload)
-						await websocket.send_text(result_msg_to_send.model_dump_json(exclude_none=True))
-
-				except ValidationError as e:  # Pydantic validation for incoming ui_action
-					# ... (handle validation error)
+				elif message_type == "notify_roots_changed":
+					# Implement your logic based on original example, ensuring parsing and error handling
+					# e.g. from app.models.schemas import RootsChangedMessage
+					# roots_msg = RootsChangedMessage(**parsed_message_data)
+					# if roots_msg.payload.server_id == mcp_server_db_id:
+					#    await mcp_conn_manager.notify_roots_changed(mcp_server_db_id, roots_msg.payload.roots)
+					logger.info(f"[WS/{ws_stream_id}] Received 'notify_roots_changed'. (Implement full logic)")
 					pass
-				except Exception as action_err:
-					# ... (handle general action error)
+
+				elif message_type == "notify_cancelled":
+					# Implement your logic
+					# e.g. from app.models.schemas import CancelRequestMessage
+					# cancel_msg = CancelRequestMessage(**parsed_message_data)
+					# if cancel_msg.payload.server_id == mcp_server_db_id:
+					#    await mcp_conn_manager.notify_cancelled(mcp_server_db_id, cancel_msg.payload.requestId)
+					logger.info(f"[WS/{ws_stream_id}] Received 'notify_cancelled'. (Implement full logic)")
 					pass
 
-			elif message_type == "notify_roots_changed":
-				# ... (parse RootsChangedMessage) ...
-				# payload = roots_msg.payload
-				# target_server_id_from_msg = payload.server_id # This ID from client *must* be a DB ID string
-				# if target_server_id_from_msg == mcp_server_db_id:
-				#    await mcp_conn_manager.notify_roots_changed(mcp_server_db_id, payload.roots)
-				# ... (else log warning)
-				pass  # Implement full logic as in your original
+				elif message_type == 'ping':
+					await websocket.send_text(json.dumps({"type": "pong"}))
+					logger.debug(f"[WS/{ws_stream_id}] Responded to ping with pong.")
+				else:
+					logger.warning(f"[WS/{ws_stream_id}] Received unknown message type: '{message_type}'")
 
-			elif message_type == "notify_cancelled":
-				# ... (parse CancelRequestMessage) ...
-				# payload = cancel_msg.payload
-				# target_server_id_from_msg = payload.server_id # DB ID string
-				# request_id_to_cancel = payload.requestId
-				# if target_server_id_from_msg == mcp_server_db_id:
-				#    await mcp_conn_manager.notify_cancelled(mcp_server_db_id, request_id_to_cancel)
-				# ... (else log warning)
-				pass  # Implement full logic as in your original
-
-			elif message_type == 'ping':
-				# ... (send pong, remains the same)
-				pass
-			else:
-				logger.warning(f"[WS/{ws_stream_id}] Received unknown message type: '{message_type}'")
+			except json.JSONDecodeError:
+				logger.warning(f"[WS/{ws_stream_id}] Received invalid JSON from client: {message_text[:200]}")
+			# Optionally send an error message back to the client
+			except Exception as loop_err:  # Catch unexpected errors in the loop
+				logger.error(f"[WS/{ws_stream_id}] Error in WebSocket message loop: {loop_err}", exc_info=True)
+			# Decide if this error should break the loop and disconnect the client
 
 	except WebSocketDisconnect as e:
-		disconnect_reason = e.reason or "Client disconnected"
+		disconnect_reason = e.reason or "Client initiated disconnect"
 		logger.info(f"[WS/{ws_stream_id}] WebSocket disconnected (Code: {e.code}, Reason: '{disconnect_reason}')")
-	except ConnectionRefusedError as cr_err:  # Should be caught earlier during session get typically
-		disconnect_reason = "Connection Refused (likely MCP)"
-		logger.error(f"[WS/{ws_stream_id}] Connection Refused Error: {cr_err}", exc_info=False)
-	except Exception as e:
-		disconnect_reason = "Internal Server Error in WS Handler"
-		logger.error(f"[WS/{ws_stream_id}] Unhandled error in WebSocket handler: {e}", exc_info=True)
+	except ConnectionRefusedError as cr_err:
+		disconnect_reason = f"Connection Refused by target MCP server ({mcp_server_db_id})"
+		logger.error(f"[WS/{ws_stream_id}] {disconnect_reason}: {cr_err}", exc_info=False)
 		if websocket.client_state == WebSocketState.CONNECTED:
 			try:
-				await websocket.close(code=1011, reason=disconnect_reason)
+				await websocket.send_text(json.dumps({"type": "error", "payload": {"message": disconnect_reason}}))
 			except Exception:
-				pass  # Ignore errors during close after another error
+				pass
+	except Exception as e:  # Catch-all for unhandled exceptions in the main try block
+		disconnect_reason = "Internal Server Error in WS Handler"
+		logger.error(f"[WS/{ws_stream_id}] Unhandled error in WebSocket handler: {e}", exc_info=True)
 	finally:
-		logger.info(f"[WS/{ws_stream_id}] Cleaning up WebSocket for user '{user_id}' (Reason: {disconnect_reason})...")
-		# Disconnect from UI ConnectionManager
-		connection_manager.disconnect(websocket, ws_stream_id)
+		logger.info(
+			f"[WS/{ws_stream_id}] Cleaning up WebSocket for user '{user_id}' (Reason: '{disconnect_reason}')...")
+		connection_manager.disconnect(websocket, ws_stream_id)  # Disconnect from UI manager
 		WebSocketLogger.log_disconnection(websocket, ws_stream_id, disconnect_reason)
 
-		# Release MCP session reference if it was established
-		if session_established_with_mcp and mcp_server_db_id:
-			if mcp_conn_manager:  # Check if manager is available (it should be)
-				logger.info(
-					f"[WS/{ws_stream_id}] Releasing MCP session reference for server DB ID '{mcp_server_db_id}'...")
-				try:
-					# release_session uses the DB ID string
-					await mcp_conn_manager.release_session(mcp_server_db_id)
-				except Exception as release_err:
-					logger.error(
-						f"[WS/{ws_stream_id}] Error releasing MCP session ref for '{mcp_server_db_id}': {release_err}",
-						exc_info=True)
-			else:  # Should not happen with Depends
-				logger.warning(
-					f"[WS/{ws_stream_id}] MCPConnectionManager unavailable during cleanup for MCP session release.")
-		elif mcp_server_db_id:  # Path was parsed but session wasn't established
+		if session_established_with_mcp and mcp_server_db_id and mcp_conn_manager:
+			logger.info(f"[WS/{ws_stream_id}] Releasing MCP session reference for server DB ID '{mcp_server_db_id}'...")
+			try:
+				await mcp_conn_manager.release_session(mcp_server_db_id)
+			except Exception as release_err:
+				logger.error(
+					f"[WS/{ws_stream_id}] Error releasing MCP session ref for '{mcp_server_db_id}': {release_err}",
+					exc_info=True)
+		elif mcp_server_db_id:
 			logger.debug(
-				f"[WS/{ws_stream_id}] MCP session was not established for '{mcp_server_db_id}', no release needed by this handler.")
+				f"[WS/{ws_stream_id}] MCP session not established or manager unavailable for '{mcp_server_db_id}', no release needed by this handler.")
 
+		# Ensure WebSocket is closed if not already
+		if websocket.client_state == WebSocketState.CONNECTED:
+			try:
+				await websocket.close(code=status.WS_1000_NORMAL_CLOSURE, reason=disconnect_reason)
+			except Exception:
+				logger.debug(f"[WS/{ws_stream_id}] Error sending final close, ws might be already closed.")
+				pass
 		logger.info(f"[WS/{ws_stream_id}] Finished WebSocket cleanup for user '{user_id}'.")
 
 

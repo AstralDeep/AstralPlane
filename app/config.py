@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 	ALGORITHM: str = "HS256"
 	ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 	WS_PING_INTERVAL: int = int(os.getenv("WS_PING_INTERVAL", "20"))
+	MCP_CALL_TOOL_TIMEOUT: int = 300  # 5 minutes
 
 	# --- MCP Server Configuration ---
 	# MCP_SERVERS: List[Dict[str, Any]] = [

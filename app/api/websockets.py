@@ -1,14 +1,14 @@
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Path
 from typing import Dict, List, Any, Optional, Set, Literal
 import json
 import time
 import logging
 
 from ..config import settings
-# REMOVED: from ..models.schemas import StreamConfig # <--- Removed this import
 from ..services.connection_manager import ConnectionManager, get_connection_manager
-# REMOVED: from ..services.dataplane_manager import DataplaneManager, get_dataplane_manager # <--- Removed this import
+from ..services.mcp_connection_manager import MCPConnectionManager, get_mcp_connection_manager_ws
+from app.main import websocket_endpoint as main_mcp_websocket_handler
 
 router = APIRouter()
 
@@ -19,95 +19,6 @@ logger = logging.getLogger(__name__)
 # dataplane manager and is commented out to resolve the StreamConfig import error.
 # If you need a separate WebSocket endpoint defined here for other purposes,
 # ensure it doesn't rely on the removed StreamConfig or dataplane_manager.
-
-''' # <--- Start Comment Block for legacy endpoint
-async def websocket_endpoint(websocket: WebSocket, stream_id: str,
-                             connection_manager: ConnectionManager = Depends(get_connection_manager),
-                             dataplane_manager: DataplaneManager = Depends(get_dataplane_manager)):
-    # Parse stream ID to get ident_key and ident_id
-    try:
-        parts = stream_id.split(":")
-        if len(parts) != 2:
-            await websocket.close(code=1008, reason="Invalid stream ID format")
-            return
-
-        ident_key, ident_id = parts
-    except ValueError:
-        await websocket.close(code=1008, reason="Invalid stream ID format")
-        return
-
-    # Create stream config (THIS IS THE PROBLEMATIC PART)
-    # stream_config = StreamConfig(
-    #     ident_key=ident_key,
-    #     ident_id=ident_id
-    # )
-
-    # Connect to the WebSocket
-    await connection_manager.connect(websocket, stream_id)
-    logger.info(f"Client connected to legacy stream: {stream_id}")
-
-    # Create callbacks for dataplane messages
-    async def text_callback(message):
-        try:
-            await connection_manager.send_text(message, stream_id)
-        except Exception as e:
-            logger.error(f"Error sending text to legacy stream {stream_id}: {e}")
-
-    async def binary_callback(data):
-        try:
-            await connection_manager.send_binary(data, stream_id)
-        except Exception as e:
-            logger.error(f"Error sending binary to legacy stream {stream_id}: {e}")
-
-    # Connect to dataplane (THIS IS THE PROBLEMATIC PART)
-    # dataplane_connection = None
-    # try:
-    #     dataplane_connection = await dataplane_manager.connect_dataplane(
-    #         stream_config=stream_config.model_dump(), # Uses StreamConfig
-    #         text_callback=text_callback,
-    #         binary_callback=binary_callback
-    #     )
-    #
-    #     if not dataplane_connection:
-    #         logger.error(f"Failed to connect to dataplane for legacy stream {stream_id}")
-    #         await websocket.close(code=1011, reason="Failed to connect to dataplane")
-    #         return
-    #
-    #     # Process messages from the client
-    #     while True:
-    #         try:
-    #             message = await websocket.receive_text()
-    #
-    #             # Handle special message types
-    #             if message == "__binary_next__":
-    #                 # Next message will be binary
-    #                 binary_data = await websocket.receive_bytes()
-    #                 await dataplane_connection.send_binary(binary_data)
-    #             else:
-    #                 # Treat as text/JSON
-    #                 try:
-    #                     # Check if it's JSON
-    #                     json_data = json.loads(message)
-    #                     await dataplane_connection.send(json.dumps(json_data))
-    #                 except json.JSONDecodeError:
-    #                     # Plain text
-    #                     await dataplane_connection.send(message)
-    #         except Exception as e:
-    #             logger.error(f"Error processing legacy message: {e}")
-    #             break
-    #
-    # except WebSocketDisconnect:
-    #     logger.info(f"Client disconnected from legacy stream: {stream_id}")
-    # except Exception as e:
-    #     logger.error(f"Error in legacy WebSocket connection: {e}")
-    # finally:
-    #     # Clean up connections
-    #     connection_manager.disconnect(websocket, stream_id)
-    #     if dataplane_connection:
-    #         await dataplane_manager.disconnect_dataplane(stream_config.model_dump()) # Uses StreamConfig
-    #     logger.info(f"Cleaned up connections for legacy stream: {stream_id}")
-
-''' # <--- End Comment Block
 
 # Optional endpoint for WebSocket status information
 @router.get("/status", tags=["WebSocket Utils"])
