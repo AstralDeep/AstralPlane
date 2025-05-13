@@ -171,7 +171,7 @@ async def websocket_endpoint(
 ):
 	"""Handles WebSocket connections for streaming UI updates and MCP interaction."""
 	ws_client_info = WebSocketLogger.get_client_info(websocket)
-	ws_stream_id = stream_path_param  # e.g., "mcp:1"
+	ws_stream_id = stream_path_param
 	logger.info(f">>> [WS/{ws_stream_id}] Accepted connection from {ws_client_info} <<<")
 
 	views_service: Optional[ProjectViewsService] = None
@@ -299,7 +299,7 @@ async def websocket_endpoint(
 
 				logger.info(
 					f"[{ws_stream_id}] Attempting to send tool schemas for server DB ID '{mcp_server_db_id}'...")
-				discovered_tools = mcp_conn_manager.get_discovered_tools(mcp_server_db_id)  # This is synchronous
+				discovered_tools = await mcp_conn_manager.get_discovered_tools(mcp_server_db_id)  # This is synchronous
 				if discovered_tools:
 					tool_schemas_for_payload: Dict[str, ToolSchemaInfo] = {}
 					for tool_name, tool_data in discovered_tools.items():

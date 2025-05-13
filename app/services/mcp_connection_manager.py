@@ -7,10 +7,6 @@ import time
 from contextlib import AsyncExitStack
 from datetime import datetime
 from functools import partial
-# Note: http.client.HTTPException was present in your original file,
-# but for FastAPI dependencies, fastapi.HTTPException is typically used.
-# The get_mcp_connection_manager function at the end uses fastapi.HTTPException.
-# from http.client import HTTPException
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
 
 import anyio
@@ -38,6 +34,10 @@ from app.models.schemas import (
 )
 from app.services.connection_manager import ConnectionManager
 
+INITIAL_RETRY_DELAY_SECONDS = 5
+MAX_RETRY_DELAY_SECONDS = 300  # 5 minutes
+RETRY_BACKOFF_FACTOR = 2
+
 logger = logging.getLogger(__name__)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('mcp.client.sse').setLevel(logging.INFO)
@@ -63,107 +63,201 @@ class MCPConnectionManager:
 		self.server_configs: Dict[str, Dict[str, Any]] = {}  # <--- MODIFIED
 		self._connection_lock = asyncio.Lock()
 
+		self._reconnect_loop_task: Optional[asyncio.Task] = None
+		self._stop_reconnect_event = asyncio.Event()
+
 		logger.info("MCPConnectionManager initialized (empty, awaiting DB configurations).")
 
+	def _get_initial_server_state_dict(self, server_id_str: str, db_config: MCPServerConfig,
+									   config_for_connection: Dict[str, Any]) -> Dict[str, Any]:
+		return {
+			"server_id": server_id_str,
+			"status": "pending_initialization",
+			# More statuses: CONNECTING, CONNECTED, DISCONNECTED, ERROR_RETRYING, ERROR_PERMANENT, INACTIVE
+			"ref_count": 0,
+			"config_from_db": db_config,
+			"config_for_connection": config_for_connection,
+			"session": None, "exit_stack": None, "tools": None, "ui_layout": None,
+			"required_primitives": set(), "error_message": None,
+			"last_connect_attempt_time": None,  # Renamed for clarity (timestamp)
+			"last_successful_connect_time": None,  # Renamed for clarity (timestamp)
+			"retry_count": 0,
+			"current_retry_delay_seconds": INITIAL_RETRY_DELAY_SECONDS,
+			"next_retry_time": None,  # Timestamp for next attempt
+		}
+
 	async def initialize_servers_from_db(self, db_configs: List[MCPServerConfig]):
-		logger.info(f"Loading and preparing {len(db_configs)} MCP server configurations from database.")
+		logger.info(f"Initializing MCPConnectionManager with {len(db_configs)} server configurations from database.")
 		new_server_configs_map: Dict[str, Dict[str, Any]] = {}
 
 		async with self._connection_lock:
-			existing_server_ids_to_clear = list(self.sse_connections.keys())
-			self.server_configs.clear()  # <--- MODIFIED: Clear old server_configs
+			# --- Step 1: Identify changes from current state to new DB state ---
+			current_managed_server_ids = set(self.sse_connections.keys())
+			new_db_server_ids = {str(c.id) for c in db_configs}
 
-			for server_id_to_clear in existing_server_ids_to_clear:
-				details = self.sse_connections.get(server_id_to_clear)
-				if details and (details.get("exit_stack") or details.get("session")):
-					await self._do_cleanup_for_server(server_id_to_clear, details, "re-initialization")
-				if server_id_to_clear in self.sse_connections:  # Ensure key exists before deleting
-					del self.sse_connections[server_id_to_clear]
+			ids_to_remove_from_manager = current_managed_server_ids - new_db_server_ids
+			for server_id_to_remove in ids_to_remove_from_manager:
+				details = self.sse_connections.pop(server_id_to_remove, None)
+				self.server_configs.pop(server_id_to_remove, None)  # Also remove from server_configs map
+				if details:
+					# Perform cleanup. Ensure status is set so retry loop ignores.
+					details["status"] = "REMOVED"
+					if "config_for_connection" in details:  # Should exist
+						details["config_for_connection"]["is_active"] = False
+					await self._do_cleanup_for_server(server_id_to_remove, details,
+													  "removed during DB re-initialization")
+				logger.info(f"[{server_id_to_remove}] Removed from manager as it's no longer in DB config.")
 
+			# Clear server_configs to be repopulated from fresh db_configs
+			self.server_configs.clear()
+
+			# --- Step 2: Process each configuration from the database ---
 			for db_config in db_configs:
 				server_id_str = str(db_config.id)
+				# Prepare the configuration dictionary used for connection parameters and state
 				config_dict_for_server = {
 					"id": server_id_str,
 					"url": db_config.url,
 					"name": db_config.name,
 					"description": db_config.description,
-					"is_active": db_config.is_active,  # <--- MODIFIED: Include is_active
-					"transport": "sse"
+					"is_active": db_config.is_active,  # Crucial for deciding to connect
+					"transport": "sse"  # Assuming SSE, adjust if configurable
 				}
+				# Update the canonical server_configs map
+				new_server_configs_map[server_id_str] = config_dict_for_server
 
-				new_server_configs_map[server_id_str] = config_dict_for_server  # <--- MODIFIED
+				if server_id_str in self.sse_connections:
+					# Server already known (was not removed above), update its configuration
+					existing_details = self.sse_connections[server_id_str]
+					old_conn_config = existing_details.get("config_for_connection", {})
 
-				self.sse_connections[server_id_str] = {
-					"server_id": server_id_str,
-					"status": "pending_initialization",
-					"ref_count": 0,
-					"config_from_db": db_config,
-					"config_for_connection": config_dict_for_server,
-					"session": None, "exit_stack": None, "tools": None, "ui_layout": None,
-					"required_primitives": set(), "error_message": None,
-					"last_connect_attempt": None, "last_successful_connect": None,
-				}
-				logger.debug(f"[{server_id_str}] Configured server '{db_config.name}' from DB.")
-
-			self.server_configs = new_server_configs_map  # <--- MODIFIED
-			logger.info(f"self.server_configs populated with {len(self.server_configs)} entries.")
-
-		connect_tasks = []
-		# Iterate over the newly populated sse_connections to decide on connections
-		# Note: self.sse_connections is already updated under lock above.
-		for server_id_str, details in self.sse_connections.items():
-			config_for_connection = details["config_for_connection"]
-			# Use is_active from the derived config_for_connection dictionary
-			if config_for_connection.get("is_active", False):  # <--- MODIFIED logic
-				logger.info(
-					f"[{server_id_str}] Scheduling proactive connection for active server '{config_for_connection.get('name')}'.")
-				connect_tasks.append(
-					asyncio.create_task(
-						self.connect_and_prepare_server(server_id_str, config_for_connection)
+					# Determine if a full reconnect/reset is needed
+					config_changed_critically = (
+							old_conn_config.get("url") != config_dict_for_server["url"] or
+							old_conn_config.get("is_active") != config_dict_for_server["is_active"]
 					)
-				)
-			else:
-				await self._update_connection_state(server_id_str, {"status": "inactive_configured"})
-				logger.info(
-					f"[{server_id_str}] Server '{config_for_connection.get('name')}' is configured but inactive. Skipping proactive connect.")
 
-		if connect_tasks:
-			await asyncio.gather(*connect_tasks, return_exceptions=True)
-			logger.info(f"Initial proactive connection attempts for {len(connect_tasks)} active servers complete.")
+					if config_changed_critically and (
+							existing_details.get("session") or existing_details.get("exit_stack")):
+						logger.info(
+							f"[{server_id_str}] Critical config change for '{db_config.name}'. Cleaning up old session.")
+						await self._do_cleanup_for_server(server_id_str, existing_details, "DB config critical change")
+
+					# Update the stored configurations
+					existing_details["config_from_db"] = db_config
+					existing_details["config_for_connection"] = config_dict_for_server
+
+					if config_changed_critically:
+						# Reset status to trigger a new connection attempt by the logic below or by the retry loop
+						existing_details["status"] = "pending_initialization"
+						existing_details["error_message"] = None  # Clear previous errors
+						existing_details["retry_count"] = 0
+						existing_details["current_retry_delay_seconds"] = INITIAL_RETRY_DELAY_SECONDS
+						existing_details["next_retry_time"] = None
+					logger.debug(f"[{server_id_str}] Updated existing server '{db_config.name}' based on DB config.")
+				else:
+					# This is a new server not previously in sse_connections
+					self.sse_connections[server_id_str] = self._get_initial_server_state_dict(
+						server_id_str, db_config, config_dict_for_server
+					)
+					logger.debug(
+						f"[{server_id_str}] Added new server '{db_config.name}' to manager based on DB config.")
+
+			self.server_configs = new_server_configs_map  # Assign the fully populated map
+			logger.info(f"Canonical server_configs map populated with {len(self.server_configs)} entries.")
+
+		# --- Step 3: Prepare and execute initial connection tasks concurrently ---
+		initial_connect_tasks = []
+		server_ids_and_configs_for_initial_connect = []
+
+		# Gather server_ids and their configs needing an initial connection attempt.
+		# This read access to sse_connections is brief.
+		async with self._connection_lock:
+			for server_id_str, details in self.sse_connections.items():
+				config_for_connection = details["config_for_connection"]
+				# Only attempt connection if it's active and its status indicates it needs initialization.
+				if config_for_connection.get("is_active", False) and details["status"] == "pending_initialization":
+					server_ids_and_configs_for_initial_connect.append((server_id_str, config_for_connection))
+				elif not config_for_connection.get("is_active", False):
+					# If a server is marked as inactive, ensure its state reflects this.
+					if details["status"] not in ["INACTIVE", "REMOVED"]:  # Avoid unnecessary updates if already correct
+						await self._update_connection_state_nolock(server_id_str,
+																   {"status": "INACTIVE", "next_retry_time": None})
+					logger.info(
+						f"[{server_id_str}] Server '{config_for_connection.get('name')}' is inactive. Skipping proactive connect.")
+
+		# Create asyncio.Task for each connection attempt to run them concurrently.
+		for server_id_str, config_for_connection in server_ids_and_configs_for_initial_connect:
+			logger.info(
+				f"[{server_id_str}] Scheduling concurrent proactive connection for active server '{config_for_connection.get('name')}'.")
+			task = asyncio.create_task(
+				self.connect_and_prepare_server(server_id_str, config_for_connection),
+				name=f"initial_connect_{server_id_str}"  # Name is helpful for debugging (Python 3.8+)
+			)
+			initial_connect_tasks.append(task)
+
+		if initial_connect_tasks:
+			logger.info(f"Attempting to connect to {len(initial_connect_tasks)} active servers concurrently...")
+			# asyncio.gather runs all tasks concurrently and waits for them to complete.
+			results = await asyncio.gather(*initial_connect_tasks, return_exceptions=True)
+
+			for i, result_or_exc in enumerate(results):
+				# It's good practice to log the outcome of each initial attempt.
+				# The task name helps identify which server the result belongs to.
+				task_name = initial_connect_tasks[i].get_name()
+
+				if isinstance(result_or_exc, Exception):
+					logger.error(f"Initial connection task '{task_name}' raised an exception: {result_or_exc}")
+				elif result_or_exc is False:  # connect_and_prepare_server returns bool
+					logger.warning(
+						f"Initial connection task '{task_name}' returned False (connection failed). It will be retried by the background loop if applicable.")
+				elif result_or_exc is True:
+					logger.info(f"Initial connection task '{task_name}' completed successfully.")
+			# If connect_and_prepare_server had True/False, success/failure is logged within it too.
+
+			logger.info(
+				f"Initial proactive connection attempts for {len(initial_connect_tasks)} active servers have been processed.")
 		else:
-			logger.info("No active servers found in DB to connect to proactively.")
+			logger.info(
+				"No active servers required an immediate proactive connection attempt during DB initialization.")
 
 	async def connect_and_prepare_server(self, server_id: str, server_config: Dict[str, Any]) -> bool:
 		server_name_for_logs = server_config.get('name', server_id)
-		logger.info(f"[{server_id}] Proactive connection attempt starting for server '{server_name_for_logs}'...")
 
+		async with self._connection_lock:  # Ensure status isn't changed by another task concurrently
+			details = self.sse_connections.get(server_id)
+			if not details:
+				logger.error(f"[{server_id}] Attempted to connect non-configured server '{server_name_for_logs}'.")
+				return False
+			if details["status"] == "CONNECTING":  # Already an attempt in progress
+				logger.info(f"[{server_id}] Connection attempt already in progress for '{server_name_for_logs}'.")
+				return False  # Or True, depending on how you want to signal this
+
+			await self._update_connection_state_nolock(server_id, {
+				"status": "CONNECTING",
+				"last_connect_attempt_time": time.monotonic(),
+				"error_message": None,  # Clear previous error
+				# "session": None, "exit_stack": None, # Cleaned by _do_cleanup or if previous attempt failed
+				# "tools": None, "ui_layout": None, "required_primitives": set()
+			})
+
+		logger.info(f"[{server_id}] Connection attempt starting for server '{server_name_for_logs}'...")
 		server_url = server_config.get("url")
 		if not server_url:
-			logger.error(
-				f"[{server_id}] Proactive connect failed for '{server_name_for_logs}': Missing 'url' in config.")
+			logger.error(f"[{server_id}] Connect failed for '{server_name_for_logs}': Missing 'url' in config.")
 			await self._update_connection_state(server_id, {
-				"status": "error",
-				"error_message": "Missing URL in configuration"
+				"status": "ERROR_PERMANENT",  # Configuration error, won't retry
+				"error_message": "Missing URL in configuration",
+				"next_retry_time": None,  # No retry for permanent error
+				"retry_count": 0  # Reset
 			})
 			return False
 
 		exit_stack = AsyncExitStack()
-		session: Optional[ClientSession] = None
-		ui_layout: Optional[dict] = None
-		processed_tools: Optional[dict] = None
 		required_primitives: Set[str] = set()
-		connect_time = time.monotonic()
-
-		await self._update_connection_state(server_id, {
-			"status": "connecting",
-			"last_connect_attempt": connect_time,
-			"error_message": None,
-			"session": None, "exit_stack": None,
-			"tools": None, "ui_layout": None, "required_primitives": set()
-		})
 
 		try:
-			await exit_stack.__aenter__()
+			await exit_stack.__aenter__()  # Important: manage exit_stack lifecycle
 			read_stream, write_stream = await exit_stack.enter_async_context(sse_client(server_url))
 			message_handler_with_id = partial(self._handle_incoming_message, server_id=server_id)
 			mcp_client_instance: ClientSession = ClientSession(
@@ -178,9 +272,11 @@ class MCPConnectionManager:
 					f"[{server_id}] Critical error: ClientSession context entry returned None for '{server_name_for_logs}'.")
 				await self._safe_aclose(exit_stack, server_id, "critical session None cleanup")
 				await self._update_connection_state(server_id, {
-					"status": "error",
+					"status": "ERROR_RETRYING",  # Could be transient
 					"error_message": "Failed to enter ClientSession context (returned None)",
-					"session": None, "exit_stack": None
+					"session": None, "exit_stack": None,  # Ensure cleaned
+					"retry_count": self.sse_connections[server_id]["retry_count"] + 1,  # Access under lock or pass
+					"next_retry_time": time.monotonic() + self.sse_connections[server_id]["current_retry_delay_seconds"]
 				})
 				return False
 
@@ -210,18 +306,22 @@ class MCPConnectionManager:
 				logger.warning(f"[{server_id}] UI layout not retrieved or is invalid for '{server_name_for_logs}'.")
 
 			await self._update_connection_state(server_id, {
-				"status": "connected",
-				"session": session, "exit_stack": exit_stack,
+				"status": "CONNECTED",
+				"session": session, "exit_stack": exit_stack,  # Store the stack
 				"tools": processed_tools, "ui_layout": ui_layout,
 				"required_primitives": required_primitives, "error_message": None,
-				"last_successful_connect": time.monotonic(),
+				"last_successful_connect_time": time.monotonic(),
+				"retry_count": 0,  # Reset on success
+				"current_retry_delay_seconds": INITIAL_RETRY_DELAY_SECONDS,  # Reset delay
+				"next_retry_time": None
 			})
 			logger.info(
-				f"[{server_id}] Proactive connection successful for '{server_name_for_logs}'. UI Layout Retrieved: {ui_layout is not None}")
+				f"[{server_id}] Connection successful for '{server_name_for_logs}'. UI Layout Retrieved: {ui_layout is not None}")
 			return True
 
 		except (asyncio.TimeoutError, McpError, anyio.EndOfStream, anyio.ClosedResourceError, ConnectionRefusedError,
 				Exception) as e:
+			# ... (your existing detailed error message construction) ...
 			error_msg_detail = ""
 			if isinstance(e, asyncio.TimeoutError):
 				error_msg_detail = f"Operation timed out: {e}"
@@ -233,143 +333,28 @@ class MCPConnectionManager:
 				error_msg_detail = f"Connection refused by server: {e}"
 			else:
 				error_msg_detail = f"Unexpected error during connection: {e}"
-
-			full_error_message = f"Proactive connection failed for '{server_name_for_logs}' ({server_id}). {error_msg_detail}"
+			full_error_message = f"Connection failed for '{server_name_for_logs}' ({server_id}). {error_msg_detail}"
 			log_exc_info = not isinstance(e, (
-				McpError, asyncio.TimeoutError, ConnectionRefusedError, anyio.EndOfStream, anyio.ClosedResourceError))
+			McpError, asyncio.TimeoutError, ConnectionRefusedError, anyio.EndOfStream, anyio.ClosedResourceError))
 			logger.error(full_error_message, exc_info=log_exc_info)
 
-			await self._safe_aclose(exit_stack, server_id, "proactive connection failure cleanup")
-			await self._update_connection_state(server_id, {
-				"status": "error", "error_message": str(e),
-				"session": None, "exit_stack": None,
-				"tools": None, "ui_layout": None, "required_primitives": set(),
-			})
+			await self._safe_aclose(exit_stack, server_id, "connection failure cleanup")  # Close the current stack
+
+			async with self._connection_lock:  # Safely update retry state
+				details = self.sse_connections[server_id]
+				new_retry_count = details["retry_count"] + 1
+				new_delay = min(details["current_retry_delay_seconds"] * RETRY_BACKOFF_FACTOR, MAX_RETRY_DELAY_SECONDS)
+
+				await self._update_connection_state_nolock(server_id, {
+					"status": "ERROR_RETRYING",
+					"error_message": str(e),
+					"session": None, "exit_stack": None,  # Ensure cleaned
+					"tools": None, "ui_layout": None, "required_primitives": set(),
+					"retry_count": new_retry_count,
+					"current_retry_delay_seconds": new_delay,
+					"next_retry_time": time.monotonic() + new_delay
+				})
 			return False
-
-	async def add_server_from_config(self, db_config: MCPServerConfig):
-		server_id_str = str(db_config.id)
-		logger.info(f"[{server_id_str}] Adding new server '{db_config.name}' from live configuration update.")
-
-		config_dict_for_server = {  # <--- MODIFIED: Consistent structure
-			"id": server_id_str, "url": db_config.url, "name": db_config.name,
-			"description": db_config.description,
-			"is_active": db_config.is_active,
-			"transport": "sse"
-		}
-
-		async with self._connection_lock:
-			if server_id_str in self.sse_connections:
-				logger.warning(f"[{server_id_str}] Attempted to add server that already exists. Consider using update.")
-			# Not re-assigning here, assuming update logic would be called or this is an initial setup
-			# where this state implies it's already being processed.
-
-			self.server_configs[server_id_str] = config_dict_for_server  # <--- MODIFIED
-
-			self.sse_connections[server_id_str] = {
-				"server_id": server_id_str, "status": "pending_add", "ref_count": 0,
-				"config_from_db": db_config, "config_for_connection": config_dict_for_server,
-				"session": None, "exit_stack": None, "tools": None, "ui_layout": None,
-				"required_primitives": set(), "error_message": None,
-				"last_connect_attempt": None, "last_successful_connect": None,
-			}
-			logger.debug(
-				f"[{server_id_str}] Added server '{db_config.name}' to internal state (sse_connections and server_configs).")
-
-		if config_dict_for_server["is_active"]:  # <--- MODIFIED: Use derived dict
-			logger.info(f"[{server_id_str}] New server '{db_config.name}' is active. Attempting proactive connection.")
-			await self.connect_and_prepare_server(server_id_str, config_dict_for_server)
-		else:
-			await self._update_connection_state(server_id_str, {"status": "inactive_configured"})
-			logger.info(f"[{server_id_str}] New server '{db_config.name}' added as inactive.")
-
-	async def update_server_from_config(self, db_config: MCPServerConfig):
-		server_id_str = str(db_config.id)
-		logger.info(f"[{server_id_str}] Updating server '{db_config.name}' from live configuration change.")
-
-		config_dict_for_server = {  # <--- MODIFIED: Consistent structure
-			"id": server_id_str, "url": db_config.url, "name": db_config.name,
-			"description": db_config.description,
-			"is_active": db_config.is_active,
-			"transport": "sse"
-		}
-		needs_reconnect = False
-
-		async with self._connection_lock:
-			current_details = self.sse_connections.get(server_id_str)
-			if not current_details:
-				logger.error(f"[{server_id_str}] Update called for a server not in memory. Fallback: Adding server.")
-				# Fallback: Treat as an add if it doesn't exist in sse_connections
-				self.sse_connections[server_id_str] = {
-					"server_id": server_id_str, "status": "pending_update_as_add", "ref_count": 0,
-					"config_from_db": db_config, "config_for_connection": config_dict_for_server,
-					"session": None, "exit_stack": None, "tools": None, "ui_layout": None,
-					"required_primitives": set(), "error_message": None,
-					"last_connect_attempt": None, "last_successful_connect": None,
-				}
-				self.server_configs[server_id_str] = config_dict_for_server  # <--- MODIFIED
-				current_details = self.sse_connections[server_id_str]  # Get newly created details
-				needs_reconnect = True  # It's effectively a new server
-			else:
-				old_config_from_db: Optional[MCPServerConfig] = current_details.get("config_from_db")
-				if old_config_from_db:
-					if old_config_from_db.url != db_config.url or \
-							old_config_from_db.is_active != db_config.is_active:  # Check critical fields
-						needs_reconnect = True
-				else:  # No old DB config means it might be a new add or inconsistent state
-					needs_reconnect = True
-
-				current_details["config_from_db"] = db_config
-				current_details["config_for_connection"] = config_dict_for_server
-				self.server_configs[server_id_str] = config_dict_for_server  # <--- MODIFIED
-
-			if needs_reconnect:
-				logger.info(
-					f"[{server_id_str}] Configuration change for '{db_config.name}' requires connection update.")
-				if current_details.get("session") or current_details.get("exit_stack") or current_details.get(
-						"status") == "error":
-					logger.info(f"[{server_id_str}] Cleaning up old connection for '{db_config.name}' before update...")
-					await self._do_cleanup_for_server(server_id_str, current_details, "config update")
-
-			if not config_dict_for_server["is_active"]:  # <--- MODIFIED: Use derived dict
-				current_details["status"] = "inactive_configured"
-				current_details["tools"] = None;
-				current_details["ui_layout"] = None
-				current_details["required_primitives"] = set();
-				current_details["session"] = None
-				current_details["exit_stack"] = None
-				logger.info(f"[{server_id_str}] Server '{db_config.name}' updated to inactive.")
-
-		if config_dict_for_server["is_active"] and needs_reconnect:  # <--- MODIFIED: Use derived dict
-			logger.info(f"[{server_id_str}] Server '{db_config.name}' is active. Attempting connection/reconnection.")
-			await self.connect_and_prepare_server(server_id_str, config_dict_for_server)
-		elif not config_dict_for_server["is_active"] and needs_reconnect:
-			logger.info(
-				f"[{server_id_str}] Server '{db_config.name}' was made inactive. Ensured cleanup if previously connected.")
-
-	async def remove_server_by_id(self, server_db_id_str: str):
-		logger.info(f"[{server_db_id_str}] Removing server from live configuration.")
-		connection_details = None
-		removed_server_name = server_db_id_str
-
-		async with self._connection_lock:
-			removed_config_dict = self.server_configs.pop(server_db_id_str, None)  # <--- MODIFIED
-			if removed_config_dict:
-				removed_server_name = removed_config_dict.get('name', server_db_id_str)
-
-			connection_details = self.sse_connections.pop(server_db_id_str, None)
-
-		if connection_details:
-			logger.info(
-				f"[{server_db_id_str}] Cleaning up connection for removed server '{removed_server_name}'.")
-			await self._do_cleanup_for_server(server_db_id_str, connection_details, "server removal")
-			logger.info(
-				f"[{server_db_id_str}] Server '{removed_server_name}' removed and cleaned up from sse_connections.")
-		elif removed_config_dict:
-			logger.info(
-				f"[{server_db_id_str}] Server '{removed_server_name}' removed from server_configs (was not in sse_connections).")
-		else:
-			logger.warning(f"[{server_db_id_str}] Attempted to remove a server that was not found in manager state.")
 
 	async def _do_cleanup_for_server(self, server_id: str, details: Dict[str, Any], context_msg: str):
 		logger.debug(
@@ -377,15 +362,268 @@ class MCPConnectionManager:
 		exit_stack: Optional[AsyncExitStack] = details.get("exit_stack")
 		await self._safe_aclose(exit_stack, server_id, f"cleanup context: {context_msg}")
 
-		details["session"] = None;
-		details["exit_stack"] = None
-		details["tools"] = None;
-		details["ui_layout"] = None
-		details["required_primitives"] = set()
-		if details.get("status") not in ["error", "inactive_configured"]:
-			details["status"] = "disconnected"
-		details["ref_count"] = 0
+		# Don't reset retry_count or next_retry_time here, let the reconnect loop manage it
+		# if it's a transient disconnect. If it's a permanent removal, these fields become irrelevant.
+		new_status = "DISCONNECTED"
+		if details.get("status") == "ERROR_PERMANENT":
+			new_status = "ERROR_PERMANENT"
+		elif details.get("status") == "INACTIVE":
+			new_status = "INACTIVE"
+		elif details.get("status") in ["error", "ERROR_RETRYING"] and details.get("config_for_connection", {}).get(
+				"is_active"):
+			new_status = "ERROR_RETRYING"  # Keep it in retry state if it was an error and server is active
+
+		details.update({
+			"session": None, "exit_stack": None,
+			"tools": None, "ui_layout": None,
+			"required_primitives": set(),
+			"status": new_status,
+			"ref_count": 0
+		})
+		# If status is now DISCONNECTED (and active), the retry loop will set next_retry_time
+		if new_status == "DISCONNECTED" and details.get("config_for_connection", {}).get("is_active"):
+			if details.get("next_retry_time") is None:  # Only if not already scheduled for retry
+				details["next_retry_time"] = time.monotonic() + details["current_retry_delay_seconds"]
+
 		logger.debug(f"[{server_id}] Resources cleaned up ({context_msg}). New status: {details.get('status')}")
+
+	# --- Add, Update, Remove server methods need to interact with retry logic ---
+	async def add_server_from_config(self, db_config: MCPServerConfig):
+		server_id_str = str(db_config.id)
+		logger.info(f"[{server_id_str}] Adding new server '{db_config.name}' from live configuration update.")
+		config_dict_for_server = {
+			"id": server_id_str, "url": db_config.url, "name": db_config.name,
+			"description": db_config.description, "is_active": db_config.is_active,
+			"transport": "sse"
+		}
+
+		async with self._connection_lock:
+			if server_id_str in self.sse_connections:
+				logger.warning(f"[{server_id_str}] Attempted to add server that already exists. Consider using update.")
+				# Potentially call update_server_from_config here or return
+				return
+
+			self.server_configs[server_id_str] = config_dict_for_server
+			self.sse_connections[server_id_str] = self._get_initial_server_state_dict(
+				server_id_str, db_config, config_dict_for_server
+			)
+			# Mark for immediate check by retry loop if active
+			if config_dict_for_server["is_active"]:
+				self.sse_connections[server_id_str]["status"] = "DISCONNECTED"  # So retry loop picks it up
+				self.sse_connections[server_id_str]["next_retry_time"] = time.monotonic()  # Try ASAP
+			else:
+				self.sse_connections[server_id_str]["status"] = "INACTIVE"
+
+			logger.debug(f"[{server_id_str}] Added server '{db_config.name}' to internal state.")
+
+	async def update_server_from_config(self, db_config: MCPServerConfig):
+		server_id_str = str(db_config.id)
+		logger.info(f"[{server_id_str}] Updating server '{db_config.name}' from live configuration change.")
+		config_dict_for_server = {
+			"id": server_id_str, "url": db_config.url, "name": db_config.name,
+			"description": db_config.description, "is_active": db_config.is_active,
+			"transport": "sse"
+		}
+
+		async with self._connection_lock:
+			current_details = self.sse_connections.get(server_id_str)
+			if not current_details:
+				logger.error(f"[{server_id_str}] Update called for a server not in memory. Adding as new.")
+				# Delegate to add_server_from_config logic by setting up initial state
+				self.server_configs[server_id_str] = config_dict_for_server
+				self.sse_connections[server_id_str] = self._get_initial_server_state_dict(
+					server_id_str, db_config, config_dict_for_server
+				)
+				current_details = self.sse_connections[server_id_str]  # Get newly created details
+				if config_dict_for_server["is_active"]:
+					current_details["status"] = "DISCONNECTED"
+					current_details["next_retry_time"] = time.monotonic()
+				else:
+					current_details["status"] = "INACTIVE"
+				return  # Exit, retry loop will handle
+
+			old_config = current_details.get("config_for_connection", {})
+			needs_reconnect_check = (
+					old_config.get("url") != config_dict_for_server["url"] or
+					old_config.get("is_active") != config_dict_for_server["is_active"]
+			)
+
+			# Update configurations
+			current_details["config_from_db"] = db_config
+			current_details["config_for_connection"] = config_dict_for_server
+			self.server_configs[server_id_str] = config_dict_for_server
+
+			if needs_reconnect_check:
+				logger.info(
+					f"[{server_id_str}] Configuration change for '{db_config.name}' requires connection re-evaluation.")
+				if current_details.get("session") or current_details.get("exit_stack"):
+					await self._do_cleanup_for_server(server_id_str, current_details, "config update")
+
+				# Reset retry state for re-evaluation by the loop
+				current_details["retry_count"] = 0
+				current_details["current_retry_delay_seconds"] = INITIAL_RETRY_DELAY_SECONDS
+				current_details["error_message"] = None  # Clear old error
+
+				if config_dict_for_server["is_active"]:
+					current_details["status"] = "DISCONNECTED"  # Mark for retry loop
+					current_details["next_retry_time"] = time.monotonic()  # Try ASAP
+				else:
+					current_details["status"] = "INACTIVE"
+					current_details["next_retry_time"] = None  # No retry if inactive
+			else:  # No critical change, but update active status if it changed
+				if current_details["status"] != "INACTIVE" and not config_dict_for_server["is_active"]:
+					if current_details.get("session") or current_details.get("exit_stack"):
+						await self._do_cleanup_for_server(server_id_str, current_details, "made inactive")
+					current_details["status"] = "INACTIVE"
+					current_details["next_retry_time"] = None
+				elif current_details["status"] == "INACTIVE" and config_dict_for_server["is_active"]:
+					current_details["status"] = "DISCONNECTED"  # Was inactive, now active, needs connection
+					current_details["next_retry_time"] = time.monotonic()
+
+	async def remove_server_by_id(self, server_db_id_str: str):
+		logger.info(f"[{server_db_id_str}] Removing server from live configuration.")
+		connection_details = None
+		removed_server_name = server_db_id_str  # Default if not found in server_configs
+
+		async with self._connection_lock:
+			# Remove from server_configs first to get its name if available
+			removed_config_dict = self.server_configs.pop(server_db_id_str, None)
+			if removed_config_dict:
+				removed_server_name = removed_config_dict.get('name', server_db_id_str)
+
+			# Then remove from sse_connections, which holds the live state
+			connection_details = self.sse_connections.pop(server_db_id_str, None)
+
+		if connection_details:
+			logger.info(
+				f"[{server_db_id_str}] Cleaning up connection for removed server '{removed_server_name}'."
+			)
+			# Before cleanup, modify details to ensure the retry loop completely ignores it
+			# and cleanup proceeds correctly for a removed server.
+			connection_details["status"] = "REMOVED"  # A definitive status indicating it's gone
+			if "config_for_connection" in connection_details and isinstance(connection_details["config_for_connection"],
+																			dict):
+				connection_details["config_for_connection"]["is_active"] = False
+			else:  # Ensure the key exists if it didn't, to prevent errors in retry loop logic if accessed before full cleanup
+				connection_details["config_for_connection"] = {"is_active": False}
+
+			await self._do_cleanup_for_server(server_db_id_str, connection_details, "server removal")
+			logger.info(
+				f"[{server_db_id_str}] Server '{removed_server_name}' removed and cleaned up from sse_connections."
+			)
+		elif removed_config_dict:  # Found in server_configs but not sse_connections
+			logger.info(
+				f"[{server_db_id_str}] Server '{removed_server_name}' removed from server_configs (was not in sse_connections, so no live connection to clean)."
+			)
+		else:  # Not found in either
+			logger.warning(
+				f"[{server_db_id_str}] Attempted to remove a server that was not found in manager state (neither server_configs nor sse_connections)."
+			)
+
+	# --- Reconnection Loop ---
+	async def _reconnection_loop(self):
+		logger.info("MCPConnectionManager: Reconnection loop started.")
+		await asyncio.sleep(INITIAL_RETRY_DELAY_SECONDS)  # Initial grace period
+
+		while not self._stop_reconnect_event.is_set():
+			current_time = time.monotonic()
+			server_ids_to_attempt_connect = []  # Renamed for clarity
+
+			async with self._connection_lock:
+				for server_id, details in self.sse_connections.items():
+					config = details.get("config_for_connection", {})
+					if not config.get("is_active", False):
+						if details["status"] != "INACTIVE":
+							details["status"] = "INACTIVE"  # Ensure inactive servers are marked
+							details["next_retry_time"] = None  # No retry for inactive
+						continue
+
+					status = details.get("status")
+					next_retry = details.get("next_retry_time")
+
+					# Conditions to attempt connection:
+					# 1. DISCONNECTED and it's time to retry (or no retry time set yet for a new DISCONNECTED)
+					# 2. ERROR_RETRYING and it's time to retry
+					# 3. pending_initialization (should ideally be caught by initial load, but as a fallback)
+					if (status in ["DISCONNECTED", "ERROR_RETRYING"] and (next_retry is None or current_time >= next_retry)) or status == "pending_initialization":  # Fallback for pending
+						server_ids_to_attempt_connect.append(server_id)
+
+			if not server_ids_to_attempt_connect:
+				# If no immediate tasks, wait a bit or until the next scheduled retry
+				wait_time = 5.0  # Default poll interval
+				async with self._connection_lock:
+					active_retry_times = [
+						d["next_retry_time"] for d in self.sse_connections.values()
+						if d["config_for_connection"].get("is_active") and
+						   d["status"] == "ERROR_RETRYING" and
+						   d["next_retry_time"] is not None
+					]
+				if active_retry_times:
+					earliest_next_retry = min(active_retry_times)
+					wait_time = max(0, min(wait_time, earliest_next_retry - current_time))
+
+				try:
+					await asyncio.wait_for(self._stop_reconnect_event.wait(), timeout=wait_time)
+				except asyncio.TimeoutError:
+					pass  # Loop continues
+				continue  # Re-evaluate servers
+
+			logger.debug(
+				f"Reconnect Loop: Preparing to attempt connections for {len(server_ids_to_attempt_connect)} servers: {server_ids_to_attempt_connect}")
+
+			connect_tasks = []
+			for server_id_to_retry in server_ids_to_attempt_connect:
+				# Create tasks outside the main lock, but fetch necessary config under lock
+				server_config_for_connect = None
+				async with self._connection_lock:
+					details = self.sse_connections.get(server_id_to_retry)
+					if not details or not details["config_for_connection"].get("is_active"):
+						continue  # Server removed or made inactive
+					if details["status"] in ["CONNECTING", "CONNECTED"]:
+						continue  # Already being handled or connected
+
+					server_config_for_connect = details["config_for_connection"]
+
+				if server_config_for_connect:
+					task = asyncio.create_task(
+						self.connect_and_prepare_server(server_id_to_retry, server_config_for_connect),
+						name=f"reconnect_loop_{server_id_to_retry}"
+					)
+					connect_tasks.append(task)
+
+			if connect_tasks:
+				logger.info(f"Reconnect Loop: Concurrently attempting to connect to {len(connect_tasks)} servers.")
+				await asyncio.gather(*connect_tasks, return_exceptions=True)
+			# Results are logged within connect_and_prepare_server or by the exception in gather
+			# After attempts, the loop will naturally re-evaluate statuses and next_retry_times in the next iteration.
+
+			# Short pause to prevent tight spinning if all attempts fail quickly
+			# The main wait logic is at the beginning of the loop now.
+			await asyncio.sleep(0.1)
+
+		logger.info("MCPConnectionManager: Reconnection loop stopped.")
+
+	async def start_background_tasks(self):
+		if self._reconnect_loop_task and not self._reconnect_loop_task.done():
+			logger.info("Reconnect loop already running.")
+			return
+		self._stop_reconnect_event.clear()
+		self._reconnect_loop_task = asyncio.create_task(self._reconnection_loop())
+		logger.info("MCPConnectionManager background reconnect task started.")
+
+	async def stop_background_tasks(self):
+		if self._reconnect_loop_task and not self._reconnect_loop_task.done():
+			logger.info("Stopping MCPConnectionManager background reconnect task...")
+			self_stop_reconnect_event.set()
+			try:
+				await asyncio.wait_for(self._reconnect_loop_task, timeout=10.0)
+			except asyncio.TimeoutError:
+				logger.warning("Reconnect loop did not stop in time, cancelling.")
+				self._reconnect_loop_task.cancel()
+			except asyncio.CancelledError:
+				logger.info("Reconnect loop successfully cancelled.")
+			self._reconnect_loop_task = None
+			logger.info("MCPConnectionManager background reconnect task stopped.")
 
 	async def _default_sampling_callback(self, context: Union[RequestContext["ClientSession", None], Any],
 										 params: Union[mcp_types.CreateMessageRequestParams, Any]) -> Union[
@@ -792,6 +1030,8 @@ class MCPConnectionManager:
 		if error_msg or not session_object: return _create_error_content(error_msg or "Session not available",
 																		 INTERNAL_ERROR), error_msg or "Session not available"
 		actual_mcp_session: ClientSession = session_object
+		logger.info(f"[{server_id}] execute_tool: About to call get_discovered_tools_internal.")
+		tools = None
 		try:
 			tools = await self.get_discovered_tools_internal(server_id)
 			if tools is None: err_msg = f"Tool data missing or server '{server_id}' not ready."; logger.error(
@@ -801,10 +1041,9 @@ class MCPConnectionManager:
 																		  "METHOD_NOT_FOUND"), err_msg
 			logger.debug(f"[{server_id}] Calling actual_mcp_session.call_tool('{tool_name}')...");
 			tool_call_timeout = self.settings.MCP_CALL_TOOL_TIMEOUT
-			tool_result = await asyncio.wait_for(actual_mcp_session.call_tool(name=tool_name, arguments=params),
-												 timeout=tool_call_timeout)
-			logger.info(
-				f"[{server_id}] Tool '{tool_name}' completed. (Took {(time.monotonic() - tool_exec_start_time) * 1000:.2f} ms).")
+			tool_result = await asyncio.wait_for(actual_mcp_session.call_tool(name=tool_name, arguments=params), timeout=tool_call_timeout)
+
+			logger.info(f"[{server_id}] Tool '{tool_name}' completed. (Took {(time.monotonic() - tool_exec_start_time) * 1000:.2f} ms).")
 			self._check_mcp_result_for_error(tool_result, f"ExecuteTool({tool_name}) for {server_id}")
 			result_content = getattr(tool_result, 'content', None) if tool_result else None
 			logger.debug(f"[{server_id}] Tool '{tool_name}' successful. Content type: {type(result_content)}")
@@ -815,62 +1054,103 @@ class MCPConnectionManager:
 				f"[{server_id}] {error_message}");
 			return _create_error_content(error_message, INTERNAL_ERROR,
 										 "TIMEOUT"), error_message
-		except anyio.ClosedResourceError as closed_err:
-			error_message = f"MCP connection closed: {closed_err}";
-			logger.error(f"[{server_id}] {error_message}",
-						 exc_info=False);
-			await self._update_connection_state(
-				server_id, {"status": "error", "error_message": error_message, "session": None,
-							"exit_stack": None});
-			return _create_error_content(error_message,
-										 INTERNAL_ERROR), error_message
+		except (anyio.ClosedResourceError, anyio.EndOfStream, ConnectionRefusedError) as conn_err:  # Catch specific connection errors
+			error_message = f"MCP connection to '{server_id}' lost/failed during tool '{tool_name}': {conn_err}"
+			logger.error(f"[{server_id}] {error_message}", exc_info=False)
+			async with self._connection_lock:  # Safely update state
+				details = self.sse_connections.get(server_id)
+				if details:
+					# This server had an active session that just died.
+					# Trigger cleanup of the current session and mark for retry.
+					# _do_cleanup_for_server will try to preserve ERROR_RETRYING state if appropriate
+					await self._do_cleanup_for_server(server_id, details, "tool execution connection error")
+					# Ensure it's marked for retry if active
+					if details["config_for_connection"].get("is_active"):
+						details["status"] = "ERROR_RETRYING"
+						details["error_message"] = error_message
+						# Reset retry count as this was a failure of an *active* session, not an initial connect failure
+						details["retry_count"] = 0
+						details["current_retry_delay_seconds"] = INITIAL_RETRY_DELAY_SECONDS
+						details["next_retry_time"] = time.monotonic() + INITIAL_RETRY_DELAY_SECONDS
+			return _create_error_content(error_message, INTERNAL_ERROR), error_message
 		except McpError as mcp_err:
-			error_message = f"MCP protocol error: {mcp_err.error}";
-			logger.error(f"[{server_id}] {error_message}",
-						 exc_info=False);
+			error_message = f"MCP protocol error: {mcp_err.error}"
+			logger.error(f"[{server_id}] {error_message}",exc_info=False)
 			return getattr(
 				mcp_err, 'error', error_message), error_message
+		except asyncio.CancelledError:
+			logger.error(f"[{server_id}] execute_tool: AWAIT ON get_discovered_tools_internal was CANCELLED.")
+			# It's important to decide what execute_tool returns in this case.
+			# Propagating might be best if the entire ui_action task is being cancelled.
+			# For now, let it fall through to the 'tools is None' check, which will return an error.
+			# OR: raise
+			err_msg = f"Operation cancelled while retrieving tool data for server '{server_id}'."
+			logger.error(f"[{server_id}] {err_msg}")
+			return _create_error_content(err_msg, INTERNAL_ERROR, "CANCELLED"), err_msg  # Specific error
 		except Exception as e:
-			error_message = f"Unexpected error for tool '{tool_name}': {e}";
-			logger.error(
-				f"[{server_id}] {error_message}", exc_info=True);
-			return _create_error_content(error_message,
-										 INTERNAL_ERROR), error_message
+			error_message = f"Unexpected error for tool '{tool_name}': {e}"
+			logger.error(f"[{server_id}] {error_message}", exc_info=True);
+			return _create_error_content(error_message,INTERNAL_ERROR), error_message
 		finally:
 			await self.release_session(server_id)
+			if tools is None:
+				err_msg = f"Tool data missing or server '{server_id}' not ready. (tools object was None after internal call)"
+				logger.error(f"[{server_id}] {err_msg}")
+				return _create_error_content(err_msg, INTERNAL_ERROR), err_msg
 
+	# Modify get_or_create_session to reflect new states
 	async def get_or_create_session(self, server_id: str) -> Tuple[Optional[ClientSession], Optional[str]]:
 		logger.debug(f"[{server_id}] Request for session.");
-		async with self._connection_lock:
+		async with self._connection_lock:  # Lock for reading consistent state
 			connection_details = self.sse_connections.get(server_id)
-		if not connection_details: error_msg = f"Server '{server_id}' not configured."; logger.error(
-			error_msg); return None, error_msg
-		db_config: Optional[MCPServerConfig] = connection_details.get("config_from_db")
-		if not db_config: error_msg = f"Internal error: DB config missing for '{server_id}'."; logger.critical(
-			error_msg); return None, error_msg
-		if not db_config.is_active: error_msg = f"Server '{db_config.name}' (ID: {server_id}) inactive."; logger.warning(
-			error_msg); return None, error_msg
-		current_status = connection_details.get("status");
+
+		if not connection_details:
+			error_msg = f"Server '{server_id}' not configured."
+			logger.error(error_msg);
+			return None, error_msg
+
+		config = connection_details.get("config_for_connection", {})
+		server_name = config.get("name", server_id)
+
+		if not config.get("is_active", False):
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is configured but INACTIVE."
+			logger.warning(error_msg);
+			return None, error_msg
+
+		current_status = connection_details.get("status")
 		session = connection_details.get("session")
-		if current_status == "connected" and session:
-			connection_details["ref_count"] += 1;
-			logger.info(
-				f"[{server_id}] Existing session for '{db_config.name}'. Ref: {connection_details['ref_count']}");
-			return session, None
-		elif current_status in ["pending_initialization", "pending_add", "pending_update", "disconnected", "error"]:
-			error_msg = f"Server '{db_config.name}' (ID: {server_id}) not ready (Status: {current_status}). Last error: {connection_details.get('error_message', 'N/A')}.";
-			logger.warning(f"[{server_id}] {error_msg}");
-			return None, error_msg
-		elif current_status == "connecting":
-			error_msg = f"Server '{db_config.name}' (ID: {server_id}) connecting. Try again.";
-			logger.info(
-				f"[{server_id}] {error_msg}");
-			return None, error_msg
-		else:
-			error_msg = f"Server '{db_config.name}' (ID: {server_id}) in unknown state: {current_status}.";
-			logger.error(
-				f"[{server_id}] {error_msg}");
-			return None, error_msg
+
+		if current_status == "CONNECTED" and session:
+			# Need to re-acquire lock for write if modifying ref_count
+			async with self._connection_lock:
+				# Re-fetch details in case state changed between locks
+				connection_details_for_update = self.sse_connections.get(server_id)
+				if connection_details_for_update and connection_details_for_update.get("status") == "CONNECTED":
+					connection_details_for_update["ref_count"] += 1
+					logger.info(
+						f"[{server_id}] Existing session for '{server_name}'. Ref: {connection_details_for_update['ref_count']}")
+					return connection_details_for_update.get("session"), None
+				else:  # Status changed, treat as if not connected
+					current_status = connection_details_for_update.get("status",
+																	   "UNKNOWN") if connection_details_for_update else "UNKNOWN"
+				# Fall through to error handling below
+
+		# Handle non-connected states
+		if current_status == "CONNECTING":
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is currently CONNECTING. Please try again shortly."
+		elif current_status == "ERROR_RETRYING":
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is temporarily unavailable (retrying). Last error: {connection_details.get('error_message', 'N/A')}. Next attempt around {datetime.fromtimestamp(connection_details.get('next_retry_time', 0)).isoformat() if connection_details.get('next_retry_time') else 'soon'}."
+		elif current_status == "ERROR_PERMANENT":
+			error_msg = f"Server '{server_name}' (ID: {server_id}) has a permanent configuration error: {connection_details.get('error_message', 'N/A')}."
+		elif current_status == "DISCONNECTED":
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is currently DISCONNECTED and awaiting reconnection. Please try again shortly."
+		elif current_status == "INACTIVE":  # Should have been caught earlier, but as a safeguard
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is INACTIVE."
+		else:  # pending_initialization, etc.
+			error_msg = f"Server '{server_name}' (ID: {server_id}) is not ready (Status: {current_status}). Last error: {connection_details.get('error_message', 'N/A')}."
+
+		logger.warning(f"[{server_id}] Session not available: {error_msg}")
+		return None, error_msg
 
 	async def release_session(self, server_id: str):
 		logger.debug(f"[{server_id}] Request to release session.");
@@ -895,53 +1175,172 @@ class MCPConnectionManager:
 
 	async def _update_connection_state_nolock(self, server_id: str, updates: Dict[str, Any]):
 		if server_id in self.sse_connections:
-			self.sse_connections[server_id].update(updates)
-			loggable_updates = {k: v for k, v in updates.items() if
-								k not in ["session", "exit_stack", "config_from_db", "config_for_connection"]}
-			if "status" in updates: loggable_updates["status"] = updates["status"]
-			logger.debug(f"[{server_id}] Updated connection state (nolock): {loggable_updates}")
+			target_dict = self.sse_connections[server_id]
+
+			# Log before update
+			logger.info(
+				f"[{server_id}] _update_connection_state_nolock: Updating. Current status='{target_dict.get('status')}', UI Layout present before update: {target_dict.get('ui_layout') is not None}")
+			logger.debug(
+				f"[{server_id}] _update_connection_state_nolock: Updates to apply: { {k: (type(v).__name__ if k in ['session', 'exit_stack', 'ui_layout', 'tools'] else v) for k, v in updates.items()} }")
+
+			target_dict.update(updates)  # The actual update
+
+			# Log after update - this will show the new state of critical fields
+			log_summary = {
+				"status": target_dict.get("status"),
+				"error_message": target_dict.get("error_message"),
+				"tools_set": target_dict.get("tools") is not None,
+				"ui_layout_set": target_dict.get("ui_layout") is not None,  # CRITICAL CHECK
+				"session_set": target_dict.get("session") is not None,
+				"ref_count": target_dict.get("ref_count")
+			}
+			logger.info(f"[{server_id}] _update_connection_state_nolock: State AFTER update. Summary: {log_summary}")
+			if "ui_layout" in updates:  # If ui_layout was part of the keys in the 'updates' dict
+				logger.info(
+					f"[{server_id}] _update_connection_state_nolock: 'ui_layout' key was in updates. Object type: {type(updates['ui_layout']).__name__}, Is None: {updates['ui_layout'] is None}")
+			elif "ui_layout" in target_dict:  # Check if it's in the target_dict generally
+				logger.info(
+					f"[{server_id}] _update_connection_state_nolock: 'ui_layout' key exists in target_dict. Object type: {type(target_dict['ui_layout']).__name__}, Is None: {target_dict['ui_layout'] is None}")
+
 		else:
 			logger.error(f"Attempt to update state (nolock) for unknown server_id: {server_id}")
 
 	async def get_connection_details(self, server_id: str) -> Optional[Dict[str, Any]]:
 		logger.debug(f"[{server_id}] Getting connection details.");
-		async with self._connection_lock: details = self.sse_connections.get(server_id)
+		async with self._connection_lock:
+			details = self.sse_connections.get(server_id)
 		if not details: return None
-		db_conf: Optional[MCPServerConfig] = details.get("config_from_db");
-		config_name = db_conf.name if db_conf else server_id
-		config_url = db_conf.url if db_conf else "N/A";
-		config_is_active = db_conf.is_active if db_conf else False
-		details_copy = {"id": server_id, "name": config_name, "url": config_url, "configured_active": config_is_active,
-						"status": details.get("status"), "error_message": details.get("error_message"),
-						"ref_count": details.get("ref_count"),
-						"tools_available": list(details.get("tools", {}).keys()) if details.get(
-							"tools") is not None else [],
-						"ui_layout_retrieved": details.get("ui_layout") is not None,
-						"required_primitives": list(details.get("required_primitives", set())),
-						"last_connect_attempt": details.get("last_connect_attempt"),
-						"last_successful_connect": details.get("last_successful_connect")}
+
+		config = details.get("config_for_connection", {})
+		config_name = config.get("name", server_id)
+		config_url = config.get("url", "N/A")
+		config_is_active = config.get("is_active", False)
+
+		details_copy = {
+			"id": server_id, "name": config_name, "url": config_url,
+			"configured_active": config_is_active,
+			"status": details.get("status"),
+			"error_message": details.get("error_message"),
+			"ref_count": details.get("ref_count"),
+			"tools_available": list(details.get("tools", {}).keys()) if details.get("tools") is not None else [],
+			"ui_layout_retrieved": details.get("ui_layout") is not None,
+			"required_primitives": list(details.get("required_primitives", set())),
+			"last_connect_attempt_time": datetime.fromtimestamp(
+				details["last_connect_attempt_time"]).isoformat() if details.get("last_connect_attempt_time") else None,
+			"last_successful_connect_time": datetime.fromtimestamp(
+				details["last_successful_connect_time"]).isoformat() if details.get(
+				"last_successful_connect_time") else None,
+			"retry_count": details.get("retry_count"),
+			"current_retry_delay_seconds": details.get("current_retry_delay_seconds"),
+			"next_retry_time": datetime.fromtimestamp(details["next_retry_time"]).isoformat() if details.get(
+				"next_retry_time") else None,
+		}
 		return details_copy
 
-	def get_discovered_tools(self, server_id: str) -> Optional[Dict[str, Any]]:
-		logger.debug(f"[{server_id}] Getting discovered tools (public).");
-		details = self.sse_connections.get(server_id)
-		if details and details.get("status") == "connected": tools = details.get("tools"); return copy.deepcopy(
-			tools) if tools is not None else {}
-		return None
 
 	async def get_discovered_tools_internal(self, server_id: str) -> Optional[Dict[str, Any]]:
-		logger.debug(f"[{server_id}] Getting discovered tools (internal).");
-		async with self._connection_lock: details = self.sse_connections.get(server_id)
-		if details and details.get("status") == "connected" and details.get("tools") is not None: return details.get(
-			"tools")
-		return None
+		logger.critical(f"CRITICAL_TEST: ENTERED get_discovered_tools_internal for server_id: {server_id}")
+
+		try:
+			logger.info(f"[{server_id}] get_discovered_tools_internal: Step 0 - Before first await (lock).")
+			async with self._connection_lock:
+				logger.info(f"[{server_id}] get_discovered_tools_internal: Step 1 - Lock acquired.")
+				details = self.sse_connections.get(server_id)
+				logger.info(
+					f"[{server_id}] get_discovered_tools_internal: Step 2 - 'details' obtained: {details is not None}")
+
+			if not details:
+				logger.warning(
+					f"[{server_id}] get_discovered_tools_internal: Step 3a - No details found after lock. Returning None.")
+				return None
+			logger.info(f"[{server_id}] get_discovered_tools_internal: Step 3b - Details ARE present.")
+
+			status_val = details.get("status", "STATUS_KEY_MISSING")
+			tools_obj = details.get("tools")
+			tools_data_is_none_val = tools_obj is None
+
+			logger.info(
+				f"[{server_id}] get_discovered_tools_internal: Step 4 - FINAL CHECK. Status='{status_val}', Tools data is None: {tools_data_is_none_val}")
+
+			if status_val == "CONNECTED" and not tools_data_is_none_val:
+				logger.info(
+					f"[{server_id}] get_discovered_tools_internal: Conditions MET. Returning tools data (type: {type(tools_obj).__name__}).")
+				return tools_obj
+
+			logger.warning(
+				f"[{server_id}] get_discovered_tools_internal: Conditions NOT MET. Status: '{status_val}', Tools data is None: {tools_data_is_none_val}. Returning None.")
+			return None
+
+		except asyncio.CancelledError:  # Catch CancelledError specifically first
+			logger.error(
+				f"[{server_id}] CAUGHT CancelledError IN get_discovered_tools_internal. Task was cancelled. Propagating.")
+			raise  # Re-raise CancelledError is often the correct thing to do
+		except BaseException as e_base:  # Catch BaseException to see if it's something like SystemExit or KeyboardInterrupt
+			logger.error(
+				f"[{server_id}] CAUGHT BaseException (e.g. SystemExit, KeyboardInterrupt, or other non-Exception) IN get_discovered_tools_internal: {type(e_base).__name__} - {e_base!r}",
+				exc_info=True)
+			# Depending on the BaseException, you might re-raise or return None
+			if isinstance(e_base, (SystemExit, KeyboardInterrupt)):
+				raise  # Definitely re-raise these
+			return None  # For other BaseExceptions, treat as failure to get tools
 
 	async def get_retrieved_ui_layout(self, server_id: str) -> Optional[dict]:
-		logger.debug(f"[{server_id}] Accessing UI layout.");
-		async with self._connection_lock: details = self.sse_connections.get(server_id)
-		if details and details.get("status") == "connected": layout = details.get("ui_layout"); return copy.deepcopy(
-			layout) if layout else None
-		return None
+		# Ensure this method is being called by ProjectViewsService
+		logger.info(f"ENTERED get_retrieved_ui_layout for server_id: {server_id}")  # ADD THIS
+		async with self._connection_lock:
+			details = self.sse_connections.get(server_id)
+
+		if not details:
+			logger.warning(f"[{server_id}] get_retrieved_ui_layout: No details found in sse_connections.")
+			return None
+
+		current_status = details.get("status")
+		ui_layout_obj = details.get("ui_layout")
+
+		logger.info(
+			f"[{server_id}] get_retrieved_ui_layout check: Status='{current_status}', UI Layout Object Present: {ui_layout_obj is not None} (Type: {type(ui_layout_obj).__name__ if ui_layout_obj is not None else 'NoneType'})")
+
+		if current_status == "CONNECTED" and ui_layout_obj is not None:
+			try:
+				copied_layout = copy.deepcopy(ui_layout_obj)  # deepcopy is good for safety
+				logger.info(f"[{server_id}] Successfully retrieved and deepcopied UI layout. Returning layout.")
+				return copied_layout
+			except Exception as e:
+				logger.error(f"[{server_id}] Error during deepcopy of UI layout: {e}", exc_info=True)
+				return None
+		else:
+			logger.warning(
+				f"[{server_id}] UI Layout not available or status not CONNECTED for get_retrieved_ui_layout. Status: '{current_status}', Layout None: {ui_layout_obj is None}. Returning None.")
+			return None
+
+	async def get_discovered_tools(self, server_id: str) -> Optional[Dict[str, Any]]:
+		# Ensure this method is being called by the websocket endpoint in main.py
+		logger.info(f"ENTERED get_discovered_tools for server_id: {server_id}")  # ADD THIS
+		async with self._connection_lock:
+			details = self.sse_connections.get(server_id)
+
+		if not details:
+			logger.warning(f"[{server_id}] get_discovered_tools: No details found in sse_connections.")
+			return None
+
+		current_status = details.get("status")
+		tools_obj = details.get("tools")
+
+		logger.info(
+			f"[{server_id}] get_discovered_tools check: Status='{current_status}', Tools Object Present: {tools_obj is not None} (Count: {len(tools_obj) if isinstance(tools_obj, dict) else 'N/A'})")
+
+		if current_status == "CONNECTED" and tools_obj is not None:
+			try:
+				copied_tools = copy.deepcopy(tools_obj)
+				logger.info(f"[{server_id}] Successfully retrieved and deepcopied tools. Returning tools.")
+				return copied_tools
+			except Exception as e:
+				logger.error(f"[{server_id}] Error during deepcopy of tools: {e}", exc_info=True)
+				return None  # Or {}
+		else:
+			logger.warning(
+				f"[{server_id}] Tools not available or status not CONNECTED for get_discovered_tools. Status: '{current_status}', Tools None: {tools_obj is None}. Returning None.")
+			return None
 
 	async def get_required_primitives(self, server_id: str) -> Optional[Set[str]]:
 		logger.debug(f"[{server_id}] Accessing required primitives.");
@@ -951,9 +1350,25 @@ class MCPConnectionManager:
 		return None
 
 	async def is_server_ui_ready(self, server_id: str) -> bool:
-		logger.debug(f"[{server_id}] Checking UI readiness.");
-		async with self._connection_lock: details = self.sse_connections.get(server_id)
-		return bool(details and details.get("status") == "connected" and details.get("ui_layout") is not None)
+		logger.info(f"[{server_id}] Checking UI readiness (is_server_ui_ready)...")  # Entry log
+		async with self._connection_lock:
+			details = self.sse_connections.get(server_id)
+
+		if not details:
+			logger.warning(f"[{server_id}] is_server_ui_ready: No details found for server in sse_connections.")
+			return False
+
+		# Explicitly get values for logging
+		current_status = details.get("status")
+		ui_layout_obj = details.get("ui_layout")  # Get the actual object
+
+		status_ok = current_status == "CONNECTED"
+		layout_ok = ui_layout_obj is not None  # Check if the object itself is None
+
+		logger.info(
+			f"[{server_id}] is_server_ui_ready check: Status='{current_status}' (Target='CONNECTED', Match: {status_ok}), UI Layout Object Present: {layout_ok} (Type: {type(ui_layout_obj).__name__ if ui_layout_obj is not None else 'NoneType'})")
+
+		return bool(status_ok and layout_ok)
 
 	async def cleanup_all_connections(self):
 		shutdown_start_time = time.monotonic();
