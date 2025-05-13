@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
+from sqlalchemy.orm import Session as SQLAlchemySession
 
 from .config import settings
 
@@ -46,14 +47,12 @@ def drop_tables():
 
 
 @contextmanager
-def get_db():
-    """Get a database session with automatic closing.
-
-    Usage:
-        with get_db() as db:
-            db.query(MyModel).all()
+def get_db() -> SQLAlchemySession:
     """
-    db = SessionLocal()
+    SQLAlchemy database session context manager.
+    This function is the context manager factory.
+    """
+    db: SQLAlchemySession = SessionLocal()
     try:
         yield db
     finally:

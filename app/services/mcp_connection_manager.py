@@ -22,6 +22,9 @@ from mcp.types import (
 )
 from pydantic import ValidationError
 
+from fastapi import Request as FastAPIRequest
+from fastapi import HTTPException # Use FastAPI's HTTPException
+
 from app.config import Settings  # Keep for other settings if any
 # Import your new SQLAlchemy model for type hinting
 from app.models.mcp_server_config_model import MCPServerConfig
@@ -57,7 +60,6 @@ class MCPConnectionManager:
 		# This will store the state for each server, keyed by str(MCPServerConfig.id)
 		self.sse_connections: Dict[str, Dict[str, Any]] = {}
 		self._connection_lock = asyncio.Lock()
-		# self.server_configs is removed; configs come from DB via initialize_servers_from_db
 
 		logger.info("MCPConnectionManager initialized (empty, awaiting DB configurations).")
 
@@ -1375,14 +1377,15 @@ class MCPConnectionManager:
 		return None
 
 
-async def get_mcp_connection_manager(request: mcp_types.Request) -> MCPConnectionManager:
-	"""
-	FastAPI dependency to get the MCPConnectionManager instance from app.state.
-	The instance is expected to be initialized during the application lifespan.
-	"""
-	if not hasattr(request.app.state, 'mcp_connection_manager') or request.app.state.mcp_connection_manager is None:
-		# This logger would need to be defined at the module level or imported
-		logging.critical(
-			"CRITICAL: MCPConnectionManager not initialized in app.state before access by dependency!")  # Use logging module directly or class's logger
-		raise HTTPException()
-	return request.app.state.mcp_connection_manager
+async def get_mcp_connection_manager(request: FastAPIRequest) -> MCPConnectionManager: # Use FastAPIRequest
+   """
+   FastAPI dependency to get the MCPConnectionManager instance from app.state.
+   The instance is expected to be initialized during the application lifespan.
+   """
+   if not hasattr(request.app.state, 'mcp_connection_manager') or \
+      request.app.state.mcp_connection_manager is None:
+      logger.critical(
+         "CRITICAL: MCPConnectionManager not initialized in app.state before access by dependency!")
+      # Raise FastAPI's HTTPException
+      raise HTTPException(status_code=500, detail="MCPConnectionManager not initialized in app.state")
+   return request.app.state.mcp_connection_manager

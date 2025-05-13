@@ -323,7 +323,7 @@ class MCPLogEntry(BaseModel):
 
 class MCPServerConfigBase(BaseModel): # Your Pydantic BaseModel
     name: str
-    url: str # You could use pydantic.HttpUrl if the URL must be HTTP/S
+    url: str
     description: Optional[str] = None
     is_active: bool = True
     # Add other configurable fields that mirror your SQLAlchemy model (excluding id, created_at, updated_at)
@@ -331,12 +331,11 @@ class MCPServerConfigBase(BaseModel): # Your Pydantic BaseModel
 class MCPServerConfigCreate(MCPServerConfigBase):
     pass # Inherits all fields from base
 
-class MCPServerConfigUpdate(BaseModel): # For partial updates
+class MCPServerConfigUpdate(BaseModel):
     name: Optional[str] = None
     url: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
-    # Add other updatable fields
 
 class MCPServerConfigResponse(MCPServerConfigBase):
     id: int
