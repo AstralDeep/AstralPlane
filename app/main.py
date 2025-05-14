@@ -65,8 +65,7 @@ app.add_middleware(
 # --- API Routers ---
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projects/Servers"])
-app.include_router(mcp_server_management.router, prefix="/api/mcp-servers",
-				   tags=["MCP Server Management"])  # New router
+app.include_router(mcp_server_management.router, prefix="/api/mcp-servers", tags=["MCP Server Management"])  # New router
 if hasattr(websockets, 'router'):
 	app.include_router(websockets.router, prefix="/api/ws", tags=["WebSocket Utils"])
 
