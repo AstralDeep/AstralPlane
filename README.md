@@ -40,9 +40,9 @@ We have included a few example implementations of the MCP servers in the `mcp_se
 To run one of the example servers (in this case, `mcp_servers/mcp_async_demo.py`, follow these steps:
 1. Make sure you have activated your virtual environment.
 2. Start the MCP server:
-    ```python mcp_servers/mcp_async_demo.py```
+    ```python -m app.mcp_servers.mcp_async_demo```
 3. In a separate terminal, start the AstralPlane server:
-    ```python app/main.py```
+    ```python -m app.main```
 4. You may also want to start the AstralProjection frontend to see the UI in action. Follow the instructions in the AstralProjection repository to set it up.
 
 AstralPlane now supports dynamic loading of servers into the system. Once you have both of the above Python files running, you can interact with the REST API endpoints to add or remove an MCP server. See below.
