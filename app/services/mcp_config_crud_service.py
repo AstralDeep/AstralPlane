@@ -35,9 +35,13 @@ def get_mcp_server_configs(db: Session, skip: int = 0, limit: int = 100, only_ac
 
 def update_mcp_server_config(db: Session, config_id: int, config_in: MCPServerConfigUpdate) -> Optional[
 	MCPServerConfig]:
+	# ADD THIS LOG:
+	print(f"CRUD - Payload received (config_in): {config_in.model_dump_json(indent=2)}")
 	db_config = get_mcp_server_config(db, config_id)
 	if db_config:
 		update_data = config_in.model_dump(exclude_unset=True)
+		# ADD THIS LOG:
+		print(f"CRUD - Data to be applied (after exclude_unset=True): {update_data}")
 		for key, value in update_data.items():
 			setattr(db_config, key, value)
 		db.commit()
