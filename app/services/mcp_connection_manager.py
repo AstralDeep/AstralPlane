@@ -751,77 +751,105 @@ class MCPConnectionManager:
 		except Exception as e:
 			logger.error(f"[{server_id}] Error sending progress: {e}", exc_info=True)
 
-	async def _handle_mcp_log_message(self, server_id: str, params: Union[LoggingMessageNotificationParams, Dict, Any]):
+	async def _handle_mcp_log_message(self, server_id: str,
+									  params: Union[mcp_types.LoggingMessageNotificationParams, Dict, Any]):
+		# server_id is now the string ID from the database (e.g., "mcp_mock_chatviewbasic")
 		logger.debug(f"[{server_id}] Handling MCP Log ('notifications/message'). Params: {type(params)}, {params!r}")
-		stream_id = f"mcp:{server_id}"
+
+		# stream_id for ConnectionManager (UI WebSocket manager) is based on server_id
+		stream_id_for_ui_manager = f"mcp:{server_id}"
+
+		# --- MODIFICATION: default_log_binding uses server_id (the string PK) directly ---
+		# This ensures it matches the updateBinding defined in app/mock_chatviewbasic.py using SERVER_ID_FOR_BINDING
 		default_log_binding = f"mcp_stream:{server_id}:log_messages"
-		TARGETED_BINDING_PREFIX = f"mcp_stream:{server_id}:"
-		EXPECTED_RAW_STREAM_LOGGER_NAME = f"{TARGETED_BINDING_PREFIX}raw_llm_stream"
-		target_binding = default_log_binding;
-		update_type: str = "append";
+
+		# TARGETED_BINDING_PREFIX also uses server_id (the string PK)
+		TARGETED_BINDING_PREFIX_BY_ID = f"mcp_stream:{server_id}:"
+		EXPECTED_RAW_STREAM_LOGGER_NAME = f"{TARGETED_BINDING_PREFIX_BY_ID}raw_llm_stream"
+
+		target_binding = default_log_binding  # Default for general logs to LogView
+		update_type: str = "append"
 		content_to_send: Any = None
 
 		try:
-			log_level_raw = getattr(params, 'level', 'log');
+			log_level_raw = getattr(params, 'level', 'log')
 			log_data: Any = getattr(params, 'data', None)
-			logger_name: Optional[str] = getattr(params, 'logger', None)
-			if log_data is None: logger.warning(
-				f"[{server_id}] Log 'data' is None. Logger='{logger_name}'. Ignoring."); return
+			logger_name: Optional[str] = getattr(params, 'logger', None)  # Name of the logger on the MCP server side
+
+			if log_data is None:
+				logger.debug(f"[{server_id}] Log 'data' is None from MCP logger '{logger_name}'. Ignoring.")
+				return
+
 			final_content = log_data
 
-			if isinstance(logger_name, str) and logger_name.startswith(TARGETED_BINDING_PREFIX):
+			# Check if the log event from MCP was from a specifically named logger on the MCP server
+			# intended for direct UI element updates (other than the main LogView).
+			# This assumes logger_name, if it's a binding, would also use the server's string ID.
+			if isinstance(logger_name, str) and logger_name.startswith(TARGETED_BINDING_PREFIX_BY_ID):
+				target_binding = logger_name  # The logger_name itself is the full binding string
 				if logger_name == EXPECTED_RAW_STREAM_LOGGER_NAME:
-					target_binding = logger_name;
-					final_content = str(log_data);
+					final_content = str(log_data)  # Send raw text
 					update_type = "append"
-					content_to_send = final_content;
-					logger.debug(f"[{server_id}] Raw stream chunk for '{target_binding}'.")
-				else:
-					target_binding = logger_name;
-					update_type = "replace";
 					content_to_send = final_content
+					logger.debug(f"[{server_id}] Raw stream chunk for specific targetBinding '{target_binding}'.")
+				else:
+					content_to_send = final_content  # Could be dict, str, etc.
+					update_type = "replace"  # Or "append", depending on the UI element's needs
 					logger.debug(
-						f"[{server_id}] Targeted UI update for '{target_binding}'. Type: {type(content_to_send).__name__}")
+						f"[{server_id}] Targeted UI update for specific targetBinding '{target_binding}'. Content type: {type(content_to_send).__name__}")
 			else:
-				log_level = str(log_level_raw).lower();
+				# This is the path for general logs going to the main LogView (target_binding is already default_log_binding)
+				log_level = str(log_level_raw).lower()
 				valid_levels = {"error", "warning", "info", "debug", "log"}
-				if log_level not in valid_levels: log_level = "log"
-				log_data_str = str(final_content)
+				if log_level not in valid_levels:
+					log_level = "log"
+
+				log_data_str = str(final_content)  # Ensure message is a string
+
 				try:
+					# Create the structured log entry for the UI's LogView
 					log_entry = MCPLogEntry(level=log_level, message=log_data_str, timestamp=datetime.now())
 					content_to_send = log_entry.model_dump(exclude_none=True)
-					logger.debug(f"[{server_id}] Sending structured log to '{target_binding}'.")
-				except ImportError:
-					content_to_send = f"[{log_level.upper()}] {log_data_str}";
-					logger.warning(
-						f"[{server_id}] MCPLogEntry schema missing, sending plain text log to '{target_binding}'.")
-				except Exception as log_entry_err:
-					content_to_send = f"[LOG_ERROR:{log_level.upper()}] {log_data_str}";
+					logger.debug(
+						f"[{server_id}] Prepared structured log for default LogView. TargetBinding: '{target_binding}'. Content: {content_to_send}")
+				except Exception as log_entry_err:  # Catch broader errors, including potential Pydantic or ImportError
+					content_to_send = f"[LOG_ERROR:{log_level.upper()}] {log_data_str}"  # Fallback content
 					logger.error(
-						f"[{server_id}] Error creating MCPLogEntry: {log_entry_err}", exc_info=True)
+						f"[{server_id}] Error creating MCPLogEntry for target '{target_binding}': {log_entry_err}",
+						exc_info=True)
 
-			if content_to_send is None: logger.error(
-				f"[{server_id}] No content for notification. Params: {params!r}, Target: {target_binding}"); return
+			if content_to_send is None:
+				logger.error(
+					f"[{server_id}] No content prepared for notification. Original Params: {params!r}, Determined Target: {target_binding}")
+				return
+
 			update_payload_obj = PrimitiveContentUpdatePayload(targetBinding=target_binding, content=content_to_send,
 															   updateType=update_type)
 			final_update_message_to_send = PrimitiveContentUpdateMessage(payload=update_payload_obj)
 
-			if self.ui_connection_manager.get_connection_count(stream_id) > 0:
+			if self.ui_connection_manager.get_connection_count(stream_id_for_ui_manager) > 0:
 				await self.ui_connection_manager.send_text(
-					final_update_message_to_send.model_dump_json(exclude_none=True), stream_id)
-				logger.debug(f"[{server_id}] Sent primitive_content_update to '{target_binding}'.")
+					final_update_message_to_send.model_dump_json(exclude_none=True, by_alias=True),
+					# by_alias for Pydantic field aliases
+					stream_id_for_ui_manager
+				)
+				logger.debug(
+					f"[{server_id}] Sent primitive_content_update to targetBinding '{target_binding}' for UI stream '{stream_id_for_ui_manager}'.")
 			else:
-				logger.debug(f"[{server_id}] No clients for {stream_id}, skipping send for '{target_binding}'.")
+				logger.debug(
+					f"[{server_id}] No UI clients for stream '{stream_id_for_ui_manager}', skipping send for targetBinding '{target_binding}'.")
+
 		except AttributeError as ae:
 			logger.error(
 				f"[{server_id}] AttributeError processing 'notifications/message': {ae}. Params: {type(params)}, {params!r}",
 				exc_info=True)
-		except ValidationError as ve:
-			logger.error(f"[{server_id}] ValidationError creating UI update: {ve}. Content: {content_to_send!r}",
-						 exc_info=True)
+		except ValidationError as ve:  # Assuming pydantic.ValidationError is imported
+			logger.error(
+				f"[{server_id}] ValidationError creating UI update for '{target_binding}': {ve}. Content: {content_to_send!r}",
+				exc_info=True)
 		except Exception as e:
 			logger.error(
-				f"[{server_id}] Unexpected error in 'notifications/message': {e}. Params: {type(params)}, {params!r}",
+				f"[{server_id}] Unexpected error in _handle_mcp_log_message for '{target_binding}': {e}. Params: {type(params)}, {params!r}",
 				exc_info=True)
 
 	async def _handle_streaming_update(self, server_id: str, params: Union[Dict, Any]):

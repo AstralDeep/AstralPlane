@@ -34,7 +34,7 @@ from app.utils.logging_config import configure_logging
 from app.utils.websocket_logger import WebSocketLogger
 
 # --- Logging Setup ---
-log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level_name = os.getenv("LOG_LEVEL", "DEBUG").upper()
 log_level = getattr(logging, log_level_name, logging.INFO)
 configure_logging(log_level=log_level, log_to_file=settings.DEBUG, log_dir="logs")
 logger = logging.getLogger(__name__)
@@ -502,7 +502,7 @@ if __name__ == "__main__":
 	import uvicorn
 
 	if not logger.hasHandlers():
-		logging.basicConfig(level=logging.INFO)
+		logging.basicConfig(level=logging.DEBUG)
 		logger = logging.getLogger(__name__)
 	logger.info(f"Starting Uvicorn server for {settings.APP_NAME} on {settings.HOST}:{settings.PORT}")
 	logger.info(f"Config: Debug={settings.DEBUG}, Reload={settings.DEBUG}, Env={settings.APP_ENV}")
