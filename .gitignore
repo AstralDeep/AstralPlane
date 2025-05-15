@@ -6,3 +6,4 @@ logs/*
 app/logs/*
 app/mcp_servers/logs/
 app/app.db
+app.db
