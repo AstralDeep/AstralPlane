@@ -39,7 +39,7 @@ We have included a few example implementations of the MCP servers in the `mcp_se
 
 To run one of the example servers (in this case, `mcp_servers/mcp_async_demo.py`, follow these steps:
 1. Make sure you have activated your virtual environment.
-2. Start the MCP server:
+2. Start one (or all) MCP server(s):
     ```python -m app.mcp_servers.mcp_async_demo```
 3. In a separate terminal, start the AstralPlane server:
     ```python -m app.main```
@@ -47,19 +47,153 @@ To run one of the example servers (in this case, `mcp_servers/mcp_async_demo.py`
 
 AstralPlane now supports dynamic loading of servers into the system. Once you have both of the above Python files running, you can interact with the REST API endpoints to add or remove an MCP server. See below.
 
-To add an MCP server:
-1. Make a POST request to the `http://localhost:8000/api/mcp-servers/` endpoint with the following JSON body:
-```json
-{
-  "name": "Async Demo Server (FastMCP)",
-  "url": "http://127.0.0.1:8124/sse",
+### 1. Create New MCP Server Configuration
+
+Registers a new MCP server configuration in the system.
+
+- **Endpoint:** `POST /`
+- **Success Status Code:** `201 CREATED`
+- **Response Model:** `MCPServerConfigResponse`
+- **Description:** Adds a new MCP server. The `id`, `name`, and `url` must be unique.
+
+**Request Body:**
+
+- **Content-Type:** `application/json`
+- **Schema:** `MCPServerConfigCreate`
+  - `id` (string, required): A unique client-provided identifier for the server.
+  - `name` (string, required): A unique descriptive name for the server.
+  - `url` (string, required): The unique URL endpoint for the server's SSE (Server-Sent Events) stream.
+  - `description` (string, optional): A more detailed description of the server.
+  - `is_active` (boolean, required): Whether the server configuration is currently active.
+
+**Example curl command:**
+
+```bash
+curl -X POST http://localhost:8000/api/mcp-servers/ \
+-H "Content-Type: application/json" \
+-d '{
+  "id": "mcp_async_demo",
+  "name": "Async Demo Server",
+  "url": "http://127.0.0.1:8123/sse",
   "description": "Demonstrates various asynchronous notifications.",
   "is_active": true
-}
+}'
 ```
 
-To remove an MCP server:
-1. TODO!!!!
+**Responses:**
+
+- `201 CREATED`: Server configuration created successfully. Returns the created server configuration.
+- `400 BAD REQUEST`:
+  - If an MCP Server with the provided id already exists.
+  - If an MCP Server with the provided name already exists.
+  - If an MCP Server with the provided url already exists.
+
+### 2. Get All MCP Server Configurations
+
+Retrieves a list of all MCP server configurations, with support for pagination and filtering by active status.
+
+- **Endpoint:** `GET /`
+- **Success Status Code:** `200 OK`
+- **Response Model:** `List[MCPServerConfigResponse]`
+- **Description:** Fetches MCP server configurations.
+
+**Query Parameters:**
+
+- `skip` (integer, optional, default: 0, min: 0): Number of records to skip for pagination.
+- `limit` (integer, optional, default: 100, min: 1, max: 500): Maximum number of records to return.
+- `only_active` (boolean, optional, default: None): Filter by active status. If true, returns only active servers. If false, returns only inactive servers. If not provided, returns all servers.
+
+**Example curl commands:**
+
+Get all servers (default skip 0, limit 100):
+```bash
+curl -X GET "http://localhost:8000/api/mcp-servers/"
+```
+
+Get first 5 servers:
+```bash
+curl -X GET "http://localhost:8000/api/mcp-servers/?skip=0&limit=5"
+```
+
+Get only active servers:
+```bash
+curl -X GET "http://localhost:8000/api/mcp-servers/?only_active=true"
+```
+
+Get inactive servers, skip 0, limit 10:
+```bash
+curl -X GET "http://localhost:8000/api/mcp-servers/?skip=0&limit=10&only_active=false"
+```
+
+**Responses:**
+
+- `200 OK`: Successfully retrieved the list of server configurations. Returns a list of server configurations (can be empty).
+
+### 3. Update MCP Server Configuration by ID
+
+Updates an existing MCP server configuration identified by its string ID.
+
+- **Endpoint:** `PATCH /id/{server_id}`
+- **Success Status Code:** `200 OK`
+- **Response Model:** `MCPServerConfigResponse`
+- **Description:** Modifies attributes of an existing MCP server.
+
+**Path Parameters:**
+
+- `server_id` (string, required): The string ID of the MCP server configuration to update.
+
+**Request Body:**
+
+- **Content-Type:** `application/json`
+- **Schema:** `MCPServerConfigUpdate` (All fields are optional. Only provided fields will be updated.)
+  - `name` (string, optional): The new name for the server. Must be unique if changed.
+  - `description` (string, optional): The new description for the server.
+  - `url` (string, optional): The new URL for the server. Must be unique if changed.
+  - `is_active` (boolean, optional): The new active status for the server.
+
+**Example curl command:**
+```bash
+curl -X PATCH http://localhost:8000/api/mcp-servers/id/mcp_async_demo \
+-H "Content-Type: application/json" \
+-d '{
+  "name": "Async Demo Server (Updated Name)",
+  "description": "This server has an updated description and is now inactive.",
+  "url": "http://127.0.0.1:8123/sse",
+  "is_active": false
+}'
+```
+
+**Responses:**
+
+- `200 OK`: Server configuration updated successfully. Returns the updated server configuration.
+- `404 NOT FOUND`: If no MCP Server configuration with the given server_id exists.
+- `409 CONFLICT`:
+  - If the new name provided already exists for another server.
+  - If the new url provided already exists for another server.
+- `500 INTERNAL SERVER ERROR`: If the update operation failed unexpectedly in the database.
+
+### 4. Delete MCP Server Configuration by ID
+
+Deletes an existing MCP server configuration identified by its string ID.
+
+- **Endpoint:** `DELETE /id/{server_id}`
+- **Success Status Code:** `200 OK`
+- **Response Model:** `Dict[str, str]` (A message confirming deletion)
+- **Description:** Removes an MCP server configuration from the system.
+
+**Example curl command:**
+```bash
+curl -X DELETE http://localhost:8000/api/mcp-servers/id/mcp_async_demo
+```
+
+**Responses:**
+
+- `200 OK`: Server configuration successfully deleted. Returns a confirmation message.
+  - Example: `{"message": "MCP Server 'Old Name' (ID: mcp_mock_chatviewbasic) successfully deleted and manager notified."}`
+  - If manager notification fails: `{"message": "MCP Server 'Old Name' (ID: mcp_mock_chatviewbasic) deleted from DB, but manager notification encountered an issue."}`
+- `404 NOT FOUND`: If no MCP Server configuration with the given server_id exists.
+- `500 INTERNAL SERVER ERROR`: If the deletion failed in the database.
+
 
 
 ## Configuration
