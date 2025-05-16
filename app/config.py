@@ -32,40 +32,41 @@ class Settings(BaseSettings):
 	ALGORITHM: str = "HS256"
 	ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 	WS_PING_INTERVAL: int = int(os.getenv("WS_PING_INTERVAL", "20"))
+	MCP_CALL_TOOL_TIMEOUT: int = 300  # 5 minutes
 
 	# --- MCP Server Configuration ---
-	MCP_SERVERS: List[Dict[str, Any]] = [
-
-		{
-			"id": "mcp_mock_chatviewbasic",  # Keep existing example if needed
-			"name": "Mock MCP Chat Server",
-			"description": "Connects to the standalone mcp_server.py via SSE.",
-			"transport": "sse",
-			"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8123/sse")
-		},
-		{
-			"id": "mcp_async_demo",
-			"name": "Async Demo Server (FastMCP)",
-			"description": "Demonstrates various asynchronous notifications.",
-			"transport": "sse",
-			"url": os.getenv("MCP_ASYNC_DEMO_URL", "http://127.0.0.1:8124/sse")  # Use port 8124
-		},
-		{
-			"id": "mcp_mock_chatviewreasoning",  # Keep existing example if needed
-			"name": "Mock MCP Reasoning Chat Server",
-			"description": "Connects to the standalone mcp_server.py via SSE.",
-			"transport": "sse",
-			"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8125/sse")
-		},
-		{
-			"id": "mcp_chatviewreasoning",  # Keep existing example if needed
-			"name": "MCP Reasoning Chat Server",
-			"description": "Connects to the standalone mcp_server.py via SSE.",
-			"transport": "sse",
-			"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8126/sse")
-		}
-
-	]
+	# MCP_SERVERS: List[Dict[str, Any]] = [
+	#
+	# 	{
+	# 		"id": "mcp_mock_chatviewbasic",  # Keep existing example if needed
+	# 		"name": "Mock MCP Chat Server",
+	# 		"description": "Connects to the standalone mcp_server.py via SSE.",
+	# 		"transport": "sse",
+	# 		"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8123/sse")
+	# 	},
+	# 	{
+	# 		"id": "mcp_async_demo",
+	# 		"name": "Async Demo Server (FastMCP)",
+	# 		"description": "Demonstrates various asynchronous notifications.",
+	# 		"transport": "sse",
+	# 		"url": os.getenv("MCP_ASYNC_DEMO_URL", "http://127.0.0.1:8124/sse")  # Use port 8124
+	# 	},
+	# 	{
+	# 		"id": "mcp_mock_chatviewreasoning",  # Keep existing example if needed
+	# 		"name": "Mock MCP Reasoning Chat Server",
+	# 		"description": "Connects to the standalone mcp_server.py via SSE.",
+	# 		"transport": "sse",
+	# 		"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8125/sse")
+	# 	},
+	# 	{
+	# 		"id": "mcp_chatviewreasoning",  # Keep existing example if needed
+	# 		"name": "MCP Reasoning Chat Server",
+	# 		"description": "Connects to the standalone mcp_server.py via SSE.",
+	# 		"transport": "sse",
+	# 		"url": os.getenv("MCP_SSE_URL", "http://127.0.0.1:8126/sse")
+	# 	}
+	#
+	# ]
 
 	# ... (Keep existing Database, Dataplane, Testing, Admin settings) ...
 	DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
@@ -81,9 +82,6 @@ class Settings(BaseSettings):
 
 # Create settings instance
 settings = Settings()
-
-# Log the MCP servers being used
-logger.info(f"Configured External MCP Servers: {settings.MCP_SERVERS}")
 
 # Validate essential settings
 if not settings.SECRET_KEY or settings.SECRET_KEY == "supersecretkey":
