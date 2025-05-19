@@ -7,3 +7,5 @@ app/logs/*
 app/mcp_servers/logs/
 app/app.db
 app.db
+app/mcp_servers/postgres/.env_pg
+/app/mcp_servers/postgres/logs/

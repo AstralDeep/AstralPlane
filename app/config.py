@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
-# Load environment variables from .env file
+# Load environment variables from .env_pg file
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
 	"""Application settings"""
 
-	# ... (Keep existing settings like APP_NAME, DEBUG, HOST, PORT, CORS, JWT, etc.) ...
 	APP_NAME: str = "AI Agent Interface Backend"
 	APP_DESCRIPTION: str = "AI Agents using MCP!"
 	APP_VERSION: str = "0.0.1"
@@ -34,7 +33,29 @@ class Settings(BaseSettings):
 	WS_PING_INTERVAL: int = int(os.getenv("WS_PING_INTERVAL", "20"))
 	MCP_CALL_TOOL_TIMEOUT: int = 300  # 5 minutes
 
-	# --- MCP Server Configuration ---
+
+	DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+	DATABASE_ECHO: bool = os.getenv("DATABASE_ECHO", "False").lower() in ("true", "1", "t")
+	DATAPLANE_CONNECTION_TIMEOUT: int = int(os.getenv("DATAPLANE_CONNECTION_TIMEOUT", "30"))
+	TESTING_MODE: bool = os.getenv("TESTING_MODE", "False").lower() in ("true", "1", "t")
+	ADMIN_PASSWORD: Optional[str] = os.getenv("ADMIN_PASSWORD", None if not DEBUG else "admin")
+
+	class Config:
+		env_file = ".env"
+		case_sensitive = True
+
+
+# Create settings instance
+settings = Settings()
+
+# Validate essential settings
+if not settings.SECRET_KEY or settings.SECRET_KEY == "supersecretkey":
+	logger.warning("Security warning: SECRET_KEY is not set or is using the default value.")
+
+
+
+
+# --- MCP Server Configuration ---
 	# MCP_SERVERS: List[Dict[str, Any]] = [
 	#
 	# 	{
@@ -67,22 +88,3 @@ class Settings(BaseSettings):
 	# 	}
 	#
 	# ]
-
-	# ... (Keep existing Database, Dataplane, Testing, Admin settings) ...
-	DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
-	DATABASE_ECHO: bool = os.getenv("DATABASE_ECHO", "False").lower() in ("true", "1", "t")
-	DATAPLANE_CONNECTION_TIMEOUT: int = int(os.getenv("DATAPLANE_CONNECTION_TIMEOUT", "30"))
-	TESTING_MODE: bool = os.getenv("TESTING_MODE", "False").lower() in ("true", "1", "t")
-	ADMIN_PASSWORD: Optional[str] = os.getenv("ADMIN_PASSWORD", None if not DEBUG else "admin")
-
-	class Config:
-		env_file = ".env"
-		case_sensitive = True
-
-
-# Create settings instance
-settings = Settings()
-
-# Validate essential settings
-if not settings.SECRET_KEY or settings.SECRET_KEY == "supersecretkey":
-	logger.warning("Security warning: SECRET_KEY is not set or is using the default value.")
