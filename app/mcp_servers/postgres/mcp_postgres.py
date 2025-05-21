@@ -19,14 +19,11 @@ from mcp.shared.context import RequestContext
 
 # Assuming these are part of your project structure
 # If these are not found, the script uses a basic logging fallback.
-try:
-	from app.config import settings
-	from app.utils.logging_config import configure_logging
+from app.config import settings
+from app.utils.logging_config import configure_logging
 
-	custom_config_loaded = True
-except ImportError:
-	custom_config_loaded = False
-	settings = None  # Placeholder
+custom_config_loaded = True
+
 
 # Load environment variables from .env_pg file
 load_dotenv(".env_pg")  # UPDATED TO .env_pg as per your last file
@@ -40,7 +37,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 
 # MCP Server configuration from .env_pg
-SERVER_NAME = os.getenv("MCP_SERVER_NAME", "mcp_postgres_llm")
+SERVER_NAME = os.getenv("MCP_SERVER_NAME", "mcp_postgres")
 HOST = os.getenv("MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("MCP_PORT", "8127"))
 
@@ -151,7 +148,7 @@ DATABASE_SCHEMA_DESCRIPTION = """
 --   participant_uuid (uuid, NOT NULL, FOREIGN KEY references public.participants.participant_uuid): Identifier for the participant.
 --   ts (timestamp without time zone, NOT NULL): Timestamp of when the message was recorded.
 --   message_direction (character(8), NOT NULL): Direction of the message (e.g., incoming, outgoing).
---   message_json (jsonb, NOT NULL): Content of the message in JSON format.
+--   message_json (jsonb, NOT NULL): Content of the message in JSON format (e.g. {"Body": "Hi Sam, it's time to check you blood glucose level. Please interact with you blood glucose device to start sending readings."}).
 --   study (character varying(255), NOT NULL): Identifier for the study.
 
 -- Table: public.metrics
@@ -165,7 +162,7 @@ DATABASE_SCHEMA_DESCRIPTION = """
 -- Columns:
 --   participant_uuid (uuid, PRIMARY KEY, NOT NULL): Unique identifier for the participant.
 --   study (character varying(255), NOT NULL): Identifier for the study.
---   participant_json (jsonb, NOT NULL): Details of the participant in JSON format.
+--   participant_json (jsonb, NOT NULL): Details of the participant in JSON format (e.g. {"email": "sear243@uky.edu","group": ["ReadGlucose","Survey"],"devEUI": "","number": "+18596844789","last_name": "Armstrong","time_zone": "America/Louisville","first_name": "Sam"}).
 
 -- Table: public.protocol_types
 -- Columns:
@@ -193,7 +190,7 @@ DATABASE_SCHEMA_DESCRIPTION = """
 -- Columns:
 --   participant_uuid (uuid, NOT NULL): Identifier for the participant.
 --   ts (timestamp without time zone, NOT NULL): Timestamp of the log entry.
---   log_json (jsonb, NOT NULL): Content of the log in JSON format.
+--   log_json (jsonb, NOT NULL): Content of the log in JSON format (e.g. {"state": "waitForNoon","protocol": "Survey","restored": "true"}).
 
 -- Table: public.surveys
 -- Columns:
@@ -279,7 +276,7 @@ def construct_db_interaction_ui_layout() -> dict:
 	submit_button_id = "db-query-submit"
 	result_view_id = "db-query-result"
 	action_id = "execute_db_query"
-	result_binding = f"mcp_stream:{SERVER_NAME}:{result_view_id}_result"
+	result_binding = f"mcp_stream:{SERVER_NAME}:{action_id}_result"
 	llm_model_display = LLM_MODEL if LLM_MODEL else "[default]"
 
 	return {
