@@ -15,7 +15,7 @@ from app.config import settings  # Assuming you have this from your project stru
 from app.utils.logging_config import configure_logging  # Assuming you have this
 
 # --- Configuration ---
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 8124  # This is for the MCP Async Demo server itself
 SERVER_NAME = "mcp_async_demo"
 

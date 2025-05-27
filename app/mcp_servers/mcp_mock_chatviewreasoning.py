@@ -19,7 +19,7 @@ from app.config import settings
 from app.utils.logging_config import configure_logging
 
 # --- Configuration ---
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 8125
 SERVER_NAME = "mcp_mock_chatviewreasoning"
 

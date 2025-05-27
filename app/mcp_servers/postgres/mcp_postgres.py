@@ -38,7 +38,7 @@ DB_NAME = os.getenv("DB_NAME")
 
 # MCP Server configuration from .env_pg
 SERVER_NAME = os.getenv("MCP_SERVER_NAME", "mcp_postgres")
-HOST = os.getenv("MCP_HOST", "127.0.0.1")
+HOST = os.getenv("MCP_HOST", "0.0.0.0")
 PORT = int(os.getenv("MCP_PORT", "8127"))
 
 # LLM Configuration from .env_pg

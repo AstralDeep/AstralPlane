@@ -33,7 +33,7 @@ from app.config import settings
 from app.utils.logging_config import configure_logging
 
 # --- Configuration ---
-HOST = os.getenv("MCP_REASONING_HOST", "127.0.0.1")
+HOST = os.getenv("MCP_REASONING_HOST", "0.0.0.0")
 PORT = int(os.getenv("MCP_REASONING_PORT", "8126"))
 SERVER_NAME = "mcp_chatviewreasoning"
 LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://10.33.31.31:30000/v1")

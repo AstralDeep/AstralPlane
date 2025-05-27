@@ -30,7 +30,7 @@ import mcp.types as types
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.context import RequestContext
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 8123
 
 # SERVER_ID_FOR_BINDING should be this server's unique string ID in your database
