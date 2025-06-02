@@ -11,7 +11,6 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from starlette import status
 from starlette.websockets import WebSocketState
 
@@ -22,11 +21,10 @@ from app.config import settings
 from app.lifecycle.lifespan import lifespan
 # --- Model Imports ---
 from app.models.schemas import (
-	UIElement, InitialUIStateMessage, InitialUIStatePayload,
+	InitialUIStateMessage, InitialUIStatePayload,
 	PrimitiveContentUpdateMessage, PrimitiveContentUpdatePayload,
 	ToolSchemaInfo, ToolSchemasPayload, ToolSchemasMessage
 )
-from app.services.auth_service import authenticate_websocket
 from app.services.connection_manager import ConnectionManager, get_connection_manager
 from app.services.mcp_connection_manager import MCPConnectionManager, get_mcp_connection_manager, \
 	get_mcp_connection_manager_ws
