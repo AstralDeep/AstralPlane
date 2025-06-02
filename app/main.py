@@ -156,7 +156,7 @@ async def proxy_file_upload(
 
 	# Assumes 'upload_path' (e.g., '/upload-audio') is part of the server's config
 	mcp_url = details.get("url")
-	upload_path = "/upload-audio"
+	upload_path = "/api/upload-file"
 
 	if not mcp_url:
 		raise HTTPException(
@@ -164,7 +164,7 @@ async def proxy_file_upload(
 			detail=f"MCP server '{server_id}' not found or is not configured for file uploads."
 		)
 
-	mcp_upload_url = f"{mcp_url.rstrip('/')}{upload_path}"
+	mcp_upload_url = f"{mcp_url.rstrip('/sse')}{upload_path}"
 	logger.info(f"Proxying file '{file.filename}' to generic endpoint at {mcp_upload_url}")
 
 	async with httpx.AsyncClient() as client:
