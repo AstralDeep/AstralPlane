@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, List
 
 import httpx
 from fastapi import (
@@ -149,12 +149,11 @@ async def proxy_file_upload(
 		mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager)
 ):
 	"""
-	Receives a file from the frontend and proxies it to the appropriate MCP server's
-	designated upload endpoint. This endpoint is generic for all file types.
-	"""
+    Receives a file from the frontend and proxies it to the appropriate MCP server's
+    designated upload endpoint. This endpoint is generic for all file types.
+    """
 	details = await mcp_conn_manager.get_connection_details(server_id)
 
-	# Assumes 'upload_path' (e.g., '/upload-audio') is part of the server's config
 	mcp_url = details.get("url")
 	upload_path = "/api/upload-file"
 
@@ -169,7 +168,6 @@ async def proxy_file_upload(
 
 	async with httpx.AsyncClient() as client:
 		try:
-			# Use the generic 'file' key for all forwarded uploads
 			forwarded_files = {'file': (file.filename, await file.read(), file.content_type)}
 			response = await client.post(mcp_upload_url, files=forwarded_files, timeout=60.0)
 			response.raise_for_status()
@@ -212,24 +210,19 @@ async def websocket_endpoint(
 	mcp_server_db_id: Optional[str] = None
 	session_established_with_mcp = False
 	user_id = "<unauthenticated>"
-	is_authenticated = False
 	disconnect_reason = "Handler normal exit"
 
 	try:
 		logger.debug(f"[WS/{ws_stream_id}] WebSocket authentication SKIPPED for development.")
-		user_data = {"id": user_id, "username": "dev_user"}
-		auth_error_message = None
-		logger.info(f"[WS/{ws_stream_id}] WebSocket Auth SKIPPED. Proceeding as user '{user_id}'.")
+		user_id = "dev_user"
 
 		if not stream_path_param.startswith("mcp:"):
-			logger.error(f"[WS/{ws_stream_id}] Invalid stream path format.")
 			disconnect_reason = "Invalid target stream format"
 			await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
 			return
 
 		mcp_server_db_id = stream_path_param.split(":", 1)[1]
 		if not mcp_server_db_id:
-			logger.error(f"[WS/{ws_stream_id}] Missing MCP server database ID in path.")
 			disconnect_reason = "Missing or invalid target server ID"
 			await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
 			return
@@ -246,24 +239,15 @@ async def websocket_endpoint(
 			handshake_data = json.loads(first_message_text)
 			if handshake_data.get("type") == "register_capabilities":
 				supported_primitives = handshake_data.get("payload", {}).get("supported_primitives", [])
-				if isinstance(supported_primitives, list):
-					connection_manager.store_supported_primitives(websocket, supported_primitives)
-					logger.info(f"[WS/{ws_stream_id}] Handshake OK. Client capabilities: {supported_primitives}")
-				else:
-					disconnect_reason = "Invalid capabilities format (not a list)"
-					raise WebSocketDisconnect(code=status.WS_1003_UNSUPPORTED_DATA, reason=disconnect_reason)
+				connection_manager.store_supported_primitives(websocket, supported_primitives)
+				logger.info(f"[WS/{ws_stream_id}] Handshake OK. Client capabilities: {supported_primitives}")
 			else:
-				disconnect_reason = "Protocol error: Expected 'register_capabilities' message"
-				raise WebSocketDisconnect(code=status.WS_1002_PROTOCOL_ERROR, reason=disconnect_reason)
+				raise WebSocketDisconnect(code=status.WS_1002_PROTOCOL_ERROR,
+										  reason="Protocol error: Expected 'register_capabilities' message")
 		except asyncio.TimeoutError:
-			disconnect_reason = "Handshake timeout"
-			raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason=disconnect_reason)
+			raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="Handshake timeout")
 		except json.JSONDecodeError:
-			disconnect_reason = "Invalid handshake JSON"
-			raise WebSocketDisconnect(code=status.WS_1003_UNSUPPORTED_DATA, reason=disconnect_reason)
-		except WebSocketDisconnect as wsd:
-			disconnect_reason = wsd.reason
-			raise
+			raise WebSocketDisconnect(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid handshake JSON")
 
 		logger.info(f"[WS/{ws_stream_id}] Attempting to get MCP session for server DB ID '{mcp_server_db_id}'...")
 		mcp_client_session, mcp_session_error = await mcp_conn_manager.get_or_create_session(mcp_server_db_id)
@@ -274,57 +258,43 @@ async def websocket_endpoint(
 			server_name_for_error = mcp_server_db_id
 			try:
 				server_details_for_error = await mcp_conn_manager.get_connection_details(mcp_server_db_id)
-				if server_details_for_error:
-					server_name_for_error = server_details_for_error.get("name", mcp_server_db_id)
+				if server_details_for_error: server_name_for_error = server_details_for_error.get("name",
+																								  mcp_server_db_id)
 				await websocket.send_text(json.dumps({"type": "error", "payload": {
-					"message": f"Target service '{server_name_for_error}' (ID: {mcp_server_db_id}) not available: {mcp_session_error}"
-				}}))
+					"message": f"Target service '{server_name_for_error}' not available: {mcp_session_error}"}}))
 			except Exception as send_err:
 				logger.error(f"[WS/{ws_stream_id}] Error sending MCP session acquisition error to client: {send_err}")
-			disconnect_reason = f"MCP Session Error: {mcp_session_error}"
-			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR, reason=disconnect_reason)
+			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR,
+									  reason=f"MCP Session Error: {mcp_session_error}")
 
 		session_established_with_mcp = True
 		logger.info(f"[WS/{ws_stream_id}] Successfully obtained MCP session for server DB ID '{mcp_server_db_id}'.")
 
 		logger.info(f"[WS/{ws_stream_id}] Generating initial UI state and sending tool schemas...")
 		try:
-			root_element: Optional[UIElement] = await views_service.get_project_ui_hierarchy(
-				websocket=websocket, stream_id=ws_stream_id, mcp_session=mcp_client_session
-			)
+			root_element = await views_service.get_project_ui_hierarchy(websocket=websocket, stream_id=ws_stream_id,
+																		mcp_session=mcp_client_session)
 			if root_element:
-				initial_state_message = InitialUIStateMessage(payload=InitialUIStatePayload(rootElement=root_element))
-				await websocket.send_text(initial_state_message.model_dump_json(exclude_none=True))
+				await websocket.send_text(
+					InitialUIStateMessage(payload=InitialUIStatePayload(rootElement=root_element)).model_dump_json(
+						exclude_none=True))
 				logger.info(f"[WS/{ws_stream_id}] Sent initial UI state to client.")
 
 				discovered_tools = await mcp_conn_manager.get_discovered_tools(mcp_server_db_id)
-				if discovered_tools:
-					tool_schemas_for_payload: Dict[str, ToolSchemaInfo] = {}
-					for tool_name, tool_data in discovered_tools.items():
-						tool_schemas_for_payload[tool_name] = ToolSchemaInfo(
-							name=tool_data.get('name', tool_name),
-							description=tool_data.get('description'),
-							input_schema=tool_data.get('input_schema'),
-							output_schema=tool_data.get('output_schema')
-						)
-					if tool_schemas_for_payload:
-						schemas_payload = ToolSchemasPayload(server_id=mcp_server_db_id, tools=tool_schemas_for_payload)
-						schemas_message = ToolSchemasMessage(payload=schemas_payload)
-						await websocket.send_text(schemas_message.model_dump_json(exclude_none=True, by_alias=True))
-						logger.info(f"[{ws_stream_id}] Successfully sent {len(tool_schemas_for_payload)} tool schemas.")
-				else:
-					logger.warning(f"[{ws_stream_id}] No discovered tools for '{mcp_server_db_id}'.")
-					schemas_payload = ToolSchemasPayload(server_id=mcp_server_db_id, tools={})
-					await websocket.send_text(
-						ToolSchemasMessage(payload=schemas_payload).model_dump_json(exclude_none=True, by_alias=True))
+				tool_schemas_for_payload = {
+					tool_name: ToolSchemaInfo(**tool_data) for tool_name, tool_data in discovered_tools.items()
+				} if discovered_tools else {}
+				await websocket.send_text(ToolSchemasMessage(payload=ToolSchemasPayload(server_id=mcp_server_db_id,
+																						tools=tool_schemas_for_payload)).model_dump_json(
+					exclude_none=True, by_alias=True))
+				logger.info(f"[{ws_stream_id}] Successfully sent {len(tool_schemas_for_payload)} tool schemas.")
 			else:
 				logger.warning(f"[{ws_stream_id}] No UI hierarchy generated for '{mcp_server_db_id}'.")
 				await websocket.send_text(
 					json.dumps({"type": "status", "payload": {"message": "UI could not be generated."}}))
 		except Exception as ui_gen_err:
-			logger.error(f"[WS/{ws_stream_id}] Error during UI generation/schema sending: {ui_gen_err}", exc_info=True)
-			disconnect_reason = "UI Generation/Schema Error"
-			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR, reason=disconnect_reason)
+			raise WebSocketDisconnect(code=status.WS_1011_INTERNAL_ERROR,
+									  reason=f"UI Generation/Schema Error: {ui_gen_err}")
 
 		logger.info(f"[WS/{ws_stream_id}] Entering main message loop for user '{user_id}'...")
 		while True:
@@ -334,19 +304,46 @@ async def websocket_endpoint(
 				parsed_message_data = json.loads(message_text)
 				message_type = parsed_message_data.get("type")
 
+				### START OF FIX ###
 				if message_type == "ui_action":
 					action_id = "<parsing_failed>"
 					try:
 						payload = parsed_message_data.get("payload", {})
 						action_id = payload.get("actionId")
-						arguments_to_pass = payload.get("arguments", {})
+						arguments_list_from_ui: List[Any] = payload.get("arguments", [])
+
 						if not action_id:
 							logger.warning(f"[WS/{ws_stream_id}] 'ui_action' received with no actionId.")
 							continue
 
+						logger.debug(
+							f"[WS/{ws_stream_id}] Translating args for tool '{action_id}'. Received list: {arguments_list_from_ui}")
+
+						discovered_tools = await mcp_conn_manager.get_discovered_tools(mcp_server_db_id)
+						tool_schema = discovered_tools.get(action_id)
+
+						arguments_to_pass: Dict[str, Any] = {}
+
+						if not tool_schema:
+							logger.error(
+								f"[WS/{ws_stream_id}] Cannot find schema for tool '{action_id}'. Cannot translate arguments.")
+							# Fallback: Send an empty dictionary, which will likely cause a validation error on the MCP server,
+							# but is safer than guessing. The MCP server will report the missing arguments.
+							arguments_to_pass = {}
+						elif 'input_schema' in tool_schema and tool_schema['input_schema'] and 'properties' in \
+								tool_schema['input_schema']:
+							param_names = list(tool_schema['input_schema']['properties'].keys())
+							arguments_to_pass = dict(zip(param_names, arguments_list_from_ui))
+							logger.info(f"[WS/{ws_stream_id}] Translated args for '{action_id}': {arguments_to_pass}")
+						else:
+							logger.info(
+								f"[WS/{ws_stream_id}] Tool '{action_id}' has no input properties. Passing empty dict.")
+							arguments_to_pass = {}
+
 						mcp_payload_content, mcp_error_obj = await mcp_conn_manager.execute_tool(
 							server_id=mcp_server_db_id, tool_name=action_id,
-							params=arguments_to_pass, ws_stream_id=ws_stream_id,
+							params=arguments_to_pass,  # This is now a dictionary
+							ws_stream_id=ws_stream_id,
 						)
 						update_binding = f"mcp_stream:{mcp_server_db_id}:{action_id}_result"
 						if mcp_error_obj:
@@ -356,15 +353,15 @@ async def websocket_endpoint(
 								error_text_for_ui = mcp_error_obj
 							elif hasattr(mcp_error_obj, 'message'):
 								error_text_for_ui = mcp_error_obj.message
-							error_ui_content = {"role": "error", "text": error_text_for_ui}
+							error_ui_content = {"role": "error", "text": str(error_text_for_ui)}
 							error_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
 																		  content=error_ui_content, updateType="append")
 							await websocket.send_text(
 								PrimitiveContentUpdateMessage(payload=error_payload).model_dump_json(exclude_none=True))
 						else:
-							# --- MODIFIED: Smart result parsing ---
-							result_role_from_tool = "assistant"
-							actual_text_from_tool = f"Tool '{action_id}' returned no response."
+							### START OF FIX ###
+							final_content_for_ui: Any = f"Tool '{action_id}' returned no response."
+							update_type = "append"  # Default update type
 
 							if mcp_payload_content and isinstance(mcp_payload_content, list) and len(
 									mcp_payload_content) > 0:
@@ -372,26 +369,37 @@ async def websocket_endpoint(
 								if hasattr(first_item, 'text') and hasattr(first_item, 'type') and getattr(first_item,
 																										   'type') == 'text':
 									tool_response_text = getattr(first_item, 'text', '{}')
-									try:
-										# Try to parse the text as JSON
-										parsed_data = json.loads(tool_response_text)
-										# Use 'display_text' if available, otherwise fall back to the raw text
-										actual_text_from_tool = parsed_data.get('display_text', tool_response_text)
-									except json.JSONDecodeError:
-										# If it's not JSON, just use the text as-is
-										actual_text_from_tool = tool_response_text
-							# --- END OF MODIFICATION ---
 
-							result_ui_content = {"role": result_role_from_tool, "text": actual_text_from_tool}
-							result_payload = PrimitiveContentUpdatePayload(targetBinding=update_binding,
-																		   content=result_ui_content,
-																		   updateType="append")
+									if action_id == 'transcribe_audio_action':
+										# For transcription, the content is the raw JSON string itself.
+										# This is what the other tools expect to receive as input.
+										final_content_for_ui = tool_response_text
+										# We replace the content of the TextView, not append to it.
+										update_type = "replace"
+									else:
+										# For other actions like Q&A, parse the display text for the UI
+										# and wrap it in a chat-style message dictionary for appending.
+										try:
+											parsed_data = json.loads(tool_response_text)
+											display_text = parsed_data.get('display_text', tool_response_text)
+										except (json.JSONDecodeError, TypeError):
+											display_text = tool_response_text
+										final_content_for_ui = {"role": "assistant", "text": display_text}
+										update_type = "append"
+
+							# Construct and send the correct update message
+							result_payload = PrimitiveContentUpdatePayload(
+								targetBinding=update_binding,
+								content=final_content_for_ui,
+								updateType=update_type
+							)
 							await websocket.send_text(
-								PrimitiveContentUpdateMessage(payload=result_payload).model_dump_json(
-									exclude_none=True))
+								PrimitiveContentUpdateMessage(payload=result_payload).model_dump_json(exclude_none=True)
+							)
 					except Exception as action_err:
 						logger.error(f"[WS/{ws_stream_id}] Error processing ui_action '{action_id}': {action_err}",
 									 exc_info=True)
+				### END OF FIX ###
 
 				elif message_type == 'ping':
 					await websocket.send_text(json.dumps({"type": "pong"}))
