@@ -23,9 +23,12 @@ class Settings(BaseSettings):
 	PORT: int = int(os.getenv("PORT", "8000"))
 	CORS_ORIGINS: List[str] = [
 		"http://localhost:3000",
+		"http://localhost:8001",
 		"http://localhost:5173",
 		"http://127.0.0.1:3000",
+		"http://127.0.0.1:8001",
 		"http://127.0.0.1:5173",
+		"https://sandbox.ai.uky.edu",
 	]
 	SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkey")
 	ALGORITHM: str = "HS256"
