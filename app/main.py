@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
 
 import httpx
 from fastapi import (
@@ -63,6 +64,10 @@ app.include_router(mcp_server_management.router, prefix="/api/mcp-servers", tags
 if hasattr(websockets, 'router'):
 	app.include_router(websockets.router, prefix="/api/ws", tags=["WebSocket Utils"])
 
+
+class ToolExecutionRequest(BaseModel):
+	tool_name: str
+	params: Dict[str, Any]
 
 # --- Exception Handlers ---
 @app.exception_handler(HTTPException)
@@ -147,9 +152,9 @@ async def proxy_file_upload(
 		mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager)
 ):
 	"""
-    Receives a file from the frontend and proxies it to the appropriate MCP server's
-    designated upload endpoint. This endpoint is generic for all file types.
-    """
+	Receives a file from the frontend and proxies it to the appropriate MCP server's
+	designated upload endpoint. This endpoint is generic for all file types.
+	"""
 	details = await mcp_conn_manager.get_connection_details(server_id)
 
 	mcp_url = details.get("url")
@@ -176,6 +181,103 @@ async def proxy_file_upload(
 		except httpx.HTTPStatusError as exc:
 			logger.error(f"The target service at {mcp_upload_url} returned an error: {exc.response.status_code}")
 			return JSONResponse(content=exc.response.json(), status_code=exc.response.status_code)
+
+
+@app.get("/api/mcp-servers/{server_id}", tags=["MCP Server Management"])
+async def get_mcp_server_details(
+    server_id: str,
+    mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager)
+):
+    """
+    Retrieves the current state and details of a specific MCP server,
+    including its list of available tools with full schemas.
+    """
+    logger.info(f"[HTTP-GET] Received request for details of server '{server_id}'")
+
+    # Get the basic details (status, url, etc.)
+    details = await mcp_conn_manager.get_connection_details(server_id)
+
+    if not details:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"MCP Server with ID '{server_id}' not found or registered."
+        )
+
+    # --- START OF FIX ---
+    # Explicitly fetch the full tool schemas, which have the descriptions.
+    # The WebSocket endpoint code shows that `get_discovered_tools` returns a dictionary.
+    discovered_tools_dict = await mcp_conn_manager.get_discovered_tools(server_id)
+
+    # The orchestrator expects a LIST of tool objects. Let's convert the dictionary.
+    if discovered_tools_dict:
+        tools_as_list = []
+        for name, schema in discovered_tools_dict.items():
+            # Create a new dictionary for each tool that includes its name
+            tool_dict = {"name": name}
+            tool_dict.update(schema) # Add the rest of the schema (description, etc.)
+            tools_as_list.append(tool_dict)
+
+        # Replace the simplified list in the details with our new detailed list.
+        details["tools_available"] = tools_as_list
+    else:
+        # Ensure it's an empty list if for some reason no tools were found
+        details["tools_available"] = []
+    # --- END OF FIX ---
+
+    return details
+
+
+@app.post("/api/mcp-servers/{server_id}/execute", tags=["MCP Server Management"])
+async def execute_mcp_tool(
+	server_id: str,
+	request: ToolExecutionRequest,
+	mcp_conn_manager: MCPConnectionManager = Depends(get_mcp_connection_manager)
+):
+	"""
+	Allows an external service (like an orchestrator) to execute a tool on a
+	specific MCP server via a simple HTTP request.
+	"""
+	logger.info(f"[HTTP-EXEC] Received request to run tool '{request.tool_name}' on server '{server_id}'")
+	logger.debug(f"[HTTP-EXEC] Parameters: {request.params}")
+
+	# Check if the server is even connected
+	server_details = await mcp_conn_manager.get_connection_details(server_id)
+	if not server_details or server_details.get("status").lower() != "connected":
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"MCP Server '{server_id}' is not available or connected."
+		)
+
+	try:
+		# Use the existing tool execution logic from the connection manager
+		# We provide a simple string for the stream_id as it's not a real websocket stream
+		mcp_payload_content, mcp_error_obj = await mcp_conn_manager.execute_tool(
+			server_id=server_id,
+			tool_name=request.tool_name,
+			params=request.params,
+			ws_stream_id=f"http-execution-for-{server_id}"
+		)
+
+		if mcp_error_obj:
+			# If the tool execution itself resulted in a known error
+			logger.error(f"[HTTP-EXEC] Tool '{request.tool_name}' failed: {mcp_error_obj}")
+			raise HTTPException(
+				status_code=status.HTTP_400_BAD_REQUEST,
+				detail=str(mcp_error_obj)
+			)
+
+		logger.info(f"[HTTP-EXEC] Tool '{request.tool_name}' executed successfully.")
+		return mcp_payload_content
+
+	except Exception as e:
+		logger.error(
+			f"[HTTP-EXEC] An unexpected error occurred while trying to execute tool '{request.tool_name}' on '{server_id}': {e}",
+			exc_info=True
+		)
+		raise HTTPException(
+			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			detail="An internal error occurred while executing the tool."
+		)
 
 
 # --- WebSocket Endpoint Definition ---
