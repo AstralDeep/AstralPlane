@@ -8,6 +8,7 @@ from contextlib import AsyncExitStack
 from datetime import datetime
 from functools import partial
 from typing import Dict, Any, Optional, List, Tuple, Union, Set
+import httpx
 
 import anyio
 import mcp.types as mcp_types
@@ -59,11 +60,11 @@ class MCPConnectionManager:
 		self.ui_connection_manager = connection_manager
 
 		self.sse_connections: Dict[str, Dict[str, Any]] = {}
-		# Initialize the server_configs attribute as an empty dictionary
-		self.server_configs: Dict[str, Dict[str, Any]] = {}  # <--- MODIFIED
+		self.server_configs: Dict[str, Dict[str, Any]] = {}
 		self._connection_lock = asyncio.Lock()
 
 		self._reconnect_loop_task: Optional[asyncio.Task] = None
+		self._health_check_loop_task: Optional[asyncio.Task] = None
 		self._stop_reconnect_event = asyncio.Event()
 
 		logger.info("MCPConnectionManager initialized (empty, awaiting DB configurations).")
@@ -83,6 +84,7 @@ class MCPConnectionManager:
 			"last_successful_connect_time": None,  # Renamed for clarity (timestamp)
 			"retry_count": 0,
 			"current_retry_delay_seconds": INITIAL_RETRY_DELAY_SECONDS,
+			"last_known_startup_id": None,
 			"next_retry_time": None,  # Timestamp for next attempt
 		}
 
@@ -606,24 +608,40 @@ class MCPConnectionManager:
 	async def start_background_tasks(self):
 		if self._reconnect_loop_task and not self._reconnect_loop_task.done():
 			logger.info("Reconnect loop already running.")
-			return
-		self._stop_reconnect_event.clear()
-		self._reconnect_loop_task = asyncio.create_task(self._reconnection_loop())
-		logger.info("MCPConnectionManager background reconnect task started.")
+		else:
+			self._stop_reconnect_event.clear()
+			self._reconnect_loop_task = asyncio.create_task(self._reconnection_loop())
+			logger.info("MCPConnectionManager background reconnect task started.")
+
+		# Add this block to start the health check loop
+		if self._health_check_loop_task and not self._health_check_loop_task.done():
+			logger.info("Health check loop already running.")
+		else:
+			self._stop_reconnect_event.clear()  # Ensure it's clear
+			self._health_check_loop_task = asyncio.create_task(self._health_check_loop())
+			logger.info("MCPConnectionManager background health check task started.")
 
 	async def stop_background_tasks(self):
-		if self._reconnect_loop_task and not self._reconnect_loop_task.done():
-			logger.info("Stopping MCPConnectionManager background reconnect task...")
-			self_stop_reconnect_event.set()
-			try:
-				await asyncio.wait_for(self._reconnect_loop_task, timeout=10.0)
-			except asyncio.TimeoutError:
-				logger.warning("Reconnect loop did not stop in time, cancelling.")
-				self._reconnect_loop_task.cancel()
-			except asyncio.CancelledError:
-				logger.info("Reconnect loop successfully cancelled.")
+		# This block is completely replaced to handle both tasks correctly
+		if self._reconnect_loop_task or self._health_check_loop_task:
+			logger.info("Stopping MCPConnectionManager background tasks...")
+			self._stop_reconnect_event.set()
+
+			tasks_to_wait_for = []
+			if self._reconnect_loop_task:
+				tasks_to_wait_for.append(self._reconnect_loop_task)
+			if self._health_check_loop_task:
+				tasks_to_wait_for.append(self._health_check_loop_task)
+
+			if tasks_to_wait_for:
+				_finished, pending = await asyncio.wait(tasks_to_wait_for, timeout=5.0)
+				for task in pending:
+					logger.warning(f"Task {task.get_name()} did not stop in time, cancelling.")
+					task.cancel()
+
 			self._reconnect_loop_task = None
-			logger.info("MCPConnectionManager background reconnect task stopped.")
+			self._health_check_loop_task = None
+			logger.info("MCPConnectionManager background tasks stopped.")
 
 	async def _default_sampling_callback(self, context: Union[RequestContext["ClientSession", None], Any],
 										 params: Union[mcp_types.CreateMessageRequestParams, Any]) -> Union[
@@ -1561,6 +1579,103 @@ class MCPConnectionManager:
 			for details in self.sse_connections.values():
 				if details.get("session") is session_instance: return details
 		return None
+
+	async def _health_check_loop(self):
+		"""Periodically polls the /health endpoint of all active MCP servers."""
+		logger.info("MCPConnectionManager: Health check loop started.")
+		await asyncio.sleep(10)  # Initial delay before the first check
+
+		while not self._stop_reconnect_event.is_set():
+			try:
+				async with httpx.AsyncClient(timeout=10.0) as client:
+					check_tasks = []
+
+					# Lock briefly to get a snapshot of servers to check
+					async with self._connection_lock:
+						servers_to_check = [
+							(server_id, details)
+							for server_id, details in self.sse_connections.items()
+							if details.get("config_for_connection", {}).get("is_active")
+						]
+
+					for server_id, details in servers_to_check:
+						task = asyncio.create_task(
+							self._check_single_server_health(client, server_id, details)
+						)
+						check_tasks.append(task)
+
+					if check_tasks:
+						await asyncio.gather(*check_tasks)
+
+				# Wait for 15 seconds before the next health check cycle
+				await asyncio.wait_for(self._stop_reconnect_event.wait(), timeout=15.0)
+			except asyncio.TimeoutError:
+				pass  # Expected behavior for the wait timeout
+			except Exception as e:
+				logger.error(f"Health check loop encountered an unexpected error: {e}", exc_info=True)
+				await asyncio.sleep(15)  # Wait a bit before retrying after a major loop error
+
+		logger.info("MCPConnectionManager: Health check loop stopped.")
+
+	async def _check_single_server_health(self, client: httpx.AsyncClient, server_id: str, details: Dict[str, Any]):
+		"""Checks a single server's health and triggers a reconnect if a restart is detected."""
+		config = details.get("config_for_connection", {})
+		base_url = config.get("url", "")
+		server_name = config.get("name", server_id)
+
+		if not base_url:
+			return  # Cannot check a server without a URL
+
+		# Construct health URL from the base SSE url (e.g., http://host/sse -> http://host/health)
+		health_url = base_url.rstrip('/').replace("/sse", "") + "/health"
+		last_known_startup_id = details.get("last_known_startup_id")
+
+		try:
+			response = await client.get(health_url)
+
+			if response.status_code == 200:
+				data = response.json()
+				current_startup_id = data.get("startup_id")
+
+				if current_startup_id and current_startup_id != last_known_startup_id:
+					logger.warning(
+						f"[{server_id}] RESTART DETECTED for '{server_name}'. Health check startup_id changed.")
+					logger.info(f"[{server_id}]   Old startup_id: {last_known_startup_id}")
+					logger.info(f"[{server_id}]   New startup_id: {current_startup_id}")
+
+					async with self._connection_lock:
+						current_details = self.sse_connections.get(server_id)
+						if not current_details: return
+
+						current_details["last_known_startup_id"] = current_startup_id
+
+						# Only force a reconnect if it's currently considered connected.
+						# This prevents conflicts with the standard reconnection loop.
+						if current_details.get("status") == "CONNECTED":
+							logger.info(
+								f"[{server_id}] Forcing reconnection for '{server_name}' due to detected restart.")
+							await self._do_cleanup_for_server(server_id, current_details,
+															  "health check restart detected")
+
+							current_details["status"] = "DISCONNECTED"
+							current_details["next_retry_time"] = time.monotonic()
+							current_details["retry_count"] = 0
+							current_details["current_retry_delay_seconds"] = INITIAL_RETRY_DELAY_SECONDS
+
+				elif not last_known_startup_id and current_startup_id:
+					# This is the first successful health check. Just store the ID.
+					async with self._connection_lock:
+						self.sse_connections[server_id]["last_known_startup_id"] = current_startup_id
+					logger.info(f"[{server_id}] Storing initial startup_id for '{server_name}': {current_startup_id}")
+
+			else:
+				logger.debug(
+					f"[{server_id}] Health check failed for '{server_name}' (likely down or endpoint missing). Status: {response.status_code}")
+
+		except httpx.RequestError as e:
+			logger.debug(f"[{server_id}] Health check request failed for '{server_name}' (server likely down): {e}")
+		except Exception as e:
+			logger.error(f"[{server_id}] Unexpected error during health check for '{server_name}': {e}", exc_info=True)
 
 
 async def get_mcp_connection_manager(request: FastAPIRequest) -> MCPConnectionManager:
