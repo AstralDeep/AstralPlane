@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 	DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "t")
 	HOST: str = os.getenv("HOST", "0.0.0.0")
 	PORT: int = int(os.getenv("PORT", "8000"))
+
+	# CORS_ORIGINS: List[str] = ["*"]
 	CORS_ORIGINS: List[str] = [
 		"http://localhost:3000",
 		"http://localhost:8001",
