@@ -337,7 +337,7 @@ class MCPConnectionManager:
 				error_msg_detail = f"Unexpected error during connection: {e}"
 			full_error_message = f"Connection failed for '{server_name_for_logs}' ({server_id}). {error_msg_detail}"
 			log_exc_info = not isinstance(e, (
-			McpError, asyncio.TimeoutError, ConnectionRefusedError, anyio.EndOfStream, anyio.ClosedResourceError))
+				McpError, asyncio.TimeoutError, ConnectionRefusedError, anyio.EndOfStream, anyio.ClosedResourceError))
 			logger.error(full_error_message, exc_info=log_exc_info)
 
 			await self._safe_aclose(exit_stack, server_id, "connection failure cleanup")  # Close the current stack
@@ -547,7 +547,8 @@ class MCPConnectionManager:
 					# 1. DISCONNECTED and it's time to retry (or no retry time set yet for a new DISCONNECTED)
 					# 2. ERROR_RETRYING and it's time to retry
 					# 3. pending_initialization (should ideally be caught by initial load, but as a fallback)
-					if (status in ["DISCONNECTED", "ERROR_RETRYING"] and (next_retry is None or current_time >= next_retry)) or status == "pending_initialization":  # Fallback for pending
+					if (status in ["DISCONNECTED", "ERROR_RETRYING"] and (
+							next_retry is None or current_time >= next_retry)) or status == "pending_initialization":  # Fallback for pending
 						server_ids_to_attempt_connect.append(server_id)
 
 			if not server_ids_to_attempt_connect:
@@ -677,8 +678,8 @@ class MCPConnectionManager:
 		CancelledNotificationParams = getattr(mcp_types, 'CancelledNotificationParams', None)
 		# UpdateBindingNotificationParams is listed twice in original, one is enough.
 
-		method_name = None;
-		params = None;
+		method_name = None
+		params = None
 		is_valid_structure = False
 
 		if ServerNotification and isinstance(message, ServerNotification):
@@ -687,17 +688,20 @@ class MCPConnectionManager:
 			params = getattr(notification_root, 'params', None)
 			is_valid_structure = True
 		elif isinstance(message, dict):
-			method_name = message.get('method');
-			params = message.get('params');
+			method_name = message.get('method')
+			params = message.get('params')
 			is_valid_structure = True
 		elif hasattr(message, 'method') and hasattr(message, 'params'):
-			method_name = getattr(message, 'method', None);
-			params = getattr(message, 'params', None);
+			method_name = getattr(message, 'method', None)
+			params = getattr(message, 'params', None)
 			is_valid_structure = True
 
-		if not is_valid_structure: logger.warning(
-			f"[{server_id}] Received unknown type via message_handler: {type(message)} - {message!r}"); return
-		if not method_name: logger.warning(f"[{server_id}] Received message without 'method': {message!r}"); return
+		if not is_valid_structure:
+			logger.warning(f"[{server_id}] Received unknown type via message_handler: {type(message)} - {message!r}")
+			return
+		if not method_name:
+			logger.warning(f"[{server_id}] Received message without 'method': {message!r}")
+			return
 
 		logger.info(f"[{server_id}] Routing incoming notification. Method: '{method_name}'")
 		try:
@@ -871,28 +875,32 @@ class MCPConnectionManager:
 				exc_info=True)
 
 	async def _handle_streaming_update(self, server_id: str, params: Union[Dict, Any]):
-		if not hasattr(self, 'ui_connection_manager') or self.ui_connection_manager is None: logger.error(
-			f"[{server_id}] UI ConnectionManager missing. Cannot proceed."); return
-		logger.debug(f"[{server_id}] Handling 'app/streaming_log_update'. Params: {type(params)}, {params!r}");
+		if not hasattr(self, 'ui_connection_manager') or self.ui_connection_manager is None:
+			logger.error(f"[{server_id}] UI ConnectionManager missing. Cannot proceed.")
+			return
+		logger.debug(f"[{server_id}] Handling 'app/streaming_log_update'. Params: {type(params)}, {params!r}")
 		stream_id = f"mcp:{server_id}"
 		try:
-			target_binding: Optional[str] = None;
+			target_binding: Optional[str] = None
 			chunk_text: Any = None
 			if hasattr(params, 'targetBinding') and hasattr(params, 'chunk'):
-				target_binding = getattr(params, 'targetBinding', None);
+				target_binding = getattr(params, 'targetBinding', None)
 				chunk_text = getattr(params, 'chunk', None)
 			elif isinstance(params, dict):
-				target_binding = params.get('targetBinding');
+				target_binding = params.get('targetBinding')
 				chunk_text = params.get('chunk')
 			else:
 				logger.warning(
-					f"[{server_id}] Params unexpected type {type(params)} for 'app/streaming_log_update'. Ignoring.");
+					f"[{server_id}] Params unexpected type {type(params)} for 'app/streaming_log_update'. Ignoring.")
 				return
-			if not target_binding or not isinstance(target_binding, str): logger.warning(
-				f"[{server_id}] 'app/streaming_log_update' invalid/missing 'targetBinding'. Params: {params!r}. Ignoring."); return
+			if not target_binding or not isinstance(target_binding, str):
+				logger.warning(
+					f"[{server_id}] 'app/streaming_log_update' invalid/missing 'targetBinding'. Params: {params!r}. Ignoring.")
+				return
 			chunk_text_str = "" if chunk_text is None else str(chunk_text)
-			if chunk_text is None: logger.warning(
-				f"[{server_id}] 'app/streaming_log_update' missing 'chunk' for '{target_binding}'. Sending empty.")
+			if chunk_text is None:
+				logger.warning(
+					f"[{server_id}] 'app/streaming_log_update' missing 'chunk' for '{target_binding}'. Sending empty.")
 			logger.info(f"[{server_id}] Sending raw chunk to '{target_binding}': '{chunk_text_str[:100]}...'")
 			raw_payload = PrimitiveContentUpdatePayload(targetBinding=target_binding, content=chunk_text_str,
 														updateType="append")
@@ -910,15 +918,17 @@ class MCPConnectionManager:
 			logger.error(f"[{server_id}] Error in 'app/streaming_log_update': {e}", exc_info=True)
 
 	async def _handle_update_binding(self, server_id: str, params: Union[Dict, Any]):
-		logger.debug(f"[{server_id}] Handling Update Binding Notification. Params: {type(params)}, {params!r}");
+		logger.debug(f"[{server_id}] Handling Update Binding Notification. Params: {type(params)}, {params!r}")
 		stream_id = f"mcp:{server_id}"
-		if self.ui_connection_manager.get_connection_count(stream_id) == 0: logger.debug(
-			f"[{server_id}] No clients, skipping update_binding."); return
+		if self.ui_connection_manager.get_connection_count(stream_id) == 0:
+			logger.debug(f"[{server_id}] No clients, skipping update_binding.")
+			return
 		try:
 			target_binding = params.get('binding') if isinstance(params, dict) else getattr(params, 'binding', None)
 			content_payload = params.get('payload') if isinstance(params, dict) else getattr(params, 'payload', None)
-			if not target_binding: logger.error(
-				f"[{server_id}] update_binding missing 'binding'. Params: {params!r}"); return
+			if not target_binding:
+				logger.error(f"[{server_id}] update_binding missing 'binding'. Params: {params!r}")
+				return
 			logger.info(f"[{server_id}] Relaying update for binding '{target_binding}'.")
 			serializable_content = content_payload
 			if hasattr(content_payload, 'model_dump'):
@@ -937,11 +947,12 @@ class MCPConnectionManager:
 			logger.error(f"[{server_id}] Error in update_binding: {e}", exc_info=True)
 
 	async def _refresh_tools_and_notify_frontend(self, server_id: str):
-		logger.info(f"[{server_id}] BG task: Refreshing tool list.");
+		logger.info(f"[{server_id}] BG task: Refreshing tool list.")
 		session_wrapper, error = await self.get_or_create_session(server_id)
-		if error or not session_wrapper: logger.error(
-			f"[{server_id}] BG task: Cannot refresh tools, session unavailable ({error})"); return
-		actual_mcp_session: ClientSession = session_wrapper;
+		if error or not session_wrapper:
+			logger.error(f"[{server_id}] BG task: Cannot refresh tools, session unavailable ({error})")
+			return
+		actual_mcp_session: ClientSession = session_wrapper
 		processed_tools: Optional[Dict[str, Any]] = None
 		try:
 			tools_timeout = self.settings.MCP_LIST_TOOLS_TIMEOUT
@@ -956,7 +967,8 @@ class MCPConnectionManager:
 			if self.ui_connection_manager.get_connection_count(stream_id) > 0 and processed_tools:
 				tool_schemas_for_payload: Dict[str, ToolSchemaInfo] = {}
 				for tool_name, tool_data in processed_tools.items():
-					if not isinstance(tool_data, dict): continue
+					if not isinstance(tool_data, dict):
+						continue
 					try:
 						tool_info = ToolSchemaInfo(name=tool_data.get('name', tool_name),
 												   description=tool_data.get('description'),
@@ -992,18 +1004,19 @@ class MCPConnectionManager:
 		except Exception as e:
 			logger.error(f"[{server_id}] BG task: Unexpected error re-fetching tools: {e}", exc_info=True)
 		finally:
-			await self.release_session(server_id);
+			await self.release_session(server_id)
 			logger.info(f"[{server_id}] BG task finished: Refresh tool list.")
 
 	async def _handle_tool_list_changed(self, server_id: str, params: Union[mcp_types.NotificationParams, Dict, None]):
-		logger.info(f"[{server_id}] ToolListChanged Notification. Scheduling refresh...");
-		asyncio.create_task(self._refresh_tools_and_notify_frontend(server_id))
+		logger.info(f"[{server_id}] ToolListChanged Notification. Scheduling refresh...")
+		await asyncio.create_task(self._refresh_tools_and_notify_frontend(server_id))
 
 	async def _handle_resource_updated(self, server_id: str,
 									   params: Union[mcp_types.ResourceUpdatedNotificationParams, Dict]):
 		stream_id = f"mcp:{server_id}"
-		if self.ui_connection_manager.get_connection_count(stream_id) == 0: logger.debug(
-			f"[{server_id}] No clients, skipping resource updated."); return
+		if self.ui_connection_manager.get_connection_count(stream_id) == 0:
+			logger.debug(f"[{server_id}] No clients, skipping resource updated.")
+			return
 		try:
 			resource_uri = str(getattr(params, 'uri')) if hasattr(params, 'uri') else (
 				str(params.get('uri')) if isinstance(params, dict) else "<unknown_uri>")
@@ -1021,10 +1034,11 @@ class MCPConnectionManager:
 
 	async def _handle_resource_list_changed(self, server_id: str,
 											params: Union[mcp_types.NotificationParams, Dict, None]):
-		logger.info(f"[{server_id}] ResourceListChanged Notification.");
+		logger.info(f"[{server_id}] ResourceListChanged Notification.")
 		stream_id = f"mcp:{server_id}"
-		if self.ui_connection_manager.get_connection_count(stream_id) == 0: logger.debug(
-			f"[{server_id}] No clients, skipping resource list changed."); return
+		if self.ui_connection_manager.get_connection_count(stream_id) == 0:
+			logger.debug(f"[{server_id}] No clients, skipping resource list changed.")
+			return
 		try:
 			payload = MCPNotificationPayload(server_id=server_id, notification_type="ResourceListChanged")
 			message = MCPNotificationMessage(payload=payload)
@@ -1037,10 +1051,11 @@ class MCPConnectionManager:
 
 	async def _handle_prompt_list_changed(self, server_id: str,
 										  params: Union[mcp_types.NotificationParams, Dict, None]):
-		logger.info(f"[{server_id}] PromptListChanged Notification.");
+		logger.info(f"[{server_id}] PromptListChanged Notification.")
 		stream_id = f"mcp:{server_id}"
-		if self.ui_connection_manager.get_connection_count(stream_id) == 0: logger.debug(
-			f"[{server_id}] No clients, skipping prompt list changed."); return
+		if self.ui_connection_manager.get_connection_count(stream_id) == 0:
+			logger.debug(f"[{server_id}] No clients, skipping prompt list changed.")
+			return
 		try:
 			payload = MCPNotificationPayload(server_id=server_id, notification_type="PromptListChanged")
 			message = MCPNotificationMessage(payload=payload)
@@ -1053,8 +1068,9 @@ class MCPConnectionManager:
 	async def _handle_cancelled_by_server(self, server_id: str,
 										  params: Union[mcp_types.CancelledNotificationParams, Dict]):
 		stream_id = f"mcp:{server_id}"
-		if self.ui_connection_manager.get_connection_count(stream_id) == 0: logger.debug(
-			f"[{server_id}] No clients, skipping server cancellation."); return
+		if self.ui_connection_manager.get_connection_count(stream_id) == 0:
+			logger.debug(f"[{server_id}] No clients, skipping server cancellation.")
+			return
 		try:
 			request_id = getattr(params, 'requestId', params.get('requestId', '<unknown_request>'))
 			logger.info(f"[{server_id}] Cancelled Notification FROM SERVER for request ID: {request_id}")
@@ -1080,27 +1096,31 @@ class MCPConnectionManager:
 		tools = None
 		try:
 			tools = await self.get_discovered_tools_internal(server_id)
-			if tools is None: err_msg = f"Tool data missing or server '{server_id}' not ready."; logger.error(
-				f"[{server_id}] {err_msg}"); return _create_error_content(err_msg, INTERNAL_ERROR), err_msg
-			if tool_name not in tools: err_msg = f"Tool '{tool_name}' not on server '{server_id}'. Available: {list(tools.keys())}"; logger.error(
-				f"[{server_id}] {err_msg}"); return _create_error_content(err_msg, METHOD_NOT_FOUND,
-																		  "METHOD_NOT_FOUND"), err_msg
-			logger.debug(f"[{server_id}] Calling actual_mcp_session.call_tool('{tool_name}')...");
+			if tools is None:
+				err_msg = f"Tool data missing or server '{server_id}' not ready."
+				logger.error(f"[{server_id}] {err_msg}")
+				return _create_error_content(err_msg, INTERNAL_ERROR), err_msg
+			if tool_name not in tools:
+				err_msg = f"Tool '{tool_name}' not on server '{server_id}'. Available: {list(tools.keys())}"
+				logger.error(f"[{server_id}] {err_msg}")
+				return _create_error_content(err_msg, METHOD_NOT_FOUND, "METHOD_NOT_FOUND"), err_msg
+			logger.debug(f"[{server_id}] Calling actual_mcp_session.call_tool('{tool_name}')...")
 			tool_call_timeout = self.settings.MCP_CALL_TOOL_TIMEOUT
-			tool_result = await asyncio.wait_for(actual_mcp_session.call_tool(name=tool_name, arguments=params), timeout=tool_call_timeout)
+			tool_result = await asyncio.wait_for(actual_mcp_session.call_tool(name=tool_name, arguments=params),
+												 timeout=tool_call_timeout)
 
-			logger.info(f"[{server_id}] Tool '{tool_name}' completed. (Took {(time.monotonic() - tool_exec_start_time) * 1000:.2f} ms).")
+			logger.info(
+				f"[{server_id}] Tool '{tool_name}' completed. (Took {(time.monotonic() - tool_exec_start_time) * 1000:.2f} ms).")
 			self._check_mcp_result_for_error(tool_result, f"ExecuteTool({tool_name}) for {server_id}")
 			result_content = getattr(tool_result, 'content', None) if tool_result else None
 			logger.debug(f"[{server_id}] Tool '{tool_name}' successful. Content type: {type(result_content)}")
 			return result_content, None
 		except asyncio.TimeoutError:
-			error_message = f"Tool '{tool_name}' timed out after {tool_call_timeout}s.";
-			logger.error(
-				f"[{server_id}] {error_message}");
-			return _create_error_content(error_message, INTERNAL_ERROR,
-										 "TIMEOUT"), error_message
-		except (anyio.ClosedResourceError, anyio.EndOfStream, ConnectionRefusedError) as conn_err:  # Catch specific connection errors
+			error_message = f"Tool '{tool_name}' timed out after {tool_call_timeout}s."
+			logger.error(f"[{server_id}] {error_message}")
+			return _create_error_content(error_message, INTERNAL_ERROR, "TIMEOUT"), error_message
+		except (anyio.ClosedResourceError, anyio.EndOfStream,
+				ConnectionRefusedError) as conn_err:  # Catch specific connection errors
 			error_message = f"MCP connection to '{server_id}' lost/failed during tool '{tool_name}': {conn_err}"
 			logger.error(f"[{server_id}] {error_message}", exc_info=False)
 			async with self._connection_lock:  # Safely update state
@@ -1121,7 +1141,7 @@ class MCPConnectionManager:
 			return _create_error_content(error_message, INTERNAL_ERROR), error_message
 		except McpError as mcp_err:
 			error_message = f"MCP protocol error: {mcp_err.error}"
-			logger.error(f"[{server_id}] {error_message}",exc_info=False)
+			logger.error(f"[{server_id}] {error_message}", exc_info=False)
 			return getattr(
 				mcp_err, 'error', error_message), error_message
 		except asyncio.CancelledError:
@@ -1135,8 +1155,8 @@ class MCPConnectionManager:
 			return _create_error_content(err_msg, INTERNAL_ERROR, "CANCELLED"), err_msg  # Specific error
 		except Exception as e:
 			error_message = f"Unexpected error for tool '{tool_name}': {e}"
-			logger.error(f"[{server_id}] {error_message}", exc_info=True);
-			return _create_error_content(error_message,INTERNAL_ERROR), error_message
+			logger.error(f"[{server_id}] {error_message}", exc_info=True)
+			return _create_error_content(error_message, INTERNAL_ERROR), error_message
 		finally:
 			await self.release_session(server_id)
 			if tools is None:
@@ -1146,13 +1166,13 @@ class MCPConnectionManager:
 
 	# Modify get_or_create_session to reflect new states
 	async def get_or_create_session(self, server_id: str) -> Tuple[Optional[ClientSession], Optional[str]]:
-		logger.debug(f"[{server_id}] Request for session.");
+		logger.debug(f"[{server_id}] Request for session.")
 		async with self._connection_lock:  # Lock for reading consistent state
 			connection_details = self.sse_connections.get(server_id)
 
 		if not connection_details:
 			error_msg = f"Server '{server_id}' not configured."
-			logger.error(error_msg);
+			logger.error(error_msg)
 			return None, error_msg
 
 		config = connection_details.get("config_for_connection", {})
@@ -1160,7 +1180,7 @@ class MCPConnectionManager:
 
 		if not config.get("is_active", False):
 			error_msg = f"Server '{server_name}' (ID: {server_id}) is configured but INACTIVE."
-			logger.warning(error_msg);
+			logger.warning(error_msg)
 			return None, error_msg
 
 		current_status = connection_details.get("status")
@@ -1179,7 +1199,7 @@ class MCPConnectionManager:
 				else:  # Status changed, treat as if not connected
 					current_status = connection_details_for_update.get("status",
 																	   "UNKNOWN") if connection_details_for_update else "UNKNOWN"
-				# Fall through to error handling below
+		# Fall through to error handling below
 
 		# Handle non-connected states
 		if current_status == "CONNECTING":
@@ -1199,7 +1219,7 @@ class MCPConnectionManager:
 		return None, error_msg
 
 	async def release_session(self, server_id: str):
-		logger.debug(f"[{server_id}] Request to release session.");
+		logger.debug(f"[{server_id}] Request to release session.")
 		async with self._connection_lock:
 			connection_details = self.sse_connections.get(server_id)
 		if connection_details:
@@ -1207,7 +1227,7 @@ class MCPConnectionManager:
 			if current_status == "connected" or connection_details.get("session") is not None:
 				ref_count = connection_details.get("ref_count", 0)
 				if ref_count > 0:
-					connection_details["ref_count"] = ref_count - 1;
+					connection_details["ref_count"] = ref_count - 1
 					logger.info(
 						f"[{server_id}] Decremented session ref for '{connection_details.get('config_from_db').name if connection_details.get('config_from_db') else server_id}'. New ref: {connection_details['ref_count']}")
 				else:
@@ -1252,7 +1272,7 @@ class MCPConnectionManager:
 			logger.error(f"Attempt to update state (nolock) for unknown server_id: {server_id}")
 
 	async def get_connection_details(self, server_id: str) -> Optional[Dict[str, Any]]:
-		logger.debug(f"[{server_id}] Getting connection details.");
+		logger.debug(f"[{server_id}] Getting connection details.")
 		async with self._connection_lock:
 			details = self.sse_connections.get(server_id)
 		if not details: return None
@@ -1282,7 +1302,6 @@ class MCPConnectionManager:
 				"next_retry_time") else None,
 		}
 		return details_copy
-
 
 	async def get_discovered_tools_internal(self, server_id: str) -> Optional[Dict[str, Any]]:
 		logger.critical(f"CRITICAL_TEST: ENTERED get_discovered_tools_internal for server_id: {server_id}")
@@ -1389,7 +1408,7 @@ class MCPConnectionManager:
 			return None
 
 	async def get_required_primitives(self, server_id: str) -> Optional[Set[str]]:
-		logger.debug(f"[{server_id}] Accessing required primitives.");
+		logger.debug(f"[{server_id}] Accessing required primitives.")
 		async with self._connection_lock: details = self.sse_connections.get(server_id)
 		if details and details.get("status") == "connected" and details.get("ui_layout"): return details.get(
 			"required_primitives", set()).copy()
@@ -1417,9 +1436,9 @@ class MCPConnectionManager:
 		return bool(status_ok and layout_ok)
 
 	async def cleanup_all_connections(self):
-		shutdown_start_time = time.monotonic();
+		shutdown_start_time = time.monotonic()
 		logger.info("Initiating shutdown for all MCP connections...")
-		server_ids_to_clean = [];
+		server_ids_to_clean = []
 		details_map_for_cleaning = {}
 		async with self._connection_lock:
 			server_ids_to_clean = list(self.sse_connections.keys())
@@ -1446,25 +1465,26 @@ class MCPConnectionManager:
 	async def _safe_aclose(self, resource: Optional[AsyncExitStack], server_id: str, context: str):
 		if resource and hasattr(resource, 'aclose'):
 			try:
-				await resource.aclose();
+				await resource.aclose()
 				logger.debug(f"[{server_id}] Closed resource during {context}.")
 			except Exception as e:
 				logger.error(f"[{server_id}] Error closing resource during {context}: {e}", exc_info=True)
 
 	def _check_mcp_result_for_error(self, result: Any, operation_name: str):
-		if not result: return
-		error_content = None;
+		if not result:
+			return
+		error_content = None
 		is_error = False
-		ErrorData = getattr(mcp_types, 'ErrorData', None);
+		ErrorData = getattr(mcp_types, 'ErrorData', None)
 		TextContent = getattr(mcp_types, 'TextContent', None)
 		if hasattr(result, 'isError') and result.isError:
-			is_error = True;
+			is_error = True
 			error_content = getattr(result, 'content', 'Unknown Error')
 		elif ErrorData and isinstance(result, ErrorData):
-			is_error = True;
+			is_error = True
 			error_content = result
 		elif isinstance(result, dict) and result.get("error"):
-			is_error = True;
+			is_error = True
 			error_content = result.get("error")
 		if is_error:
 			logger.error(f"MCP Error during '{operation_name}': {error_content!r}")
@@ -1472,11 +1492,11 @@ class MCPConnectionManager:
 				raise McpError(error=error_content)
 			elif isinstance(error_content, dict) and 'message' in error_content and 'code' in error_content:
 				try:
-					mcp_error_data = ErrorData(**error_content) if ErrorData else error_content;
+					mcp_error_data = ErrorData(**error_content) if ErrorData else error_content
 					raise McpError(
 						error=mcp_error_data)
 				except Exception as construct_err:
-					logger.error(f"Failed to construct McpError: {construct_err}");
+					logger.error(f"Failed to construct McpError: {construct_err}")
 					raise Exception(
 						f"MCP Op '{operation_name}' failed: {error_content}")
 			elif isinstance(error_content, list) and error_content and TextContent:
@@ -1489,63 +1509,71 @@ class MCPConnectionManager:
 				raise Exception(f"MCP Op '{operation_name}' failed: {error_content!r}")
 
 	def _process_discovered_tools(self, tools_list: Optional[List[Any]]) -> Dict[str, Any]:
-		processed_tools: Dict[str, Any] = {};
-		if not mcp_types: logger.warning("mcp_types missing."); return processed_tools
-		if not tools_list: logger.debug("Tool list empty."); return processed_tools
-		logger.debug(f"Processing {len(tools_list)} tools...");
-		tool_class_to_check = None;
+		processed_tools: Dict[str, Any] = {}
+		if not mcp_types:
+			logger.warning("mcp_types missing.")
+			return processed_tools
+		if not tools_list:
+			logger.debug("Tool list empty.")
+			return processed_tools
+		logger.debug(f"Processing {len(tools_list)} tools...")
+		tool_class_to_check = None
 		first_item = tools_list[0]
 		if hasattr(mcp_types, 'Tool') and isinstance(first_item, mcp_types.Tool):
 			tool_class_to_check = mcp_types.Tool
 		elif hasattr(mcp_types, 'ToolInfo') and isinstance(first_item, mcp_types.ToolInfo):
 			tool_class_to_check = mcp_types.ToolInfo
 		else:
-			logger.warning(f"Unexpected tool type: {type(first_item)}.");
+			logger.warning(f"Unexpected tool type: {type(first_item)}.")
 			return processed_tools
 		for tool_info in tools_list:
-			if not isinstance(tool_info, tool_class_to_check): logger.warning(
-				f"Skipping type: {type(tool_info)}"); continue
-			tool_name = getattr(tool_info, 'name', None);
-			if not tool_name: logger.warning(f"Skipping tool missing 'name': {tool_info!r}"); continue
+			if not isinstance(tool_info, tool_class_to_check):
+				logger.warning(f"Skipping type: {type(tool_info)}")
+				continue
+			tool_name = getattr(tool_info, 'name', None)
+			if not tool_name:
+				logger.warning(f"Skipping tool missing 'name': {tool_info!r}")
+				continue
 			input_schema = getattr(tool_info, 'inputSchema', getattr(tool_info, 'input_schema', None))
 			output_schema = getattr(tool_info, 'outputSchema', getattr(tool_info, 'output_schema', None))
 			processed_tools[tool_name] = {"name": tool_name, "description": getattr(tool_info, 'description', ''),
 										  "input_schema": input_schema, "output_schema": output_schema}
-		logger.debug(f"Processed tools: Found {len(processed_tools)}.");
+		logger.debug(f"Processed tools: Found {len(processed_tools)}.")
 		return processed_tools
 
 	async def _get_server_ui_layout(self, session: ClientSession, server_id_for_log: str) -> Optional[dict]:
-		tool_name = "get_ui_layout";
+		tool_name = "get_ui_layout"
 		logger.info(f"[{server_id_for_log}] Retrieving UI layout via tool: '{tool_name}'")
 		try:
 			tool_result: CallToolResult = await session.call_tool(name=tool_name, arguments=None)
 			self._check_mcp_result_for_error(tool_result, tool_name)
 			if tool_result and hasattr(tool_result, 'content') and isinstance(tool_result.content, list) and len(
 					tool_result.content) == 1:
-				content_item = tool_result.content[0];
+				content_item = tool_result.content[0]
 				ui_layout = None
 				if isinstance(content_item, dict):
-					ui_layout = content_item;
+					ui_layout = content_item
 					logger.info(f"[{server_id_for_log}] Retrieved UI layout (dict).")
 				elif mcp_types and isinstance(content_item, mcp_types.TextContent):
 					try:
-						ui_layout = json.loads(content_item.text);
+						ui_layout = json.loads(content_item.text)
 						logger.info(
 							f"[{server_id_for_log}] Parsed UI layout (TextContent).")
 					except json.JSONDecodeError as json_err:
 						logger.error(
-							f"[{server_id_for_log}] Failed to parse JSON from '{tool_name}' TextContent: {json_err}.");
+							f"[{server_id_for_log}] Failed to parse JSON from '{tool_name}' TextContent: {json_err}.")
 						return None
 				else:
 					logger.error(
-						f"[{server_id_for_log}] Unexpected content type ({type(content_item)}) from '{tool_name}'.");
+						f"[{server_id_for_log}] Unexpected content type ({type(content_item)}) from '{tool_name}'.")
 					return None
-				if not isinstance(ui_layout, dict) or 'id' not in ui_layout: logger.error(
-					f"[{server_id_for_log}] UI layout invalid."); return None
+				if not isinstance(ui_layout, dict) or 'id' not in ui_layout:
+					logger.error(f"[{server_id_for_log}] UI layout invalid.")
+					return None
 				return ui_layout
 			else:
 				logger.error(
-					f"[{server_id_for_log}] Unexpected content from '{tool_name}': {getattr(tool_result, 'content', 'N/A')!r}");
+					f"[{server_id_for_log}] Unexpected content from '{tool_name}': {getattr(tool_result, 'content', 'N/A')!r}")
 				return None
 		except McpError as e:
 			err_code = getattr(getattr(e, 'error', None), 'code', None)
@@ -1555,14 +1583,14 @@ class MCPConnectionManager:
 				logger.error(f"[{server_id_for_log}] MCP error calling '{tool_name}': {e.error!r}", exc_info=False)
 			return None
 		except Exception as e:
-			logger.error(f"[{server_id_for_log}] Unexpected error calling '{tool_name}': {e}",
-						 exc_info=True);
+			logger.error(f"[{server_id_for_log}] Unexpected error calling '{tool_name}': {e}", exc_info=True)
 			return None
 
 	def _extract_required_primitives(self, layout: Optional[Dict[str, Any]]) -> Set[str]:
-		primitives = set();
-		if not layout or not isinstance(layout, dict): return primitives
-		primitive_type = layout.get('type');
+		primitives = set()
+		if not layout or not isinstance(layout, dict):
+			return primitives
+		primitive_type = layout.get('type')
 		if primitive_type and isinstance(primitive_type, str): primitives.add(primitive_type)
 		children = layout.get('children')
 		if children and isinstance(children, list):
@@ -1685,7 +1713,6 @@ async def get_mcp_connection_manager(request: FastAPIRequest) -> MCPConnectionMa
 	return request.app.state.mcp_connection_manager
 
 
-# NEW dependency specifically for WebSocket routes
 async def get_mcp_connection_manager_ws(websocket: WebSocket) -> MCPConnectionManager:
 	"""
    FastAPI dependency to get the MCPConnectionManager instance from app.state
