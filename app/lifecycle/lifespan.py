@@ -2,7 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy.orm import Session  # Make sure Session is imported
 
 from app.config import settings
 from app.database import get_db, create_tables, Base  # get_db is your context manager
@@ -10,7 +9,6 @@ from app.services import mcp_config_crud_service
 from app.services.connection_manager import ConnectionManager
 from app.services.mcp_connection_manager import MCPConnectionManager
 from app.services.project_service import ProjectViewsService
-from app.models.mcp_server_config_model import MCPServerConfig  # Ensure models are known to Base
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +44,7 @@ async def lifespan(app: FastAPI):
 	try:
 		with get_db() as db_for_startup:
 			logger.info("Loading MCP server configurations from database...")
-			all_db_configs = mcp_config_crud_service.get_mcp_server_configs(db_for_startup, limit=1000,
-																			only_active=None)
+			all_db_configs = mcp_config_crud_service.get_mcp_server_configs(db_for_startup, limit=1000, only_active=None)
 			await mcp_manager.initialize_servers_from_db(all_db_configs)  # This does initial connect attempts
 			logger.info(f"MCPConnectionManager initialized with data for {len(all_db_configs)} servers.")
 	except Exception as e:

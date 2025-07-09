@@ -1,24 +1,17 @@
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Path
-from typing import Dict, List, Any, Optional, Set, Literal
 import json
-import time
 import logging
+import time
+from typing import Dict, List, Any, Optional, Set, Literal
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 
 from ..config import settings
 from ..services.connection_manager import ConnectionManager, get_connection_manager
-from ..services.mcp_connection_manager import MCPConnectionManager, get_mcp_connection_manager_ws
-from app.main import websocket_endpoint as main_mcp_websocket_handler
 
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
-
-# --- NOTE: The primary WebSocket endpoint for MCP streams is now defined in app/main.py ---
-# The 'websocket_endpoint' function below is likely legacy code related to the old
-# dataplane manager and is commented out to resolve the StreamConfig import error.
-# If you need a separate WebSocket endpoint defined here for other purposes,
-# ensure it doesn't rely on the removed StreamConfig or dataplane_manager.
 
 # Optional endpoint for WebSocket status information
 @router.get("/status", tags=["WebSocket Utils"])

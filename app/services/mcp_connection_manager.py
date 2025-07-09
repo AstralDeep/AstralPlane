@@ -937,8 +937,7 @@ class MCPConnectionManager:
 				logger.warning(
 					f"[{server_id}] update_binding payload type {type(content_payload)} not serializable. Converting to str().")
 				serializable_content = str(content_payload)
-			update_payload_obj = PrimitiveContentUpdatePayload(targetBinding=target_binding,
-															   content=serializable_content, updateType="replace")
+			update_payload_obj = PrimitiveContentUpdatePayload(targetBinding=target_binding, content=serializable_content, updateType="replace")
 			update_msg = PrimitiveContentUpdateMessage(payload=update_payload_obj)
 			await self.ui_connection_manager.send_text(update_msg.model_dump_json(exclude_none=True), stream_id)
 		except ValidationError as ve:

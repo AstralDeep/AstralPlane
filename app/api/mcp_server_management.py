@@ -15,19 +15,6 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
-# Example curl command for the endpoint:
-# This assumes MCPServerConfigCreate includes 'id' as a client-provided string.
-"""
-curl -X POST http://localhost:8000/api/mcp-servers/ \
--H "Content-Type: application/json" \
--d '{
-  "id": "mcp_mock_chatviewbasic_new",
-  "name": "New Mock MCP Server",
-  "url": "http://127.0.0.1:8126/sse",
-  "description": "A new Mock MCP Server.",
-  "is_active": true
-}'
-"""
 @router.post("/", response_model=MCPServerConfigResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_mcp_server_config(
 		config_payload: MCPServerConfigCreate,
