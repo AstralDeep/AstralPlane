@@ -13,7 +13,10 @@ from astralplane.database.migrations import (
     MIGRATION_DIGEST,
     MIGRATION_REGISTRY,
     PLANE_SCHEMA_067_MIGRATION,
+    PLANE_SCHEMA_067_REGISTRY_DIGEST,
     PLANE_SCHEMA_067_STATEMENTS,
+    PLANE_SCHEMA_074_MIGRATION,
+    PLANE_SCHEMA_074_STATEMENTS,
 )
 from astralplane.database.revision import (
     ADVISORY_LOCK_IDS,
@@ -35,16 +38,27 @@ class _RecordingTransaction:
 
 
 def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> None:
-    assert SCHEMA_REVISION == "067.001"
-    assert READ_COMPATIBLE_FROM == "066.001"
+    assert SCHEMA_REVISION == "074.001"
+    assert READ_COMPATIBLE_FROM == "067.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
     assert MIGRATION_REGISTRY.digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.schema_revision == SCHEMA_REVISION
     assert CURRENT_DATA_PLANE_REVISION.read_compatible_from == (READ_COMPATIBLE_FROM,)
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
+    assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
+        ("067.001", PLANE_SCHEMA_067_REGISTRY_DIGEST),
+    )
+    assert CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("067.001") == (
+        PLANE_SCHEMA_067_REGISTRY_DIGEST
+    )
     assert PLANE_SCHEMA_067_MIGRATION.source_revisions == ("066.001",)
-    assert PLANE_SCHEMA_067_MIGRATION.target_revision == SCHEMA_REVISION
+    assert PLANE_SCHEMA_067_MIGRATION.target_revision == "067.001"
+    assert PLANE_SCHEMA_067_REGISTRY_DIGEST == (
+        "ae2285e6764cf084eeaf6099443d85fb9b27ae930fcb0684e4e0f458d17bb4f9"
+    )
+    assert PLANE_SCHEMA_074_MIGRATION.source_revisions == ("067.001",)
+    assert PLANE_SCHEMA_074_MIGRATION.target_revision == SCHEMA_REVISION
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {
         "astralplane_outbox",
@@ -58,16 +72,38 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert "audit_events_assign_sequence" in canonical_sql
     assert "astralplane_schema_postcondition" in canonical_sql
 
+    authority_sql = "\n".join(PLANE_SCHEMA_074_STATEMENTS)
+    assert {
+        "astralplane_authority_binding",
+        "astralplane_authority_lifecycle_operation",
+        "astralplane_protected_effect_operation",
+        "astralplane_receipt_sequence_watermark",
+        "astralplane_receipt_claim",
+    } <= {word for statement in PLANE_SCHEMA_074_STATEMENTS for word in statement.split()}
+    assert "uq_astralplane_authority_binding_nonterminal" in authority_sql
+    assert "astralplane_receipt_claim_nonce_key" in authority_sql
+    assert "astralplane_receipt_claim_sequence_key" in authority_sql
+    assert "astralplane_receipt_watermark_require_advance" in authority_sql
+    assert "idx_astralplane_outbox_authority_pending" in authority_sql
+    assert "astralplane_outbox_payload_size_check" in authority_sql
+    assert "astralplane_authority_postcondition" in authority_sql
+
     canonical = json.dumps(
         PLANE_SCHEMA_067_STATEMENTS,
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
     assert PLANE_SCHEMA_067_MIGRATION.checksum == hashlib.sha256(canonical).hexdigest()
+    canonical_authority = json.dumps(
+        PLANE_SCHEMA_074_STATEMENTS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    assert PLANE_SCHEMA_074_MIGRATION.checksum == hashlib.sha256(canonical_authority).hexdigest()
 
     declared = DataPlaneRevision(
-        schema_revision=SCHEMA_REVISION,
-        read_compatible_from=(READ_COMPATIBLE_FROM,),
+        schema_revision="067.001",
+        read_compatible_from=("066.001",),
         migration_digest="a" * 64,
     )
     assert declared.migration_lock == ADVISORY_LOCK_IDS[0]
@@ -81,6 +117,10 @@ def test_canonical_migration_executes_every_repeat_safe_statement_without_rewrit
     PLANE_SCHEMA_067_MIGRATION.apply(transaction)  # type: ignore[arg-type]
 
     assert transaction.executions == [(statement, ()) for statement in PLANE_SCHEMA_067_STATEMENTS]
+
+    transaction = _RecordingTransaction()
+    PLANE_SCHEMA_074_MIGRATION.apply(transaction)  # type: ignore[arg-type]
+    assert transaction.executions == [(statement, ()) for statement in PLANE_SCHEMA_074_STATEMENTS]
 
 
 @pytest.mark.parametrize("value", ["66.1", "066.01", "066.0001", "v066.001", "", 1])
@@ -100,6 +140,16 @@ def test_revision_format_is_exact(value: object) -> None:
         {"advisory_lock_ids": [(1, 2)]},
         {"advisory_lock_ids": ((1,),)},
         {"advisory_lock_ids": ((1, "two"),)},
+        {"accepted_predecessor_digests": []},
+        {"accepted_predecessor_digests": (("065.001",),)},
+        {"accepted_predecessor_digests": (("064.001", "a" * 64),)},
+        {
+            "accepted_predecessor_digests": (
+                ("065.001", "a" * 64),
+                ("065.001", "b" * 64),
+            )
+        },
+        {"accepted_predecessor_digests": (("065.001", "A" * 64),)},
     ],
 )
 def test_invalid_revision_metadata_fails_closed(arguments: dict[str, object]) -> None:

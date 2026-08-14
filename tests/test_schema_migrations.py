@@ -229,6 +229,59 @@ def test_predecessor_with_unknown_digest_is_rejected_without_upgrade() -> None:
     assert database.objects == {"legacy"}
 
 
+def _pinned_predecessor_runner(database: FakeDatabase) -> MigrationRunner:
+    registry = MigrationRegistry(
+        (
+            Migration(
+                name="067-to-074",
+                source_revisions=("067.001",),
+                target_revision="074.001",
+                checksum=_checksum("067-to-074"),
+                operation=_add_object("authority-schema"),
+            ),
+        )
+    )
+    revision = DataPlaneRevision(
+        schema_revision="074.001",
+        read_compatible_from=("067.001",),
+        migration_digest=registry.digest,
+        accepted_predecessor_digests=(("067.001", _checksum("067-registry")),),
+    )
+    return MigrationRunner(database, revision=revision, registry=registry)  # type: ignore[arg-type]
+
+
+def test_exact_pinned_predecessor_digest_is_accepted_and_replaced_atomically() -> None:
+    database = FakeDatabase(
+        revision="067.001",
+        digest=_checksum("067-registry"),
+        objects={"legacy"},
+    )
+
+    report = _pinned_predecessor_runner(database).run(expected_revision="074.001")
+
+    assert report.applied_steps == ("067-to-074",)
+    assert database.objects == {"legacy", "authority-schema"}
+    assert database.metadata == {
+        "revision": "074.001",
+        "astralplane_migration_digest": report.migration_digest,
+    }
+
+
+@pytest.mark.parametrize("digest", [None, "f" * 64])
+def test_pinned_predecessor_requires_exact_registry_evidence(digest: str | None) -> None:
+    database = FakeDatabase(revision="067.001", digest=digest, objects={"legacy"})
+
+    with pytest.raises(SchemaRevisionError, match=r"migration-set evidence|unrecognized"):
+        _pinned_predecessor_runner(database).run(expected_revision="074.001")
+
+    expected_metadata = {"revision": "067.001"}
+    if digest is not None:
+        expected_metadata["astralplane_migration_digest"] = digest
+    assert database.metadata == expected_metadata
+    assert database.objects == {"legacy"}
+    assert database.rollbacks == 1
+
+
 def test_concurrent_runners_apply_each_step_exactly_once() -> None:
     database = FakeDatabase()
     runner = _runner(database)

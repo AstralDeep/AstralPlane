@@ -11,8 +11,8 @@ from astralplane.errors import SchemaRevisionError
 _REVISION_PATTERN = re.compile(r"^[0-9]{3}\.[0-9]{3}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-SCHEMA_PREDECESSOR_REVISION: Final = "066.001"
-SCHEMA_REVISION: Final = "067.001"
+SCHEMA_PREDECESSOR_REVISION: Final = "067.001"
+SCHEMA_REVISION: Final = "074.001"
 READ_COMPATIBLE_FROM: Final = SCHEMA_PREDECESSOR_REVISION
 ADVISORY_LOCK_IDS: Final = ((1095980114, 60001), (1095980114, 60002))
 
@@ -31,6 +31,7 @@ class DataPlaneRevision:
     read_compatible_from: tuple[str, ...]
     migration_digest: str
     advisory_lock_ids: tuple[tuple[int, int], ...] = ADVISORY_LOCK_IDS
+    accepted_predecessor_digests: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         validate_revision(self.schema_revision, field="schema revision")
@@ -53,6 +54,30 @@ class DataPlaneRevision:
                 or not all(isinstance(part, int) for part in lock_id)
             ):
                 raise SchemaRevisionError("advisory lock identities must be integer pairs")
+        if not isinstance(self.accepted_predecessor_digests, tuple):
+            raise SchemaRevisionError("accepted predecessor digests must be an immutable tuple")
+        predecessor_revisions: set[str] = set()
+        for predecessor in self.accepted_predecessor_digests:
+            if not isinstance(predecessor, tuple) or len(predecessor) != 2:
+                raise SchemaRevisionError(
+                    "accepted predecessor digest entries must be revision/digest pairs"
+                )
+            source_revision = validate_revision(
+                predecessor[0], field="accepted predecessor revision"
+            )
+            source_digest = predecessor[1]
+            if source_revision not in normalized_sources:
+                raise SchemaRevisionError(
+                    "accepted predecessor digest revision must be read-compatible"
+                )
+            if source_revision in predecessor_revisions:
+                raise SchemaRevisionError("accepted predecessor digest revisions must be unique")
+            if (
+                not isinstance(source_digest, str)
+                or _SHA256_PATTERN.fullmatch(source_digest) is None
+            ):
+                raise SchemaRevisionError("accepted predecessor digest must be lowercase SHA-256")
+            predecessor_revisions.add(source_revision)
 
     @property
     def migration_lock(self) -> tuple[int, int]:
@@ -61,6 +86,21 @@ class DataPlaneRevision:
     def accepts_reader_at(self, revision: str) -> bool:
         observed = validate_revision(revision, field="observed revision")
         return observed == self.schema_revision or observed in self.read_compatible_from
+
+    def predecessor_digest_for(self, revision: str | None) -> str | None:
+        """Return the sole trusted registry digest for a declared predecessor."""
+
+        if revision is None:
+            return None
+        observed = validate_revision(revision, field="predecessor revision")
+        return next(
+            (
+                digest
+                for predecessor, digest in self.accepted_predecessor_digests
+                if predecessor == observed
+            ),
+            None,
+        )
 
 
 __all__ = (
