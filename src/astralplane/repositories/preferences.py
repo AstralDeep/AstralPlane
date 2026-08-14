@@ -1,0 +1,905 @@
+"""Feedback, onboarding-state, and personalization persistence."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from astralplane.contracts import QueryExecutor, Transaction
+from astralplane.repositories import (
+    RepositoryConflictError,
+    RepositoryDataError,
+    RepositoryNotFoundError,
+    RepositoryValidationError,
+    _bounded_limit,
+    _bounded_text,
+    _canonical_json,
+    _non_negative_int,
+    _required_id,
+    _row_value,
+    _single_returned,
+    _structured_json,
+)
+
+_SENTIMENTS = frozenset({"negative", "positive"})
+_FEEDBACK_CATEGORIES = frozenset(
+    {"irrelevant", "layout-broken", "other", "too-slow", "unspecified", "wrong-data"}
+)
+_COMMENT_SAFETY = frozenset({"clean", "quarantined"})
+_FEEDBACK_LIFECYCLES = frozenset({"active", "retracted", "superseded"})
+_ONBOARDING_STATES = frozenset({"completed", "in_progress", "not_started", "skipped"})
+_MEMORY_CATEGORIES = frozenset({"context", "goal", "preference", "profession", "workflow_tag"})
+_MEMORY_SOURCES = frozenset({"explicit", "promoted"})
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackRecord:
+    feedback_id: str
+    owner_id: str
+    conversation_id: str | None
+    correlation_id: str | None
+    source_agent: str | None
+    source_tool: str | None
+    component_id: str | None
+    sentiment: str
+    category: str
+    comment: str | None
+    comment_safety: str
+    comment_safety_reason: str | None
+    lifecycle: str
+    superseded_by: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingStateRecord:
+    owner_id: str
+    status: str
+    last_step_id: int | None
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+    skipped_at: datetime | None
+    dismissed_at: datetime | None
+    dismiss_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalizationProfileRecord:
+    owner_id: str
+    profession: str | None
+    goals: tuple[Any, ...]
+    personality: Mapping[str, Any]
+    dreaming_enabled: bool
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryRecord:
+    memory_id: str
+    owner_id: str
+    category: str
+    value: str
+    source: str
+    salience: float
+    created_at: int
+    updated_at: int
+    superseded_by: str | None
+    superseded_at: int | None
+    keywords: str | None
+    signature: str | None
+    valid_from: int | None
+    valid_to: int | None
+    ingested_at: int | None
+    recall_count: int
+    last_recalled_at: int | None
+    project_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaRecord:
+    owner_id: str
+    persona: str
+    score: float
+    updated_at: int
+
+
+def _optional_returned(result: object, operation: str) -> Any:
+    if not getattr(result, "returned_records", ()):
+        return None
+    return _single_returned(result, operation)
+
+
+def _aware_time(value: object, field: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise RepositoryValidationError(f"{field} must be a timezone-aware datetime")
+    return value
+
+
+def _stored_time(value: object, field: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise RepositoryDataError(
+            "persisted timestamp is not timezone-aware", metadata={"field": field}
+        )
+    return value
+
+
+def _optional_id(value: object, field: str) -> str | None:
+    return None if value is None else _required_id(value, field)
+
+
+def _feedback(row: Mapping[str, Any]) -> FeedbackRecord:
+    return FeedbackRecord(
+        feedback_id=str(_row_value(row, "id")),
+        owner_id=str(_row_value(row, "user_id")),
+        conversation_id=(
+            None if row.get("conversation_id") is None else str(row["conversation_id"])
+        ),
+        correlation_id=(None if row.get("correlation_id") is None else str(row["correlation_id"])),
+        source_agent=(None if row.get("source_agent") is None else str(row["source_agent"])),
+        source_tool=(None if row.get("source_tool") is None else str(row["source_tool"])),
+        component_id=(None if row.get("component_id") is None else str(row["component_id"])),
+        sentiment=str(_row_value(row, "sentiment")),
+        category=str(_row_value(row, "category")),
+        comment=None if row.get("comment_raw") is None else str(row["comment_raw"]),
+        comment_safety=str(_row_value(row, "comment_safety")),
+        comment_safety_reason=(
+            None if row.get("comment_safety_reason") is None else str(row["comment_safety_reason"])
+        ),
+        lifecycle=str(_row_value(row, "lifecycle")),
+        superseded_by=(None if row.get("superseded_by") is None else str(row["superseded_by"])),
+        created_at=_stored_time(_row_value(row, "created_at"), "created_at"),
+        updated_at=_stored_time(_row_value(row, "updated_at"), "updated_at"),
+    )
+
+
+def _onboarding(row: Mapping[str, Any]) -> OnboardingStateRecord:
+    return OnboardingStateRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        status=str(_row_value(row, "status")),
+        last_step_id=(None if row.get("last_step_id") is None else int(row["last_step_id"])),
+        started_at=_stored_time(_row_value(row, "started_at"), "started_at"),
+        updated_at=_stored_time(_row_value(row, "updated_at"), "updated_at"),
+        completed_at=(
+            None
+            if row.get("completed_at") is None
+            else _stored_time(row["completed_at"], "completed_at")
+        ),
+        skipped_at=(
+            None if row.get("skipped_at") is None else _stored_time(row["skipped_at"], "skipped_at")
+        ),
+        dismissed_at=(
+            None
+            if row.get("dismissed_at") is None
+            else _stored_time(row["dismissed_at"], "dismissed_at")
+        ),
+        dismiss_count=int(row.get("dismiss_count") or 0),
+    )
+
+
+def _profile(row: Mapping[str, Any]) -> PersonalizationProfileRecord:
+    goals = _structured_json(_row_value(row, "goals"), "goals")
+    personality = _structured_json(_row_value(row, "personality"), "personality")
+    if not isinstance(goals, tuple) or not isinstance(personality, Mapping):
+        raise RepositoryDataError("personalization goals/personality have invalid shapes")
+    return PersonalizationProfileRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        profession=(None if row.get("profession") is None else str(row["profession"])),
+        goals=goals,
+        personality=personality,
+        dreaming_enabled=bool(_row_value(row, "dreaming_enabled")),
+        created_at=int(_row_value(row, "created_at")),
+        updated_at=int(_row_value(row, "updated_at")),
+    )
+
+
+def _memory(row: Mapping[str, Any]) -> MemoryRecord:
+    return MemoryRecord(
+        memory_id=str(_row_value(row, "id")),
+        owner_id=str(_row_value(row, "user_id")),
+        category=str(_row_value(row, "category")),
+        value=str(_row_value(row, "value")),
+        source=str(_row_value(row, "source")),
+        salience=float(_row_value(row, "salience")),
+        created_at=int(_row_value(row, "created_at")),
+        updated_at=int(_row_value(row, "updated_at")),
+        superseded_by=(None if row.get("superseded_by") is None else str(row["superseded_by"])),
+        superseded_at=(None if row.get("superseded_at") is None else int(row["superseded_at"])),
+        keywords=None if row.get("keywords") is None else str(row["keywords"]),
+        signature=None if row.get("signature") is None else str(row["signature"]),
+        valid_from=None if row.get("valid_from") is None else int(row["valid_from"]),
+        valid_to=None if row.get("valid_to") is None else int(row["valid_to"]),
+        ingested_at=None if row.get("ingested_at") is None else int(row["ingested_at"]),
+        recall_count=int(row.get("recall_count") or 0),
+        last_recalled_at=(
+            None if row.get("last_recalled_at") is None else int(row["last_recalled_at"])
+        ),
+        project_id=None if row.get("project_id") is None else str(row["project_id"]),
+    )
+
+
+def _persona(row: Mapping[str, Any]) -> PersonaRecord:
+    return PersonaRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        persona=str(_row_value(row, "persona")),
+        score=float(_row_value(row, "score")),
+        updated_at=int(_row_value(row, "updated_at")),
+    )
+
+
+class FeedbackRepository:
+    _FIELDS = """
+        id, user_id, conversation_id, correlation_id, source_agent,
+        source_tool, component_id, sentiment, category, comment_raw,
+        comment_safety, comment_safety_reason, lifecycle, superseded_by,
+        created_at, updated_at
+    """
+
+    def submit(
+        self,
+        transaction: Transaction,
+        record: FeedbackRecord,
+    ) -> FeedbackRecord:
+        feedback_id = _required_id(record.feedback_id, "feedback_id")
+        owner_id = _required_id(record.owner_id, "owner_id")
+        conversation_id = _optional_id(record.conversation_id, "conversation_id")
+        correlation_id = _optional_id(record.correlation_id, "correlation_id")
+        source_agent = _optional_id(record.source_agent, "source_agent")
+        source_tool = _optional_id(record.source_tool, "source_tool")
+        component_id = _optional_id(record.component_id, "component_id")
+        if record.sentiment not in _SENTIMENTS:
+            raise RepositoryValidationError("feedback sentiment is unsupported")
+        if record.category not in _FEEDBACK_CATEGORIES:
+            raise RepositoryValidationError("feedback category is unsupported")
+        if record.comment_safety not in _COMMENT_SAFETY:
+            raise RepositoryValidationError("feedback comment safety is unsupported")
+        if record.lifecycle != "active" or record.superseded_by is not None:
+            raise RepositoryValidationError("new feedback must begin active and unsuperseded")
+        if record.comment is not None:
+            _bounded_text(record.comment, "comment", maximum=8192, allow_empty=True)
+        if record.comment_safety_reason is not None:
+            _bounded_text(
+                record.comment_safety_reason,
+                "comment_safety_reason",
+                maximum=1024,
+                allow_empty=True,
+            )
+        created_at = _aware_time(record.created_at, "created_at")
+        updated_at = _aware_time(record.updated_at, "updated_at")
+        if updated_at < created_at:
+            raise RepositoryValidationError("feedback updated_at cannot precede created_at")
+        result = transaction.execute(
+            f"""
+            INSERT INTO component_feedback (
+                id, user_id, conversation_id, correlation_id, source_agent,
+                source_tool, component_id, sentiment, category, comment_raw,
+                comment_safety, comment_safety_reason, lifecycle, superseded_by,
+                created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      'active', NULL, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING {self._FIELDS}
+            """,
+            (
+                feedback_id,
+                owner_id,
+                conversation_id,
+                correlation_id,
+                source_agent,
+                source_tool,
+                component_id,
+                record.sentiment,
+                record.category,
+                record.comment,
+                record.comment_safety,
+                record.comment_safety_reason,
+                created_at,
+                updated_at,
+            ),
+        )
+        row = _optional_returned(result, "feedback.submit")
+        if row is not None:
+            return _feedback(row)
+        existing = self.get(transaction, owner_id=owner_id, feedback_id=feedback_id)
+        if existing is None:
+            raise RepositoryConflictError(
+                "feedback identity is owned by another namespace",
+                metadata={"operation": "feedback.submit"},
+            )
+        expected = (
+            conversation_id,
+            correlation_id,
+            source_agent,
+            source_tool,
+            component_id,
+            record.sentiment,
+            record.category,
+            record.comment,
+            record.comment_safety,
+            record.comment_safety_reason,
+            created_at,
+            updated_at,
+        )
+        observed = (
+            existing.conversation_id,
+            existing.correlation_id,
+            existing.source_agent,
+            existing.source_tool,
+            existing.component_id,
+            existing.sentiment,
+            existing.category,
+            existing.comment,
+            existing.comment_safety,
+            existing.comment_safety_reason,
+            existing.created_at,
+            existing.updated_at,
+        )
+        if expected != observed:
+            raise RepositoryConflictError(
+                "feedback idempotency identity was reused with different semantics",
+                metadata={"operation": "feedback.submit"},
+            )
+        return existing
+
+    def get(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        feedback_id: str,
+    ) -> FeedbackRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        feedback_id = _required_id(feedback_id, "feedback_id")
+        row = query.fetch_one(
+            f"SELECT {self._FIELDS} FROM component_feedback WHERE id = %s AND user_id = %s",
+            (feedback_id, owner_id),
+        )
+        return None if row is None else _feedback(row)
+
+    def list_for_owner(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        lifecycle: str = "active",
+        limit: int = 50,
+    ) -> tuple[FeedbackRecord, ...]:
+        owner_id = _required_id(owner_id, "owner_id")
+        if lifecycle not in _FEEDBACK_LIFECYCLES:
+            raise RepositoryValidationError("feedback lifecycle is unsupported")
+        limit = _bounded_limit(limit)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._FIELDS}
+            FROM component_feedback
+            WHERE user_id = %s AND lifecycle = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+            """,
+            (owner_id, lifecycle, limit),
+        )
+        return tuple(_feedback(row) for row in rows)
+
+    def retract(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        feedback_id: str,
+        updated_at: datetime,
+    ) -> FeedbackRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        feedback_id = _required_id(feedback_id, "feedback_id")
+        updated_at = _aware_time(updated_at, "updated_at")
+        result = transaction.execute(
+            f"""
+            UPDATE component_feedback
+            SET lifecycle = 'retracted', updated_at = %s
+            WHERE id = %s AND user_id = %s AND lifecycle = 'active'
+            RETURNING {self._FIELDS}
+            """,
+            (updated_at, feedback_id, owner_id),
+        )
+        row = _optional_returned(result, "feedback.retract")
+        return None if row is None else _feedback(row)
+
+    def supersede(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        old_feedback_id: str,
+        replacement: FeedbackRecord,
+        updated_at: datetime,
+    ) -> FeedbackRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        old_feedback_id = _required_id(old_feedback_id, "old_feedback_id")
+        if replacement.owner_id != owner_id:
+            raise RepositoryValidationError("replacement feedback owner changed")
+        updated_at = _aware_time(updated_at, "updated_at")
+        new_record = self.submit(transaction, replacement)
+        result = transaction.execute(
+            """
+            UPDATE component_feedback
+            SET lifecycle = 'superseded', superseded_by = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s AND lifecycle = 'active'
+            """,
+            (new_record.feedback_id, updated_at, old_feedback_id, owner_id),
+        )
+        if result.rowcount == 1:
+            return new_record
+        old = self.get(transaction, owner_id=owner_id, feedback_id=old_feedback_id)
+        if old is None:
+            raise RepositoryNotFoundError(
+                "feedback to supersede was not found",
+                metadata={"operation": "feedback.supersede"},
+            )
+        if old.lifecycle == "superseded" and old.superseded_by == new_record.feedback_id:
+            return new_record
+        raise RepositoryConflictError(
+            "feedback is no longer active",
+            metadata={"operation": "feedback.supersede"},
+        )
+
+
+class OnboardingRepository:
+    _FIELDS = """
+        user_id, status, last_step_id, started_at, updated_at,
+        completed_at, skipped_at, dismissed_at, dismiss_count
+    """
+
+    def get_state(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> OnboardingStateRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            f"SELECT {self._FIELDS} FROM onboarding_state WHERE user_id = %s",
+            (owner_id,),
+        )
+        return None if row is None else _onboarding(row)
+
+    def put_state(
+        self,
+        transaction: Transaction,
+        record: OnboardingStateRecord,
+        *,
+        expected_updated_at: datetime | None = None,
+    ) -> OnboardingStateRecord:
+        owner_id = _required_id(record.owner_id, "owner_id")
+        if record.status not in _ONBOARDING_STATES:
+            raise RepositoryValidationError("onboarding status is unsupported")
+        if record.last_step_id is not None:
+            _non_negative_int(record.last_step_id, "last_step_id")
+        started_at = _aware_time(record.started_at, "started_at")
+        updated_at = _aware_time(record.updated_at, "updated_at")
+        completed_at = (
+            None
+            if record.completed_at is None
+            else _aware_time(record.completed_at, "completed_at")
+        )
+        skipped_at = (
+            None if record.skipped_at is None else _aware_time(record.skipped_at, "skipped_at")
+        )
+        dismissed_at = (
+            None
+            if record.dismissed_at is None
+            else _aware_time(record.dismissed_at, "dismissed_at")
+        )
+        dismiss_count = _non_negative_int(record.dismiss_count, "dismiss_count")
+        if expected_updated_at is None:
+            result = transaction.execute(
+                f"""
+                INSERT INTO onboarding_state (
+                    user_id, status, last_step_id, started_at, updated_at,
+                    completed_at, skipped_at, dismissed_at, dismiss_count
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+                RETURNING {self._FIELDS}
+                """,
+                (
+                    owner_id,
+                    record.status,
+                    record.last_step_id,
+                    started_at,
+                    updated_at,
+                    completed_at,
+                    skipped_at,
+                    dismissed_at,
+                    dismiss_count,
+                ),
+            )
+        else:
+            expected_updated_at = _aware_time(expected_updated_at, "expected_updated_at")
+            if updated_at <= expected_updated_at:
+                raise RepositoryValidationError(
+                    "onboarding updated_at must advance the compare-and-set fence"
+                )
+            result = transaction.execute(
+                f"""
+                UPDATE onboarding_state
+                SET status = %s, last_step_id = %s, updated_at = %s,
+                    completed_at = %s, skipped_at = %s,
+                    dismissed_at = %s, dismiss_count = %s
+                WHERE user_id = %s AND updated_at = %s
+                RETURNING {self._FIELDS}
+                """,
+                (
+                    record.status,
+                    record.last_step_id,
+                    updated_at,
+                    completed_at,
+                    skipped_at,
+                    dismissed_at,
+                    dismiss_count,
+                    owner_id,
+                    expected_updated_at,
+                ),
+            )
+        row = _optional_returned(result, "onboarding.put_state")
+        if row is not None:
+            return _onboarding(row)
+        existing = self.get_state(transaction, owner_id=owner_id)
+        if existing is None:
+            raise RepositoryNotFoundError(
+                "onboarding state was not found",
+                metadata={"operation": "onboarding.put_state"},
+            )
+        if expected_updated_at is None and existing == record:
+            return existing
+        raise RepositoryConflictError(
+            "onboarding state changed since it was read",
+            metadata={"operation": "onboarding.put_state"},
+        )
+
+    def record_dismissal(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        dismissed_at: datetime,
+    ) -> OnboardingStateRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        dismissed_at = _aware_time(dismissed_at, "dismissed_at")
+        result = transaction.execute(
+            f"""
+            UPDATE onboarding_state
+            SET dismissed_at = %s, dismiss_count = dismiss_count + 1,
+                updated_at = %s
+            WHERE user_id = %s
+            RETURNING {self._FIELDS}
+            """,
+            (dismissed_at, dismissed_at, owner_id),
+        )
+        row = _optional_returned(result, "onboarding.record_dismissal")
+        return None if row is None else _onboarding(row)
+
+
+class PersonalizationRepository:
+    _PROFILE_FIELDS = """
+        user_id, profession, goals, personality, dreaming_enabled,
+        created_at, updated_at
+    """
+    _MEMORY_FIELDS = """
+        id, user_id, category, value, source, salience, created_at, updated_at,
+        superseded_by, superseded_at, keywords, signature, valid_from, valid_to,
+        ingested_at, recall_count, last_recalled_at, project_id
+    """
+
+    def get_profile(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> PersonalizationProfileRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            f"SELECT {self._PROFILE_FIELDS} FROM user_personalization WHERE user_id = %s",
+            (owner_id,),
+        )
+        return None if row is None else _profile(row)
+
+    def put_profile(
+        self,
+        transaction: Transaction,
+        record: PersonalizationProfileRecord,
+        *,
+        expected_updated_at: int | None = None,
+    ) -> PersonalizationProfileRecord:
+        owner_id = _required_id(record.owner_id, "owner_id")
+        if record.profession is not None:
+            _bounded_text(record.profession, "profession", maximum=1024, allow_empty=True)
+        created_at = _non_negative_int(record.created_at, "created_at")
+        updated_at = _non_negative_int(record.updated_at, "updated_at")
+        goals = _canonical_json(tuple(record.goals), "goals")
+        personality = _canonical_json(dict(record.personality), "personality")
+        if expected_updated_at is None:
+            result = transaction.execute(
+                f"""
+                INSERT INTO user_personalization (
+                    user_id, profession, goals, personality, dreaming_enabled,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+                RETURNING {self._PROFILE_FIELDS}
+                """,
+                (
+                    owner_id,
+                    record.profession,
+                    goals,
+                    personality,
+                    bool(record.dreaming_enabled),
+                    created_at,
+                    updated_at,
+                ),
+            )
+        else:
+            expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
+            if updated_at <= expected_updated_at:
+                raise RepositoryValidationError(
+                    "profile updated_at must advance the compare-and-set fence"
+                )
+            result = transaction.execute(
+                f"""
+                UPDATE user_personalization
+                SET profession = %s, goals = %s::jsonb, personality = %s::jsonb,
+                    dreaming_enabled = %s, updated_at = %s
+                WHERE user_id = %s AND updated_at = %s
+                RETURNING {self._PROFILE_FIELDS}
+                """,
+                (
+                    record.profession,
+                    goals,
+                    personality,
+                    bool(record.dreaming_enabled),
+                    updated_at,
+                    owner_id,
+                    expected_updated_at,
+                ),
+            )
+        row = _optional_returned(result, "personalization.put_profile")
+        if row is not None:
+            return _profile(row)
+        existing = self.get_profile(transaction, owner_id=owner_id)
+        if existing is None:
+            raise RepositoryNotFoundError(
+                "personalization profile was not found",
+                metadata={"operation": "personalization.put_profile"},
+            )
+        if expected_updated_at is None and existing == record:
+            return existing
+        raise RepositoryConflictError(
+            "personalization profile changed since it was read",
+            metadata={"operation": "personalization.put_profile"},
+        )
+
+    def create_memory(
+        self,
+        transaction: Transaction,
+        record: MemoryRecord,
+    ) -> MemoryRecord:
+        memory_id = _required_id(record.memory_id, "memory_id")
+        owner_id = _required_id(record.owner_id, "owner_id")
+        if record.category not in _MEMORY_CATEGORIES:
+            raise RepositoryValidationError("memory category is unsupported")
+        if record.source not in _MEMORY_SOURCES:
+            raise RepositoryValidationError("memory source is unsupported")
+        value = _bounded_text(record.value, "value", maximum=16384)
+        created_at = _non_negative_int(record.created_at, "created_at")
+        updated_at = _non_negative_int(record.updated_at, "updated_at")
+        if record.superseded_by is not None or record.superseded_at is not None:
+            raise RepositoryValidationError("new memory must begin live")
+        result = transaction.execute(
+            f"""
+            INSERT INTO memory_item (
+                id, user_id, category, value, source, salience, created_at,
+                updated_at, superseded_by, superseded_at, keywords, signature,
+                valid_from, valid_to, ingested_at, recall_count,
+                last_recalled_at, project_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s,
+                      %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING {self._MEMORY_FIELDS}
+            """,
+            (
+                memory_id,
+                owner_id,
+                record.category,
+                value,
+                record.source,
+                float(record.salience),
+                created_at,
+                updated_at,
+                record.keywords,
+                record.signature,
+                record.valid_from,
+                record.valid_to,
+                record.ingested_at,
+                _non_negative_int(record.recall_count, "recall_count"),
+                record.last_recalled_at,
+                record.project_id,
+            ),
+        )
+        row = _optional_returned(result, "personalization.create_memory")
+        if row is not None:
+            return _memory(row)
+        existing = self.get_memory(transaction, owner_id=owner_id, memory_id=memory_id)
+        if existing is None:
+            raise RepositoryConflictError(
+                "memory identity is owned by another namespace",
+                metadata={"operation": "personalization.create_memory"},
+            )
+        if existing != record:
+            raise RepositoryConflictError(
+                "memory idempotency identity was reused with different semantics",
+                metadata={"operation": "personalization.create_memory"},
+            )
+        return existing
+
+    def get_memory(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        memory_id: str,
+    ) -> MemoryRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        row = query.fetch_one(
+            f"""
+            SELECT {self._MEMORY_FIELDS}
+            FROM memory_item
+            WHERE id = %s AND user_id = %s
+            """,
+            (memory_id, owner_id),
+        )
+        return None if row is None else _memory(row)
+
+    def list_memory(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        project_id: str | None = None,
+        include_global: bool = True,
+        limit: int = 200,
+    ) -> tuple[MemoryRecord, ...]:
+        owner_id = _required_id(owner_id, "owner_id")
+        limit = _bounded_limit(limit, maximum=1000)
+        parameters: list[object] = [owner_id]
+        project_clause = ""
+        if project_id is not None:
+            project_id = _required_id(project_id, "project_id")
+            if include_global:
+                project_clause = " AND (project_id = %s OR project_id IS NULL)"
+            else:
+                project_clause = " AND project_id = %s"
+            parameters.append(project_id)
+        parameters.append(limit)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._MEMORY_FIELDS}
+            FROM memory_item
+            WHERE user_id = %s AND superseded_at IS NULL{project_clause}
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+            """,
+            tuple(parameters),
+        )
+        return tuple(_memory(row) for row in rows)
+
+    def supersede_memory(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        memory_id: str,
+        superseded_at: int,
+        replacement_id: str | None = None,
+    ) -> bool:
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        replacement_id = _optional_id(replacement_id, "replacement_id")
+        superseded_at = _non_negative_int(superseded_at, "superseded_at")
+        result = transaction.execute(
+            """
+            UPDATE memory_item
+            SET superseded_by = %s, superseded_at = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s AND superseded_at IS NULL
+            """,
+            (replacement_id, superseded_at, superseded_at, memory_id, owner_id),
+        )
+        if result.rowcount == 1:
+            return True
+        existing = self.get_memory(transaction, owner_id=owner_id, memory_id=memory_id)
+        return bool(
+            existing is not None
+            and existing.superseded_at == superseded_at
+            and existing.superseded_by == replacement_id
+        )
+
+    def record_recall(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        memory_id: str,
+        recalled_at: int,
+    ) -> MemoryRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        recalled_at = _non_negative_int(recalled_at, "recalled_at")
+        result = transaction.execute(
+            f"""
+            UPDATE memory_item
+            SET recall_count = COALESCE(recall_count, 0) + 1,
+                last_recalled_at = %s
+            WHERE id = %s AND user_id = %s AND superseded_at IS NULL
+            RETURNING {self._MEMORY_FIELDS}
+            """,
+            (recalled_at, memory_id, owner_id),
+        )
+        row = _optional_returned(result, "personalization.record_recall")
+        return None if row is None else _memory(row)
+
+    def put_persona(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        persona: str,
+        score: float,
+        updated_at: int,
+    ) -> PersonaRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        persona = _bounded_text(persona, "persona", maximum=16384, allow_empty=True)
+        updated_at = _non_negative_int(updated_at, "updated_at")
+        result = transaction.execute(
+            """
+            INSERT INTO user_persona (user_id, persona, score, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                persona = EXCLUDED.persona,
+                score = EXCLUDED.score,
+                updated_at = EXCLUDED.updated_at
+            WHERE user_persona.updated_at IS NULL
+               OR user_persona.updated_at <= EXCLUDED.updated_at
+            RETURNING user_id, persona, score, updated_at
+            """,
+            (owner_id, persona, float(score), updated_at),
+        )
+        row = _optional_returned(result, "personalization.put_persona")
+        if row is None:
+            raise RepositoryConflictError(
+                "persona update is older than the durable value",
+                metadata={"operation": "personalization.put_persona"},
+            )
+        return _persona(row)
+
+
+class PreferencesRepository:
+    """Grouping of preferences stores without connection or policy ownership."""
+
+    def __init__(self) -> None:
+        self.feedback = FeedbackRepository()
+        self.onboarding = OnboardingRepository()
+        self.personalization = PersonalizationRepository()
+
+
+__all__ = (
+    "FeedbackRecord",
+    "FeedbackRepository",
+    "MemoryRecord",
+    "OnboardingRepository",
+    "OnboardingStateRecord",
+    "PersonaRecord",
+    "PersonalizationProfileRecord",
+    "PersonalizationRepository",
+    "PreferencesRepository",
+)

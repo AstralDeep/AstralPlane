@@ -1,0 +1,70 @@
+{
+  "schemaRevision": "066.001",
+  "owners": [
+    "fixture-owner-a",
+    "fixture-owner-b"
+  ],
+  "records": {
+    "audit": [
+      {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventId": "audit-1",
+        "ownerId": "fixture-owner-a",
+        "precedingDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sequence": 1
+      }
+    ],
+    "artifacts": [
+      {
+        "artifactId": "artifact-1",
+        "blobKey": "artifact.txt",
+        "ownerId": "fixture-owner-a",
+        "version": 1
+      }
+    ],
+    "history": [
+      {
+        "conversationId": "conversation-1",
+        "messageId": "message-1",
+        "ownerId": "fixture-owner-a",
+        "sequence": 1
+      }
+    ],
+    "preferences": [
+      {
+        "ownerId": "fixture-owner-a",
+        "preferenceId": "preference-1",
+        "version": 2
+      }
+    ],
+    "remote": [
+      {
+        "machineId": "machine-1",
+        "operationId": "remote-operation-1",
+        "ownerId": "fixture-owner-a",
+        "state": "completed"
+      }
+    ],
+    "scheduler": [
+      {
+        "operationId": "scheduled-operation-1",
+        "ownerId": "fixture-owner-a",
+        "state": "committed"
+      }
+    ],
+    "voice": [
+      {
+        "ownerId": "fixture-owner-a",
+        "sessionId": "voice-session-1",
+        "turnId": "voice-turn-1"
+      }
+    ],
+    "workspaces": [
+      {
+        "layoutRevision": 3,
+        "ownerId": "fixture-owner-a",
+        "workspaceId": "workspace-1"
+      }
+    ]
+  }
+}

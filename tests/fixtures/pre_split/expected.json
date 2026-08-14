@@ -1,0 +1,17 @@
+{
+  "blobBytes": 49,
+  "blobRelativePath": "blobs/artifact.txt",
+  "blobSha256": "b70ef33cdab65179930b27076c17c861f3f6b00b7025833378ac39728cec4be4",
+  "ownerCount": 2,
+  "recordDomains": [
+    "audit",
+    "artifacts",
+    "history",
+    "preferences",
+    "remote",
+    "scheduler",
+    "voice",
+    "workspaces"
+  ],
+  "schemaRevisionAfterUpgrade": "067.001"
+}
