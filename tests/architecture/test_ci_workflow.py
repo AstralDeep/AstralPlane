@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
@@ -98,6 +100,8 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
     assert CHECKOUT_ACTION in uses
     assert SETUP_UV_ACTION in uses
+    setup_uv_uses = [action for action in uses if action.startswith("astral-sh/setup-uv@")]
+    assert setup_uv_uses == [SETUP_UV_ACTION] * len(OWNER_JOBS)
 
     for owner_job in OWNER_JOBS:
         setup_uv_steps = re.findall(
@@ -107,6 +111,27 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
         )
         assert len(setup_uv_steps) == 1
         assert f'          version: "{SETUP_UV_VERSION}"' in setup_uv_steps[0]
+
+
+def test_owner_workflow_rejects_setup_uv_outside_expected_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _workflow_text()
+    gates_step = "    steps:\n      - name: Require every owner gate"
+    mutated = text.replace(
+        gates_step,
+        "    steps:\n"
+        f"      - uses: {SETUP_UV_ACTION} # v7.2.1\n"
+        "      - name: Require every owner gate",
+        1,
+    )
+    assert mutated != text
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_owner_workflow_is_active_pinned_and_read_only()
 
 
 def test_quality_job_runs_locked_source_and_architecture_gates() -> None:
