@@ -7,6 +7,8 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+import yaml
+from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
@@ -87,6 +89,29 @@ def _run_commands(job: str) -> tuple[str, ...]:
     return tuple(commands)
 
 
+def _workflow_actions(text: str) -> tuple[str, ...]:
+    document = yaml.compose(text)
+    assert document is not None, "workflow YAML document is empty"
+    actions: list[str] = []
+
+    def visit(node: Node) -> None:
+        if isinstance(node, MappingNode):
+            for key_node, value_node in node.value:
+                if isinstance(key_node, ScalarNode) and key_node.value == "uses":
+                    assert isinstance(value_node, ScalarNode), (
+                        "workflow action reference must be a scalar"
+                    )
+                    actions.append(value_node.value)
+                visit(key_node)
+                visit(value_node)
+        elif isinstance(node, SequenceNode):
+            for item_node in node.value:
+                visit(item_node)
+
+    visit(document)
+    return tuple(actions)
+
+
 def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     text = _workflow_text()
     jobs = _job_blocks(text)
@@ -99,7 +124,7 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     assert "components/AstralPlane" not in text
     assert text.count("astral-sh/setup-uv@") == len(OWNER_JOBS)
 
-    uses = re.findall(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", text, flags=re.MULTILINE)
+    uses = _workflow_actions(text)
     assert uses
     assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
     assert Counter(uses) == Counter(
@@ -199,6 +224,45 @@ def test_owner_workflow_rejects_split_line_unapproved_action(
 
     with pytest.raises(AssertionError):
         test_owner_workflow_is_active_pinned_and_read_only()
+
+
+@pytest.mark.parametrize(
+    "injected_step",
+    (
+        f"      -\n        uses : {UNAPPROVED_ACTION}\n",
+        f'      - "uses": {UNAPPROVED_ACTION}\n',
+        f"      - {{uses: {UNAPPROVED_ACTION}}}\n",
+    ),
+    ids=("split-line-spaced-colon", "quoted-key", "flow-mapping"),
+)
+def test_owner_workflow_rejects_unapproved_action_yaml_forms(
+    injected_step: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _workflow_text()
+    gates_step = "    steps:\n      - name: Require every owner gate"
+    mutated = text.replace(
+        gates_step,
+        f"    steps:\n{injected_step}      - name: Require every owner gate",
+        1,
+    )
+    assert mutated != text
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_owner_workflow_is_active_pinned_and_read_only()
+
+
+def test_workflow_action_inventory_rejects_non_scalar_values() -> None:
+    with pytest.raises(AssertionError):
+        _workflow_actions(f"steps: [{{uses: [{UNAPPROVED_ACTION}]}}]")
+
+
+def test_workflow_action_inventory_preserves_duplicate_uses_keys() -> None:
+    text = f"step:\n  uses: {CHECKOUT_ACTION}\n  uses: {SETUP_UV_ACTION}\n"
+
+    assert _workflow_actions(text) == (CHECKOUT_ACTION, SETUP_UV_ACTION)
 
 
 def test_quality_job_runs_locked_source_and_architecture_gates() -> None:
