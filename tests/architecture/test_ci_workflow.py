@@ -17,6 +17,7 @@ BUILD_REQUIREMENTS_PATH = (
 
 CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 WRONG_CHECKOUT_ACTION = "actions/checkout@1111111111111111111111111111111111111111"
+UNAPPROVED_ACTION = "example/unapproved-action@1111111111111111111111111111111111111111"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
 SETUP_UV_VERSION = "0.11.26"
 POSTGRES_IMAGE = (
@@ -98,7 +99,7 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     assert "components/AstralPlane" not in text
     assert text.count("astral-sh/setup-uv@") == len(OWNER_JOBS)
 
-    uses = re.findall(r"^\s*- uses:\s*([^\s#]+)", text, flags=re.MULTILINE)
+    uses = re.findall(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", text, flags=re.MULTILINE)
     assert uses
     assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
     assert Counter(uses) == Counter(
@@ -170,6 +171,28 @@ def test_owner_workflow_rejects_wrong_checkout_sha(
     mutated = text.replace(CHECKOUT_ACTION, WRONG_CHECKOUT_ACTION, 1)
     assert mutated != text
     assert mutated.count(WRONG_CHECKOUT_ACTION) == 1
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_owner_workflow_is_active_pinned_and_read_only()
+
+
+def test_owner_workflow_rejects_split_line_unapproved_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _workflow_text()
+    gates_step = "    steps:\n      - name: Require every owner gate"
+    mutated = text.replace(
+        gates_step,
+        "    steps:\n"
+        "      -\n"
+        f"        uses: {UNAPPROVED_ACTION}\n"
+        "      - name: Require every owner gate",
+        1,
+    )
+    assert mutated != text
     mutated_path = tmp_path / "ci.yml"
     mutated_path.write_text(mutated, encoding="utf-8")
     monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
