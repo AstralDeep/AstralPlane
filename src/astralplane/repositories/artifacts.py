@@ -40,9 +40,7 @@ from astralplane.repositories import (
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_CANONICAL_LEASE_ID = re.compile(
-    r"^[A-Za-z0-9]([A-Za-z0-9._:@/-]{0,126}[A-Za-z0-9])?$"
-)
+_CANONICAL_LEASE_ID = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._:@/-]{0,126}[A-Za-z0-9])?$")
 _PHYSICAL_ATTACHMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,254}$")
 _ATTACHMENT_CATEGORIES = frozenset(
     {
@@ -115,9 +113,8 @@ class AttachmentMaterializationBeginResult:
         if self.state is AttachmentMaterializationState.PENDING:
             if self.pending is None or self.ready is not None:
                 raise ValueError("pending begin result must carry only pending metadata")
-        elif (
-            self.state is AttachmentMaterializationState.READY
-            and (self.ready is None or self.pending is not None)
+        elif self.state is AttachmentMaterializationState.READY and (
+            self.ready is None or self.pending is not None
         ):
             raise ValueError("ready begin result must carry only ready metadata")
 
@@ -188,9 +185,7 @@ def _lease_seconds(value: object) -> int:
         or not isinstance(value, int)
         or not 1 <= value <= _MAX_MATERIALIZATION_LEASE_SECONDS
     ):
-        raise RepositoryValidationError(
-            "lease_seconds must be an integer in [1, 86400]"
-        )
+        raise RepositoryValidationError("lease_seconds must be an integer in [1, 86400]")
     return value
 
 
@@ -204,9 +199,7 @@ def _lease_id(value: object) -> str:
 
 def _physical_attachment_id(value: object) -> str:
     if not isinstance(value, str) or _PHYSICAL_ATTACHMENT_ID.fullmatch(value) is None:
-        raise RepositoryValidationError(
-            "attachment_id must be one safe bounded storage component"
-        )
+        raise RepositoryValidationError("attachment_id must be one safe bounded storage component")
     try:
         normalized = validate_blob_storage_key(value)
     except SQLContractError as exc:
@@ -214,9 +207,7 @@ def _physical_attachment_id(value: object) -> str:
             "attachment_id must be one safe bounded storage component"
         ) from exc
     if "/" in normalized:
-        raise RepositoryValidationError(
-            "attachment_id must be one safe bounded storage component"
-        )
+        raise RepositoryValidationError("attachment_id must be one safe bounded storage component")
     return normalized
 
 
@@ -256,9 +247,7 @@ def _materialization_physical_identity(
             "attachment materialization has an invalid physical storage identity"
         ) from exc
     if normalized_filename != filename or "/" in normalized_filename:
-        raise RepositoryValidationError(
-            "filename must be one exact safe storage component"
-        )
+        raise RepositoryValidationError("filename must be one exact safe storage component")
     normalized_key = _materialization_storage_key(
         storage_key,
         attachment_id=attachment_id,
@@ -333,9 +322,7 @@ def _pending_materialization(
     if row.get("deleted_at") is not None:
         raise RepositoryDataError("pending attachment materialization is abandoned")
     if not isinstance(expires_at, datetime) or expires_at.tzinfo is None:
-        raise RepositoryDataError(
-            "pending attachment lease expiry is not timezone-aware"
-        )
+        raise RepositoryDataError("pending attachment lease expiry is not timezone-aware")
     try:
         owner_id = validate_blob_owner_id(str(_row_value(row, "user_id")))
         attachment_id = _physical_attachment_id(_row_value(row, "attachment_id"))
@@ -547,9 +534,7 @@ class MaterializationRepository:
                 "pending materialization identity was reused with different semantics",
                 metadata={"operation": "materialization.begin_pending"},
             )
-        state = AttachmentMaterializationState(
-            str(_row_value(existing, "materialization_state"))
-        )
+        state = AttachmentMaterializationState(str(_row_value(existing, "materialization_state")))
         if state is AttachmentMaterializationState.PENDING:
             return AttachmentMaterializationBeginResult(
                 state=state,
@@ -632,9 +617,7 @@ class MaterializationRepository:
         """Finalize metadata under the same locked fence used to publish staged bytes."""
 
         if not isinstance(fence, _AttachmentMaterializationPublishFence):
-            raise RepositoryValidationError(
-                "fence must be locked attachment publication evidence"
-            )
+            raise RepositoryValidationError("fence must be locked attachment publication evidence")
         owner_id = validate_blob_owner_id(fence.owner_id)
         attachment_id = _physical_attachment_id(fence.attachment_id)
         lease_id = _lease_id(fence.lease_id)
@@ -836,9 +819,7 @@ class MaterializationRepository:
             expected_lease_version=expected_lease_version,
         )
         if staged.evidence.size_bytes > fence.max_bytes:
-            raise RepositoryValidationError(
-                "staged materialization exceeds its durable maximum"
-            )
+            raise RepositoryValidationError("staged materialization exceeds its durable maximum")
         authority = _create_blob_publish_authority(
             owner_id=fence.owner_id,
             storage_key=fence.storage_key,
@@ -1015,6 +996,7 @@ class AttachmentRepository:
         )
         return tuple(_attachment(row) for row in rows)
 
+
 class BlobMetadataRepository:
     """Read-only detached metadata for already materialized attachments.
 
@@ -1048,6 +1030,7 @@ class BlobMetadataRepository:
             (object_id, owner_id),
         )
         return None if row is None else _blob(row)
+
 
 class MessageAttachmentRepository:
     _FIELDS = "id, chat_id, message_id, attachment_id, user_id, created_at"
@@ -1389,9 +1372,7 @@ class AttachmentMaterializationCoordinator:
         if not isinstance(database, PlaneDatabase):
             raise RepositoryValidationError("database must own explicit Plane transactions")
         if not isinstance(repository, MaterializationRepository):
-            raise RepositoryValidationError(
-                "repository must be a MaterializationRepository"
-            )
+            raise RepositoryValidationError("repository must be a MaterializationRepository")
         if not isinstance(blobs, ExplicitRootStreamingBlobStore):
             raise RepositoryValidationError(
                 "blobs must be the configured Plane streaming blob store"
@@ -1405,9 +1386,12 @@ class AttachmentMaterializationCoordinator:
         )
         self._closed = False
 
-    async def _run_control(self, function: Any, /, *args: object, **kwargs: object) -> Any:
+    def _ensure_open(self) -> None:
         if self._closed:
             raise RepositoryValidationError("materialization coordinator is closed")
+
+    async def _run_control(self, function: Any, /, *args: object, **kwargs: object) -> Any:
+        self._ensure_open()
         return await _cancel_safe_in_executor(
             self._control_executor,
             function,
@@ -1589,9 +1573,8 @@ class AttachmentMaterializationCoordinator:
     ) -> BlobStagingSession:
         """Open staging off-loop; cancellation always aborts any returned capability."""
 
-        reservation = await self._blobs.areserve_materialization_staging(
-            owner_id=owner_id
-        )
+        self._ensure_open()
+        reservation = await self._blobs.areserve_materialization_staging(owner_id=owner_id)
         try:
             return await _cancel_safe_in_executor(
                 self._control_executor,

@@ -199,13 +199,9 @@ def version_row(**changes: Any) -> dict[str, Any]:
 
 def test_materialization_result_and_pending_record_invariants_fail_closed() -> None:
     with pytest.raises(ValueError, match="pending begin result"):
-        AttachmentMaterializationBeginResult(
-            state=AttachmentMaterializationState.PENDING
-        )
+        AttachmentMaterializationBeginResult(state=AttachmentMaterializationState.PENDING)
     with pytest.raises(ValueError, match="ready begin result"):
-        AttachmentMaterializationBeginResult(
-            state=AttachmentMaterializationState.READY
-        )
+        AttachmentMaterializationBeginResult(state=AttachmentMaterializationState.READY)
     with pytest.raises(RepositoryValidationError, match="lowercase SHA-256"):
         _digest("not-a-digest")
 
@@ -416,14 +412,17 @@ def test_pending_lease_renewal_replays_exactly_and_rejects_stale_or_missing_rows
             pending_row(materialization_lease_version=1),
         )
     )
-    assert repository.renew_pending_materialization(
-        replay,
-        owner_id="owner-1",
-        attachment_id="attachment-1",
-        lease_id="lease-1",
-        expected_lease_version=0,
-        lease_seconds=300,
-    ).lease_version == 1
+    assert (
+        repository.renew_pending_materialization(
+            replay,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            lease_seconds=300,
+        ).lease_version
+        == 1
+    )
 
     stale = FakeTransaction()
     stale.execute_results.extend((Result(), Result(rowcount=0)))
@@ -915,6 +914,17 @@ def test_materialization_coordinator_rejects_foreign_dependencies_and_closed_asy
                 lease_seconds=300,
             )
         )
+    with pytest.raises(RepositoryValidationError, match="coordinator is closed"):
+        asyncio.run(
+            coordinator.aopen_pending_materialization_staging(
+                owner_id="owner-1",
+                attachment_id="attachment-1",
+                lease_id="lease-1",
+                expected_lease_version=0,
+            )
+        )
+    assert blobs._owner_locks._entries == {}
+    assert blobs.is_prefix_absent(owner_id="owner-1", prefix="attachment-1")
     blobs.close()
 
 
@@ -939,6 +949,7 @@ def test_staging_coordinator_double_cancel_observes_commit_and_aborts_capability
         repository=repository,
         blobs=blobs,
     )
+
     async def scenario() -> None:
         loop = asyncio.get_running_loop()
         default = ThreadPoolExecutor(max_workers=1, thread_name_prefix="blocked-default")
@@ -1065,18 +1076,24 @@ def test_pending_and_abandoned_rows_are_hidden_from_every_ordinary_read() -> Non
     query.fetch_one_results.extend((None, None))
     query.fetch_all_results.append(())
 
-    assert AttachmentRepository().get(
-        query,
-        owner_id="owner-1",
-        attachment_id="attachment-1",
-        include_deleted=True,
-    ) is None
-    assert BlobMetadataRepository().get(
-        query,
-        owner_id="owner-1",
-        object_id="attachment-1",
-        include_deleted=True,
-    ) is None
+    assert (
+        AttachmentRepository().get(
+            query,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            include_deleted=True,
+        )
+        is None
+    )
+    assert (
+        BlobMetadataRepository().get(
+            query,
+            owner_id="owner-1",
+            object_id="attachment-1",
+            include_deleted=True,
+        )
+        is None
+    )
     assert AttachmentRepository().list_live(query, owner_id="owner-1") == ()
     read_sql = tuple(statement for operation, statement, _ in query.calls if operation != "execute")
     assert all("materialization_state = 'ready'" in statement for statement in read_sql)
