@@ -1,7 +1,7 @@
 {
   "candidate": {
     "branch": "codex/074-extract-data-plane",
-    "head": "d19ac51e7fafed0a2e83dc64b76a7f541c3f79d1",
+    "head": "a1e912bde041bc8b841c29cc6187f99a743e000b",
     "workingTree": "clean"
   },
   "checks": [
@@ -14,11 +14,11 @@
         "-rA",
         "tests/integration/test_empty_database_startup.py::test_template0_default_public_schema_is_exactly_qualified_then_hardened"
       ],
-      "completedAt": "2026-08-21T06:07:17.361435Z",
-      "durationMilliseconds": 3734,
+      "completedAt": "2026-08-21T06:11:06.494545Z",
+      "durationMilliseconds": 5771,
       "exitCode": 0,
       "id": "plane.migration.template0_default_public",
-      "outputSha256": "2b97ef0a50516c0dafeb6c1a71982534af6ae4ecb250a2e50d4355f87da5da13",
+      "outputSha256": "02444ecccd328e17aedea61a3c55fb04fa9f41159f59a46734095c322dff772e",
       "status": "passed",
       "timedOut": false
     },
@@ -31,11 +31,11 @@
         "-rA",
         "tests/integration/test_empty_database_startup.py::test_template0_public_schema_with_arbitrary_owner_is_not_normalized"
       ],
-      "completedAt": "2026-08-21T06:07:19.511378Z",
-      "durationMilliseconds": 2150,
+      "completedAt": "2026-08-21T06:11:08.604626Z",
+      "durationMilliseconds": 2110,
       "exitCode": 0,
       "id": "plane.migration.template0_hostile_owner_rejected",
-      "outputSha256": "4f76d2a8dbf1df2707799077f7dc040cbe8edf955991cb21ea794add5b587309",
+      "outputSha256": "9be290e72763589cf5263c883abbe7fe322ade5f611e0c6205533003aab1bf1b",
       "status": "passed",
       "timedOut": false
     },
@@ -48,11 +48,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_post_load_predecessor_damage_is_rejected_before_any_migration_repair"
       ],
-      "completedAt": "2026-08-21T06:07:22.221272Z",
-      "durationMilliseconds": 2710,
+      "completedAt": "2026-08-21T06:11:11.500822Z",
+      "durationMilliseconds": 2896,
       "exitCode": 0,
       "id": "plane.migration.predecessor_damage_rejected",
-      "outputSha256": "2105e0d007d5d0473d7afbdc4b6d7fc0cc4feca4582e1321ed726ae3a7827fc8",
+      "outputSha256": "20c9516935f096d59a3386f3a8351126a3f53810ac9500dcc7744c26e43af4cf",
       "status": "passed",
       "timedOut": false
     },
@@ -65,11 +65,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_pre_split_upgrade_preserves_representative_database_and_blobs"
       ],
-      "completedAt": "2026-08-21T06:07:25.798403Z",
-      "durationMilliseconds": 3577,
+      "completedAt": "2026-08-21T06:11:15.032294Z",
+      "durationMilliseconds": 3531,
       "exitCode": 0,
       "id": "plane.migration.pre_split_upgrade",
-      "outputSha256": "8887ea53d75f9461e3b069f88b80f1c6b4fc9ed32340084c6fc532a22aca5ab8",
+      "outputSha256": "a484b468adf93cc46e4d63679cbd0d3f1c5acc2d750f22fe913a7be7c6fa0851",
       "status": "passed",
       "timedOut": false
     },
@@ -82,11 +82,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_repeat_upgrade_is_a_noop_with_identical_evidence"
       ],
-      "completedAt": "2026-08-21T06:07:29.849559Z",
-      "durationMilliseconds": 4051,
+      "completedAt": "2026-08-21T06:11:19.084269Z",
+      "durationMilliseconds": 4052,
       "exitCode": 0,
       "id": "plane.migration.repeat_upgrade",
-      "outputSha256": "0c30543f6354a3fa07a55ac5c1ec3d011444238cf9024fc4646c6810aac7bf59",
+      "outputSha256": "6133740c214d0c3a58d7c79c470aa7634fe57eaec93b5ed4de2ce93ef4df7fb2",
       "status": "passed",
       "timedOut": false
     },
@@ -99,11 +99,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_transactional_failure_rolls_back_both_edges_and_retry_recovers"
       ],
-      "completedAt": "2026-08-21T06:07:33.687188Z",
-      "durationMilliseconds": 3838,
+      "completedAt": "2026-08-21T06:11:22.718229Z",
+      "durationMilliseconds": 3634,
       "exitCode": 0,
       "id": "plane.migration.transactional_failure_recovery",
-      "outputSha256": "af543a6f7901d995461d3b3168f97c19079cd5ace5d8cb532445aaf8dd9d1609",
+      "outputSha256": "7deca034465a5877d684067dfcd6fa7d73bf4b3e0f5de18d3cac2ad5d6eb262e",
       "status": "passed",
       "timedOut": false
     },
@@ -116,11 +116,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_blob_stage_failure_creates_neither_schema_nor_published_root"
       ],
-      "completedAt": "2026-08-21T06:07:36.021147Z",
-      "durationMilliseconds": 2334,
+      "completedAt": "2026-08-21T06:11:25.011601Z",
+      "durationMilliseconds": 2293,
       "exitCode": 0,
       "id": "plane.migration.blob_failure",
-      "outputSha256": "2bae0e4acf4d75b689573d44b5edc15ce41a677d40c8b9ae0bf3df9496323b7c",
+      "outputSha256": "c51141483050a91bdc29c40b60800a9c869b5b27d1bda6f7c7ef99dfdeb2b349",
       "status": "passed",
       "timedOut": false
     },
@@ -133,11 +133,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_documented_joint_restore_returns_to_066_then_reapplies_upgrade"
       ],
-      "completedAt": "2026-08-21T06:07:41.841374Z",
-      "durationMilliseconds": 5820,
+      "completedAt": "2026-08-21T06:11:31.066198Z",
+      "durationMilliseconds": 6055,
       "exitCode": 0,
       "id": "plane.migration.documented_joint_restore",
-      "outputSha256": "c4fc553651954754a1ad48db1457bba57b0d3192dda55fa36a75837c4a791bfb",
+      "outputSha256": "74494a110bc2b61ab266c652f6e426660adf3bcbd2ccf357172b14c8cffb5a49",
       "status": "passed",
       "timedOut": false
     }
@@ -225,7 +225,7 @@
     "rowCount": 1593,
     "sha256": "84cc9f0af555517013af26ada3920aebb8cc10e0d05fed75d424f960c810aa5f"
   },
-  "recordedAt": "2026-08-21T06:07:42.613189Z",
+  "recordedAt": "2026-08-21T06:11:31.951950Z",
   "schemaVersion": "astralplane.migration-checks/v1",
   "status": "passed"
 }
