@@ -94,6 +94,7 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     assert not re.search(r"^\s*if:\s*.*\bfalse\b", text, flags=re.MULTILINE)
     assert "continue-on-error:" not in text
     assert "components/AstralPlane" not in text
+    assert text.count("astral-sh/setup-uv@") == len(OWNER_JOBS)
 
     uses = re.findall(r"^\s*- uses:\s*([^\s#]+)", text, flags=re.MULTILINE)
     assert uses
@@ -122,6 +123,28 @@ def test_owner_workflow_rejects_setup_uv_outside_expected_jobs(
         gates_step,
         "    steps:\n"
         f"      - uses: {SETUP_UV_ACTION} # v7.2.1\n"
+        "      - name: Require every owner gate",
+        1,
+    )
+    assert mutated != text
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_owner_workflow_is_active_pinned_and_read_only()
+
+
+def test_owner_workflow_rejects_split_line_setup_uv_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _workflow_text()
+    gates_step = "    steps:\n      - name: Require every owner gate"
+    mutated = text.replace(
+        gates_step,
+        "    steps:\n"
+        "      -\n"
+        f"        uses: {SETUP_UV_ACTION}\n"
         "      - name: Require every owner gate",
         1,
     )
