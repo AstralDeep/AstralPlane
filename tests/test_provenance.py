@@ -14,6 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTION = ROOT / "provenance" / "extraction.json"
 TRANSFORMATIONS = ROOT / "provenance" / "transformations.json"
+MIGRATION_CHECKS = ROOT / "provenance" / "checks.json"
+ATTACHMENT_SLICE = ROOT / "provenance" / "attachment-parser-and-blob-composition.json"
+WORK_ADMISSION_SLICE = ROOT / "provenance" / "work-admission-and-quality-audit.json"
 SOURCE_REPOSITORY_ENV = "ASTRALDEEP_SOURCE_REPO"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -117,6 +120,25 @@ def test_transformation_ledger_completely_absorbs_selected_source() -> None:
             assert "_legacy_import" not in relative
             assert SHA256.fullmatch(result["sha256"])
             assert _sha256(ROOT / relative) == result["sha256"]
+
+
+def test_slice_provenance_matches_committed_migration_evidence() -> None:
+    checks = _load_json(MIGRATION_CHECKS)
+    attachment = _load_json(ATTACHMENT_SLICE)
+    work_admission = _load_json(WORK_ADMISSION_SLICE)
+    migration_evidence = attachment["migrationEvidence"]
+
+    assert checks["schemaVersion"] == "astralplane.migration-checks/v1"
+    assert checks["status"] == "passed"
+    assert isinstance(checks["checks"], list) and len(checks["checks"]) == 8
+    assert isinstance(migration_evidence, dict)
+    assert migration_evidence == {
+        "path": "provenance/checks.json",
+        "status": "passed",
+        "cases": 8,
+        "fixtureDigest": checks["fixtureDigest"],
+    }
+    assert work_admission["migrationEvidence"] == "provenance/checks.json"
 
 
 def test_selection_roots_replay_exact_immutable_git_tuples() -> None:

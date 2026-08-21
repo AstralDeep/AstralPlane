@@ -110,7 +110,7 @@
     "path": "provenance/checks.json",
     "status": "passed",
     "cases": 8,
-    "fixtureDigest": "8dc0ae6b0a47e6686d51e87942acdf303e4e44af201e694a6fae872dd5188d8e"
+    "fixtureDigest": "109b0c2d812b18efa1481b7a2851e847711626173807048a33ebea4172a86e5a"
   },
   "deepCutover": "held_pending_final_074_004_composition_pin_and_publisher_integration"
 }
