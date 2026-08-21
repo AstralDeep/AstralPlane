@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from _support import ScriptedTransaction
+from _support import Result, ScriptedTransaction
 
 from astralplane.errors import PlaneError
 from astralplane.repositories.remote import RemoteExecution, RemoteMachine, RemoteRepository
@@ -164,6 +164,21 @@ def test_machine_resolve_list_delete_are_owner_scoped() -> None:
         repository.resolve_machine(ScriptedTransaction(), owner_id="owner-1", reference="")
     with pytest.raises(ValueError):
         repository.list_machines(ScriptedTransaction(), owner_id="owner-1", limit=0)
+
+
+def test_account_retirement_deletes_only_owner_machines_with_count_evidence() -> None:
+    repository = RemoteRepository()
+    transaction = ScriptedTransaction(execute=[Result(rowcount=3)])
+    assert repository.delete_owner(transaction, owner_id="owner-1") == 3
+    assert transaction.calls[0][2] == ("owner-1",)
+    assert "WHERE owner_user_id = %s" in transaction.calls[0][1]
+    with pytest.raises(ValueError):
+        repository.delete_owner(ScriptedTransaction(), owner_id="")
+    with pytest.raises(PlaneError) as caught:
+        repository.delete_owner(
+            ScriptedTransaction(execute=[Result(rowcount=-1)]), owner_id="owner-1"
+        )
+    assert caught.value.code == "remote_owner_delete_invalid"
 
 
 def test_probe_preserves_first_trusted_key_and_compare_and_set() -> None:

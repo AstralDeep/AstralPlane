@@ -34,7 +34,7 @@
         },
         {
           "path": "src/astralplane/repositories/audit.py",
-          "sha256": "1889b2ed234c362091352ac86e248dd0735a9c4b7deca40bd81a650029a46258"
+          "sha256": "ee5bac1b39f3579978a9fc654acfbcde72afd8c7b5bf4bd2d1d707f94a129e72"
         }
       ],
       "task": "T085/T086",
@@ -49,7 +49,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/audit.py",
-          "sha256": "1889b2ed234c362091352ac86e248dd0735a9c4b7deca40bd81a650029a46258"
+          "sha256": "ee5bac1b39f3579978a9fc654acfbcde72afd8c7b5bf4bd2d1d707f94a129e72"
         }
       ],
       "task": "T085",
@@ -64,11 +64,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "632abe23bc6c0a19ecc08bed1784b475721cab8d80448bf922e12bf57ae5b036"
+          "sha256": "81781665b4ff34283befe4201b2a6b58c884e18adf9d50b378876247d6ae0763"
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "032ce584d0936265bffdf0aa1b31057475271fa9c40a365cce67763da292c555"
+          "sha256": "cc53cf5d1a36f343cad8fa072035361b08b7a0b09e044ef7b612f99890ae28d2"
         }
       ],
       "task": "T075/T085",
@@ -83,7 +83,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "632abe23bc6c0a19ecc08bed1784b475721cab8d80448bf922e12bf57ae5b036"
+          "sha256": "81781665b4ff34283befe4201b2a6b58c884e18adf9d50b378876247d6ae0763"
         }
       ],
       "task": "T085",
@@ -98,11 +98,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "632abe23bc6c0a19ecc08bed1784b475721cab8d80448bf922e12bf57ae5b036"
+          "sha256": "81781665b4ff34283befe4201b2a6b58c884e18adf9d50b378876247d6ae0763"
         },
         {
           "path": "tests/test_audit_retention.py",
-          "sha256": "749e72e3eb016eae636d3a41b0ffddcc7bb6ce0acc83aed73272e33e8be0581b"
+          "sha256": "8835220cf083834dfd502bdbd2d2e641ea71c12daefc023eeb06757b75dbcb18"
         }
       ],
       "task": "T085/T087",
@@ -136,11 +136,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "5681e59017604f7d7a149d51d0f2a7ce87e54fe5936529c8b158ea1c68f4973a"
+          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
         },
         {
           "path": "tests/repositories/test_preferences.py",
-          "sha256": "4fa6bebe2e885482117f51dd9acaff1e3104a9571719b27c723e5be9cfe0b9d8"
+          "sha256": "8b8c799457a4ad0b876967e03d1560164398a49747ae85b50494f1b875d8e983"
         }
       ],
       "task": "T081",
@@ -155,7 +155,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_secrets.py",
-          "sha256": "6ac58d8f9f7e203d9efca038f1ea6a8a2915f9047fda0bfc0dcaeaa77a11af2a"
+          "sha256": "0e1e0024e077b7c5ed09009d8f47c36156747c373b905124dacee845f014c7c9"
         }
       ],
       "task": "T081",
@@ -170,7 +170,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/secrets.py",
-          "sha256": "9e512e6451da26bf886ceca35c7f0653b0daace8ab810e4d89c86b6d0d6392cf"
+          "sha256": "42f25cb1bf708b3ac4ecc5dd41704d33ee9e0bed94bb1121024fb84388c96025"
         }
       ],
       "task": "T081",
@@ -185,7 +185,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "5681e59017604f7d7a149d51d0f2a7ce87e54fe5936529c8b158ea1c68f4973a"
+          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
         }
       ],
       "task": "T081",
@@ -200,7 +200,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_preferences.py",
-          "sha256": "4fa6bebe2e885482117f51dd9acaff1e3104a9571719b27c723e5be9cfe0b9d8"
+          "sha256": "8b8c799457a4ad0b876967e03d1560164398a49747ae85b50494f1b875d8e983"
         }
       ],
       "task": "T081",
@@ -215,7 +215,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -230,7 +230,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -248,8 +248,8 @@
           "sha256": "7ab052143ec47e0bb168cea7459c94e14fa672f53648ea2b69fc312cca4ad258"
         },
         {
-          "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "dc0347d85dbca521f8514708ed11173d0bf5edce0d2e7e96fb5244263cf5809d"
+          "path": "src/astralplane/repositories/background_tasks.py",
+          "sha256": "e2742e8ce676a53e294faac1b26dfefa4098538697f68111f34e221b405bbb33"
         }
       ],
       "task": "T082/T088",
@@ -264,11 +264,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/purge.py",
-          "sha256": "040bcb0fadddcb62acedb8cc5dc8706c79ac169a94f7188f97acb3647ae01cf8"
+          "sha256": "aad4b058662dbb3756df6dc53dbf8e4e4cff62bda550f75ef6e1b29f10be6a0e"
         },
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080/T092",
@@ -283,7 +283,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -298,7 +298,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -313,7 +313,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -328,7 +328,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -343,11 +343,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/purge.py",
-          "sha256": "040bcb0fadddcb62acedb8cc5dc8706c79ac169a94f7188f97acb3647ae01cf8"
+          "sha256": "aad4b058662dbb3756df6dc53dbf8e4e4cff62bda550f75ef6e1b29f10be6a0e"
         },
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080/T092",
@@ -362,7 +362,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "984a10e306c1821ce3ff57f7784dc4c978b806fd6a4878b587fcd6d288e154c1"
+          "sha256": "48872e9b40beee9026a71312e3b89a9585c1414cc0de2b4610064caf26008250"
         }
       ],
       "task": "T078",
@@ -377,11 +377,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/purge.py",
-          "sha256": "040bcb0fadddcb62acedb8cc5dc8706c79ac169a94f7188f97acb3647ae01cf8"
+          "sha256": "aad4b058662dbb3756df6dc53dbf8e4e4cff62bda550f75ef6e1b29f10be6a0e"
         },
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080/T092",
@@ -396,7 +396,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/remote.py",
-          "sha256": "1ed8bbbbdaf64ebf681a7f6f6dbe42bd0065955488078e5f425f60e5787a0071"
+          "sha256": "02116fab18c240b5fc3d34c0f973fd165c067da5bfdaac62fbd6fe14eee374c5"
         }
       ],
       "task": "T084",
@@ -411,7 +411,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/remote.py",
-          "sha256": "1ed8bbbbdaf64ebf681a7f6f6dbe42bd0065955488078e5f425f60e5787a0071"
+          "sha256": "02116fab18c240b5fc3d34c0f973fd165c067da5bfdaac62fbd6fe14eee374c5"
         }
       ],
       "task": "T084",
@@ -426,7 +426,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "dc0347d85dbca521f8514708ed11173d0bf5edce0d2e7e96fb5244263cf5809d"
+          "sha256": "a1f5035ff72289b8fa33da47dffa053688e2a310cfd7feb6b9dd5295741954a0"
         }
       ],
       "task": "T082",
@@ -441,7 +441,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "984a10e306c1821ce3ff57f7784dc4c978b806fd6a4878b587fcd6d288e154c1"
+          "sha256": "48872e9b40beee9026a71312e3b89a9585c1414cc0de2b4610064caf26008250"
         }
       ],
       "task": "T078",
@@ -456,7 +456,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/voice.py",
-          "sha256": "92755b9ad50b6ec42123293aedd6dc2693f313b3e4a058446b96f0bed98fb651"
+          "sha256": "fef8eeb29063b3498f0c3d422fdd158ec5b3feba349128a805d76b5f798935da"
         }
       ],
       "task": "T083",
@@ -470,8 +470,8 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
-          "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "dc0347d85dbca521f8514708ed11173d0bf5edce0d2e7e96fb5244263cf5809d"
+          "path": "src/astralplane/repositories/work_admission.py",
+          "sha256": "88b9b87cbcfc09a6aabc5982207b9715212370ca8a4c692d47402f7239646894"
         }
       ],
       "task": "T082",
@@ -486,7 +486,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/workspaces.py",
-          "sha256": "161667561c13c92136bf58add9a016ad281b10683f58c4821a45be1977d1007d"
+          "sha256": "2ba52c3be4f72d60e26013ea5c507ffa6c76e92fb5a7813e88a79bf6907c5166"
         }
       ],
       "task": "T079",
@@ -501,7 +501,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "5681e59017604f7d7a149d51d0f2a7ce87e54fe5936529c8b158ea1c68f4973a"
+          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
         }
       ],
       "task": "T081",
@@ -516,11 +516,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "dc0347d85dbca521f8514708ed11173d0bf5edce0d2e7e96fb5244263cf5809d"
+          "sha256": "a1f5035ff72289b8fa33da47dffa053688e2a310cfd7feb6b9dd5295741954a0"
         }
       ],
       "task": "T082",
-      "reason": "Consolidated scheduled occurrence, operation, admission, and effect persistence."
+      "reason": "Extracted scheduled definitions, occurrences, claims, attempts, effects, and atomic chat publication while keeping WorkAdmission as a separate authority."
     },
     {
       "sourcePath": "backend/scheduler/tests/test_atomic_chat_publication_060.py",
@@ -531,15 +531,15 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "3af643ba2e366104d57c5542cd851cf7285c6fe9e09c8e1e38fbf6388d486747"
+          "sha256": "ec206be09d5f13b83df69ff5e60b95be68336509139a48ae4770eea532ecf025"
         },
         {
           "path": "tests/repositories/test_scheduler.py",
-          "sha256": "0faed3aab26e45d644140e96285aa87a88eb73aeda32ea5dd6bfc9074f748225"
+          "sha256": "7fe18a8b45a1edfb3f8a8f5193e69337d2a3d97966aaffcd5ea4b160f948843d"
         },
         {
           "path": "tests/repositories/test_workspaces.py",
-          "sha256": "f88020db3c078194c39d14d26fd289249cd38cbb20986cd3ada093075edc6b06"
+          "sha256": "6c0a0c4709b070ad63acce8a9f5d83b8873cddaebc7e4d27629700991eeff3a1"
         }
       ],
       "task": "T078/T079/T082",
@@ -554,7 +554,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_scheduler.py",
-          "sha256": "0faed3aab26e45d644140e96285aa87a88eb73aeda32ea5dd6bfc9074f748225"
+          "sha256": "7fe18a8b45a1edfb3f8a8f5193e69337d2a3d97966aaffcd5ea4b160f948843d"
         }
       ],
       "task": "T082",
@@ -569,11 +569,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/purge.py",
-          "sha256": "040bcb0fadddcb62acedb8cc5dc8706c79ac169a94f7188f97acb3647ae01cf8"
+          "sha256": "aad4b058662dbb3756df6dc53dbf8e4e4cff62bda550f75ef6e1b29f10be6a0e"
         },
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080/T092",
@@ -588,7 +588,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/artifacts.py",
-          "sha256": "def1986c4955e3f0dd0491bdf8e67ed393823f4a1da56a4f940767c6cf387cbe"
+          "sha256": "cdbb5ce1674ba3a27ecc3569f191aa53f6fd02d130fb36b609190d0b1dfab44c"
         }
       ],
       "task": "T080",
@@ -603,11 +603,15 @@
       "resultPaths": [
         {
           "path": "src/astralplane/contracts/__init__.py",
-          "sha256": "54f5f3db937c5409d0bcc22e1d3f0f54a82485307bdb45edfc46a0d5dced6762"
+          "sha256": "7f43509fe7df6f0b26770b867ca3469f3a4c87a7b1d4cf446b75fdab2cdc7c83"
+        },
+        {
+          "path": "src/astralplane/database/legacy_baseline_066.py",
+          "sha256": "3127d3445fca7b8239dc7956d92cefe92e0df54b0af03187529d58929fe8dafb"
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "2978dd75044ba1950d6f59173a7b6dfcb1d9e04ca332bf8af30e875bc5cababb"
+          "sha256": "4f7533a767a9b3cec4d29e9e6616485601df88d62116928099295195466977c9"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -630,11 +634,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         },
         {
           "path": "tests/test_purge.py",
-          "sha256": "43e8f0e9ecb6781b08b70d1acb8ccbc0a7bf054e83a9ad4061ee06ec09f2432f"
+          "sha256": "f2dd14d42a30823f620dc3f468e0ca4438a12103e08cabdca44598508febfa0c"
         }
       ],
       "task": "T080/T093",
@@ -649,7 +653,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         }
       ],
       "task": "T080",
@@ -664,7 +668,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         }
       ],
       "task": "T080",
@@ -679,11 +683,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         },
         {
           "path": "tests/test_purge.py",
-          "sha256": "43e8f0e9ecb6781b08b70d1acb8ccbc0a7bf054e83a9ad4061ee06ec09f2432f"
+          "sha256": "f2dd14d42a30823f620dc3f468e0ca4438a12103e08cabdca44598508febfa0c"
         }
       ],
       "task": "T080/T093",
@@ -698,7 +702,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         }
       ],
       "task": "T080",
@@ -713,7 +717,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_artifacts.py",
-          "sha256": "c6ebb9117a287e11c7940206779ea28e5c65e34a8fbcdc44b36d1dfdd9db83ec"
+          "sha256": "2b392c75eea67b688c5b2e46a4f7493465f1837c17388fd818f1355417bba892"
         }
       ],
       "task": "T080",
@@ -728,11 +732,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "632abe23bc6c0a19ecc08bed1784b475721cab8d80448bf922e12bf57ae5b036"
+          "sha256": "81781665b4ff34283befe4201b2a6b58c884e18adf9d50b378876247d6ae0763"
         },
         {
           "path": "tests/test_audit_retention.py",
-          "sha256": "749e72e3eb016eae636d3a41b0ffddcc7bb6ce0acc83aed73272e33e8be0581b"
+          "sha256": "8835220cf083834dfd502bdbd2d2e641ea71c12daefc023eeb06757b75dbcb18"
         }
       ],
       "task": "T085/T087",
@@ -751,7 +755,7 @@
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "4c41ac68da7f237aefab442d12eaa84b19375ca030879b0035bd00214501aea4"
+          "sha256": "a900a91d431b339e5bb1468af37761f4b0e3d74ac33d610a1d53fd4573332ecb"
         },
         {
           "path": "tests/test_sql_parameters.py",
@@ -770,7 +774,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "3af643ba2e366104d57c5542cd851cf7285c6fe9e09c8e1e38fbf6388d486747"
+          "sha256": "ec206be09d5f13b83df69ff5e60b95be68336509139a48ae4770eea532ecf025"
         }
       ],
       "task": "T078",
@@ -785,7 +789,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_remote.py",
-          "sha256": "e4292a4cc969a01895ebad3006f27b1a964d74ce31f50cc815b5700c3a01bdb1"
+          "sha256": "b2a453363c0f91056262af7aa0f8baecf9f7c902e6eca46fbc1e3126307704b7"
         }
       ],
       "task": "T084",
@@ -800,7 +804,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "3af643ba2e366104d57c5542cd851cf7285c6fe9e09c8e1e38fbf6388d486747"
+          "sha256": "ec206be09d5f13b83df69ff5e60b95be68336509139a48ae4770eea532ecf025"
         }
       ],
       "task": "T078",
@@ -829,8 +833,8 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
-          "path": "tests/repositories/test_scheduler.py",
-          "sha256": "0faed3aab26e45d644140e96285aa87a88eb73aeda32ea5dd6bfc9074f748225"
+          "path": "tests/repositories/test_work_admission.py",
+          "sha256": "8a2dd00eb54084550608e2fdf45d89a964bef685c6868f41d778f8da0a059b2a"
         }
       ],
       "task": "T082",
@@ -845,7 +849,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_workspaces.py",
-          "sha256": "f88020db3c078194c39d14d26fd289249cd38cbb20986cd3ada093075edc6b06"
+          "sha256": "6c0a0c4709b070ad63acce8a9f5d83b8873cddaebc7e4d27629700991eeff3a1"
         }
       ],
       "task": "T079",
@@ -860,7 +864,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_workspaces.py",
-          "sha256": "f88020db3c078194c39d14d26fd289249cd38cbb20986cd3ada093075edc6b06"
+          "sha256": "6c0a0c4709b070ad63acce8a9f5d83b8873cddaebc7e4d27629700991eeff3a1"
         }
       ],
       "task": "T079",

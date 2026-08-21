@@ -55,6 +55,27 @@ class FeedbackRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class FeedbackCursor:
+    """Opaque-to-callers keyset position for descending feedback pages."""
+
+    created_at: datetime
+    feedback_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackPage:
+    records: tuple[FeedbackRecord, ...]
+    next_cursor: FeedbackCursor | None
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackCommentCandidate:
+    feedback_id: str
+    owner_id: str
+    comment: str
+
+
+@dataclass(frozen=True, slots=True)
 class OnboardingStateRecord:
     owner_id: str
     status: str
@@ -106,6 +127,15 @@ class PersonaRecord:
     persona: str
     score: float
     updated_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class ThemePreferenceRecord:
+    """One bounded theme document detached from generic user preferences."""
+
+    owner_id: str
+    theme: Mapping[str, Any]
+    updated_at: int | None
 
 
 def _optional_returned(result: object, operation: str) -> Any:
@@ -178,6 +208,30 @@ def _onboarding(row: Mapping[str, Any]) -> OnboardingStateRecord:
             else _stored_time(row["dismissed_at"], "dismissed_at")
         ),
         dismiss_count=int(row.get("dismiss_count") or 0),
+    )
+
+
+def _theme_preference(row: Mapping[str, Any]) -> ThemePreferenceRecord:
+    preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+    if not isinstance(preferences, Mapping):
+        raise RepositoryDataError("persisted preferences document must be an object")
+    theme = preferences.get("theme", {})
+    if not isinstance(theme, Mapping):
+        raise RepositoryDataError("persisted theme preference must be an object")
+    updated_at_raw = row.get("updated_at")
+    if updated_at_raw is None:
+        updated_at = None
+    else:
+        try:
+            updated_at = int(updated_at_raw)
+        except (TypeError, ValueError) as exc:
+            raise RepositoryDataError("persisted theme timestamp is invalid") from exc
+        if updated_at < 0:
+            raise RepositoryDataError("persisted theme timestamp is negative")
+    return ThemePreferenceRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        theme=_structured_json(theme, "theme"),
+        updated_at=updated_at,
     )
 
 
@@ -360,6 +414,186 @@ class FeedbackRepository:
         )
         return None if row is None else _feedback(row)
 
+    def find_in_dedup_window(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        correlation_id: str | None,
+        component_id: str | None,
+        cutoff: datetime,
+    ) -> FeedbackRecord | None:
+        """Return the newest active feedback for one exact owner/target window."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        correlation_id = _optional_id(correlation_id, "correlation_id")
+        component_id = _optional_id(component_id, "component_id")
+        cutoff = _aware_time(cutoff, "cutoff")
+        row = query.fetch_one(
+            f"""
+            SELECT {self._FIELDS}
+            FROM component_feedback
+            WHERE user_id = %s
+              AND correlation_id IS NOT DISTINCT FROM %s
+              AND component_id IS NOT DISTINCT FROM %s
+              AND lifecycle = 'active'
+              AND created_at >= %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (owner_id, correlation_id, component_id, cutoff),
+        )
+        return None if row is None else _feedback(row)
+
+    def amend_active(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        feedback_id: str,
+        expected_updated_at: datetime,
+        sentiment: str,
+        category: str,
+        comment: str | None,
+        comment_safety: str,
+        comment_safety_reason: str | None,
+        updated_at: datetime,
+    ) -> FeedbackRecord | None:
+        """Amend one active row with owner, lifecycle, and timestamp fencing."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        feedback_id = _required_id(feedback_id, "feedback_id")
+        expected_updated_at = _aware_time(expected_updated_at, "expected_updated_at")
+        updated_at = _aware_time(updated_at, "updated_at")
+        if updated_at <= expected_updated_at:
+            raise RepositoryValidationError("feedback updated_at must advance the CAS fence")
+        if sentiment not in _SENTIMENTS:
+            raise RepositoryValidationError("feedback sentiment is unsupported")
+        if category not in _FEEDBACK_CATEGORIES:
+            raise RepositoryValidationError("feedback category is unsupported")
+        if comment_safety not in _COMMENT_SAFETY:
+            raise RepositoryValidationError("feedback comment safety is unsupported")
+        if comment is not None:
+            _bounded_text(comment, "comment", maximum=8192, allow_empty=True)
+        if comment_safety_reason is not None:
+            _bounded_text(
+                comment_safety_reason,
+                "comment_safety_reason",
+                maximum=1024,
+                allow_empty=True,
+            )
+        result = transaction.execute(
+            f"""
+            UPDATE component_feedback
+            SET sentiment = %s,
+                category = %s,
+                comment_raw = %s,
+                comment_safety = %s,
+                comment_safety_reason = %s,
+                updated_at = %s
+            WHERE id = %s
+              AND user_id = %s
+              AND lifecycle = 'active'
+              AND updated_at = %s
+            RETURNING {self._FIELDS}
+            """,
+            (
+                sentiment,
+                category,
+                comment,
+                comment_safety,
+                comment_safety_reason,
+                updated_at,
+                feedback_id,
+                owner_id,
+                expected_updated_at,
+            ),
+        )
+        row = _optional_returned(result, "feedback.amend_active")
+        if row is not None:
+            return _feedback(row)
+        existing = self.get(transaction, owner_id=owner_id, feedback_id=feedback_id)
+        if existing is None:
+            return None
+        raise RepositoryConflictError(
+            "feedback is no longer active at the expected version",
+            metadata={"operation": "feedback.amend_active"},
+        )
+
+    def list_page(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        lifecycle: str = "active",
+        source_tool: str | None = None,
+        source_agent: str | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        cursor: FeedbackCursor | None = None,
+        limit: int = 50,
+    ) -> FeedbackPage:
+        """Return one filtered owner page using a typed descending keyset cursor."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        if lifecycle not in _FEEDBACK_LIFECYCLES:
+            raise RepositoryValidationError("feedback lifecycle is unsupported")
+        source_tool = _optional_id(source_tool, "source_tool")
+        source_agent = _optional_id(source_agent, "source_agent")
+        if from_time is not None:
+            from_time = _aware_time(from_time, "from_time")
+        if to_time is not None:
+            to_time = _aware_time(to_time, "to_time")
+        if from_time is not None and to_time is not None and from_time > to_time:
+            raise RepositoryValidationError("feedback from_time cannot follow to_time")
+        if cursor is not None:
+            if not isinstance(cursor, FeedbackCursor):
+                raise RepositoryValidationError("feedback cursor has an unsupported type")
+            cursor_time = _aware_time(cursor.created_at, "cursor.created_at")
+            cursor_id = _required_id(cursor.feedback_id, "cursor.feedback_id")
+        else:
+            cursor_time = None
+            cursor_id = None
+        limit = _bounded_limit(limit)
+
+        clauses = ["user_id = %s", "lifecycle = %s"]
+        parameters: list[object] = [owner_id, lifecycle]
+        if source_tool is not None:
+            clauses.append("source_tool = %s")
+            parameters.append(source_tool)
+        if source_agent is not None:
+            clauses.append("source_agent = %s")
+            parameters.append(source_agent)
+        if from_time is not None:
+            clauses.append("created_at >= %s")
+            parameters.append(from_time)
+        if to_time is not None:
+            clauses.append("created_at <= %s")
+            parameters.append(to_time)
+        if cursor_time is not None:
+            clauses.append("(created_at, id::text) < (%s, %s)")
+            parameters.extend((cursor_time, cursor_id))
+        parameters.append(limit + 1)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._FIELDS}
+            FROM component_feedback
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC, id::text DESC
+            LIMIT %s
+            """,
+            tuple(parameters),
+        )
+        records = tuple(_feedback(row) for row in rows[:limit])
+        next_cursor = None
+        if len(rows) > limit and records:
+            last = records[-1]
+            next_cursor = FeedbackCursor(
+                created_at=last.created_at,
+                feedback_id=last.feedback_id,
+            )
+        return FeedbackPage(records=records, next_cursor=next_cursor)
+
     def list_for_owner(
         self,
         query: QueryExecutor,
@@ -368,21 +602,51 @@ class FeedbackRepository:
         lifecycle: str = "active",
         limit: int = 50,
     ) -> tuple[FeedbackRecord, ...]:
-        owner_id = _required_id(owner_id, "owner_id")
-        if lifecycle not in _FEEDBACK_LIFECYCLES:
-            raise RepositoryValidationError("feedback lifecycle is unsupported")
-        limit = _bounded_limit(limit)
+        return self.list_page(
+            query,
+            owner_id=owner_id,
+            lifecycle=lifecycle,
+            limit=limit,
+        ).records
+
+    def list_clean_comment_candidates_for_administration(
+        self,
+        query: QueryExecutor,
+        *,
+        since: datetime,
+        limit: int = 500,
+    ) -> tuple[FeedbackCommentCandidate, ...]:
+        """Return the bounded cross-owner pre-pass workload for an admin caller."""
+
+        since = _aware_time(since, "since")
+        limit = _bounded_limit(limit, maximum=1000)
         rows = query.fetch_all(
-            f"""
-            SELECT {self._FIELDS}
+            """
+            SELECT id, user_id, comment_raw
             FROM component_feedback
-            WHERE user_id = %s AND lifecycle = %s
+            WHERE lifecycle = 'active'
+              AND comment_safety = 'clean'
+              AND comment_raw IS NOT NULL
+              AND comment_raw <> ''
+              AND created_at >= %s
             ORDER BY created_at DESC, id DESC
             LIMIT %s
             """,
-            (owner_id, lifecycle, limit),
+            (since, limit),
         )
-        return tuple(_feedback(row) for row in rows)
+        candidates: list[FeedbackCommentCandidate] = []
+        for row in rows:
+            comment = _row_value(row, "comment_raw")
+            if not isinstance(comment, str) or not comment or len(comment) > 8192:
+                raise RepositoryDataError("persisted feedback comment is outside safe bounds")
+            candidates.append(
+                FeedbackCommentCandidate(
+                    feedback_id=str(_row_value(row, "id")),
+                    owner_id=str(_row_value(row, "user_id")),
+                    comment=comment,
+                )
+            )
+        return tuple(candidates)
 
     def retract(
         self,
@@ -679,6 +943,47 @@ class PersonalizationRepository:
             metadata={"operation": "personalization.put_profile"},
         )
 
+    def reset_profile(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        updated_at: int,
+        expected_updated_at: int,
+    ) -> PersonalizationProfileRecord:
+        """Reset mutable profile fields while preserving creation and dreaming state."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
+        updated_at = _non_negative_int(updated_at, "updated_at")
+        if updated_at <= expected_updated_at:
+            raise RepositoryValidationError("profile updated_at must advance the CAS fence")
+        result = transaction.execute(
+            f"""
+            UPDATE user_personalization
+            SET profession = NULL,
+                goals = '[]'::jsonb,
+                personality = '{{}}'::jsonb,
+                updated_at = %s
+            WHERE user_id = %s AND updated_at = %s
+            RETURNING {self._PROFILE_FIELDS}
+            """,
+            (updated_at, owner_id, expected_updated_at),
+        )
+        row = _optional_returned(result, "personalization.reset_profile")
+        if row is not None:
+            return _profile(row)
+        existing = self.get_profile(transaction, owner_id=owner_id)
+        if existing is None:
+            raise RepositoryNotFoundError(
+                "personalization profile was not found",
+                metadata={"operation": "personalization.reset_profile"},
+            )
+        raise RepositoryConflictError(
+            "personalization profile changed since it was read",
+            metadata={"operation": "personalization.reset_profile"},
+        )
+
     def create_memory(
         self,
         transaction: Transaction,
@@ -768,13 +1073,22 @@ class PersonalizationRepository:
         owner_id: str,
         project_id: str | None = None,
         include_global: bool = True,
+        global_only: bool = False,
         limit: int = 200,
     ) -> tuple[MemoryRecord, ...]:
         owner_id = _required_id(owner_id, "owner_id")
+        if not isinstance(global_only, bool):
+            raise RepositoryValidationError("global_only must be a boolean")
+        if global_only and project_id is not None:
+            raise RepositoryValidationError(
+                "global_only cannot be combined with a concrete project_id"
+            )
         limit = _bounded_limit(limit, maximum=1000)
         parameters: list[object] = [owner_id]
         project_clause = ""
-        if project_id is not None:
+        if global_only:
+            project_clause = " AND project_id IS NULL"
+        elif project_id is not None:
             project_id = _required_id(project_id, "project_id")
             if include_global:
                 project_clause = " AND (project_id = %s OR project_id IS NULL)"
@@ -822,6 +1136,138 @@ class PersonalizationRepository:
             existing is not None
             and existing.superseded_at == superseded_at
             and existing.superseded_by == replacement_id
+        )
+
+    def set_validity(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        memory_id: str,
+        valid_from: int | None,
+        valid_to: int | None,
+        ingested_at: int | None,
+        updated_at: int,
+        expected_updated_at: int,
+    ) -> MemoryRecord | None:
+        """CAS-update one owner's temporal memory bounds."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        valid_from = (
+            None if valid_from is None else _non_negative_int(valid_from, "valid_from")
+        )
+        valid_to = None if valid_to is None else _non_negative_int(valid_to, "valid_to")
+        ingested_at = (
+            None if ingested_at is None else _non_negative_int(ingested_at, "ingested_at")
+        )
+        if valid_from is not None and valid_to is not None and valid_from > valid_to:
+            raise RepositoryValidationError("memory valid_from cannot follow valid_to")
+        expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
+        updated_at = _non_negative_int(updated_at, "updated_at")
+        if updated_at <= expected_updated_at:
+            raise RepositoryValidationError("memory updated_at must advance the CAS fence")
+        result = transaction.execute(
+            f"""
+            UPDATE memory_item
+            SET valid_from = %s,
+                valid_to = %s,
+                ingested_at = COALESCE(%s, ingested_at),
+                updated_at = %s
+            WHERE id = %s AND user_id = %s AND updated_at = %s
+            RETURNING {self._MEMORY_FIELDS}
+            """,
+            (
+                valid_from,
+                valid_to,
+                ingested_at,
+                updated_at,
+                memory_id,
+                owner_id,
+                expected_updated_at,
+            ),
+        )
+        row = _optional_returned(result, "personalization.set_validity")
+        if row is not None:
+            return _memory(row)
+        existing = self.get_memory(transaction, owner_id=owner_id, memory_id=memory_id)
+        if existing is None:
+            return None
+        raise RepositoryConflictError(
+            "memory changed since it was read",
+            metadata={"operation": "personalization.set_validity"},
+        )
+
+    def update_memory_value(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        memory_id: str,
+        value: str,
+        signature: str | None,
+        updated_at: int,
+        expected_updated_at: int,
+    ) -> MemoryRecord | None:
+        """CAS-update memory content and its caller-produced integrity signature."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        value = _bounded_text(value, "value", maximum=16384)
+        if signature is not None:
+            signature = _bounded_text(signature, "signature", maximum=1024)
+        expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
+        updated_at = _non_negative_int(updated_at, "updated_at")
+        if updated_at <= expected_updated_at:
+            raise RepositoryValidationError("memory updated_at must advance the CAS fence")
+        result = transaction.execute(
+            f"""
+            UPDATE memory_item
+            SET value = %s, signature = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s AND updated_at = %s
+            RETURNING {self._MEMORY_FIELDS}
+            """,
+            (value, signature, updated_at, memory_id, owner_id, expected_updated_at),
+        )
+        row = _optional_returned(result, "personalization.update_memory_value")
+        if row is not None:
+            return _memory(row)
+        existing = self.get_memory(transaction, owner_id=owner_id, memory_id=memory_id)
+        if existing is None:
+            return None
+        raise RepositoryConflictError(
+            "memory changed since it was read",
+            metadata={"operation": "personalization.update_memory_value"},
+        )
+
+    def delete_memory(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        memory_id: str,
+        expected_updated_at: int,
+    ) -> bool:
+        """Hard-delete exactly one owner row at the caller's observed version."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        memory_id = _required_id(memory_id, "memory_id")
+        expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
+        result = transaction.execute(
+            """
+            DELETE FROM memory_item
+            WHERE id = %s AND user_id = %s AND updated_at = %s
+            """,
+            (memory_id, owner_id, expected_updated_at),
+        )
+        if result.rowcount == 1:
+            return True
+        existing = self.get_memory(transaction, owner_id=owner_id, memory_id=memory_id)
+        if existing is None:
+            return False
+        raise RepositoryConflictError(
+            "memory changed since it was read",
+            metadata={"operation": "personalization.delete_memory"},
         )
 
     def record_recall(
@@ -882,6 +1328,113 @@ class PersonalizationRepository:
             )
         return _persona(row)
 
+    def get_persona(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> PersonaRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            """
+            SELECT user_id, persona, score, updated_at
+            FROM user_persona
+            WHERE user_id = %s
+            """,
+            (owner_id,),
+        )
+        return None if row is None else _persona(row)
+
+
+class ThemePreferenceRepository:
+    """Owner-scoped theme persistence that preserves unrelated preferences."""
+
+    _SELECT = (
+        "SELECT user_id, preferences, updated_at FROM user_preferences "
+        "WHERE user_id = %s"
+    )
+
+    def get(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> ThemePreferenceRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(self._SELECT, (owner_id,))
+        return None if row is None else _theme_preference(row)
+
+    def put(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        theme: Mapping[str, object],
+    ) -> ThemePreferenceRecord:
+        """Replace only the theme key under a row lock and preserve other keys."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        if not isinstance(theme, Mapping):
+            raise RepositoryValidationError("theme must be a JSON object")
+        theme_payload = _canonical_json(theme, "theme")
+        if len(theme_payload.encode("utf-8")) > 65_536:
+            raise RepositoryValidationError(
+                "theme exceeds its maximum encoded size",
+                metadata={"maximum_bytes": 65_536},
+            )
+        existing = transaction.fetch_one(self._SELECT + " FOR UPDATE", (owner_id,))
+        if existing is None:
+            inserted = transaction.execute(
+                """
+                INSERT INTO user_preferences (user_id, preferences, updated_at)
+                VALUES (
+                    %s, %s,
+                    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+                )
+                ON CONFLICT (user_id) DO NOTHING
+                RETURNING user_id, preferences, updated_at
+                """,
+                (owner_id, _canonical_json({"theme": theme}, "preferences")),
+            )
+            row = _optional_returned(inserted, "theme_preference.put.insert")
+            if row is not None:
+                return _theme_preference(row)
+            existing = transaction.fetch_one(
+                self._SELECT + " FOR UPDATE", (owner_id,)
+            )
+            if existing is None:
+                raise RepositoryConflictError(
+                    "theme preference row disappeared during concurrent creation",
+                    metadata={"operation": "theme_preference.put"},
+                )
+        preferences = _structured_json(
+            _row_value(existing, "preferences"), "preferences"
+        )
+        if not isinstance(preferences, Mapping):
+            raise RepositoryDataError("persisted preferences document must be an object")
+        merged = dict(preferences)
+        merged["theme"] = theme
+        result = transaction.execute(
+            """
+            UPDATE user_preferences
+            SET preferences = %s,
+                updated_at = GREATEST(
+                    COALESCE(updated_at, 0) + 1,
+                    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+                )
+            WHERE user_id = %s
+            RETURNING user_id, preferences, updated_at
+            """,
+            (_canonical_json(merged, "preferences"), owner_id),
+        )
+        row = _optional_returned(result, "theme_preference.put.update")
+        if row is None:
+            raise RepositoryConflictError(
+                "theme preference row changed after it was locked",
+                metadata={"operation": "theme_preference.put"},
+            )
+        return _theme_preference(row)
+
 
 class PreferencesRepository:
     """Grouping of preferences stores without connection or policy ownership."""
@@ -890,9 +1443,13 @@ class PreferencesRepository:
         self.feedback = FeedbackRepository()
         self.onboarding = OnboardingRepository()
         self.personalization = PersonalizationRepository()
+        self.theme = ThemePreferenceRepository()
 
 
 __all__ = (
+    "FeedbackCommentCandidate",
+    "FeedbackCursor",
+    "FeedbackPage",
     "FeedbackRecord",
     "FeedbackRepository",
     "MemoryRecord",
@@ -902,4 +1459,6 @@ __all__ = (
     "PersonalizationProfileRecord",
     "PersonalizationRepository",
     "PreferencesRepository",
+    "ThemePreferenceRecord",
+    "ThemePreferenceRepository",
 )

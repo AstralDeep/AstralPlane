@@ -252,6 +252,26 @@ class RemoteRepository:
         )
         return row is not None
 
+    def delete_owner(self, transaction: Transaction, *, owner_id: str) -> int:
+        """Delete all machines for an authorized account-retirement transaction.
+
+        Callers must delete the owner's tracked jobs first so foreign-key
+        protection cannot be bypassed or hidden.
+        """
+
+        _required("owner_id", owner_id, 512)
+        result = transaction.execute(
+            "DELETE FROM remote_machine WHERE owner_user_id = %s",
+            (owner_id,),
+        )
+        if result.rowcount < 0:
+            raise PlaneError(
+                "remote owner deletion returned an invalid row count",
+                code="remote_owner_delete_invalid",
+                metadata={"owner_id": owner_id},
+            )
+        return result.rowcount
+
     def create_execution(
         self, transaction: Transaction, execution: RemoteExecution
     ) -> RemoteExecution:

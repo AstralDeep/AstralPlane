@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from astralplane.contracts import Record, Transaction
+from astralplane.contracts import QueryExecutor, Record, Transaction
 from astralplane.errors import PlaneError
 
 GENESIS_DIGEST = bytes(32)
@@ -88,6 +89,31 @@ class AuditRecord:
         _aware("recorded_at", self.recorded_at)
         _digest_bytes("previous_digest", self.previous_digest)
         _digest_bytes("entry_digest", self.entry_digest)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditCursor:
+    """Keyset position for a descending owner audit page."""
+
+    recorded_at: datetime
+    event_id: str
+
+    def __post_init__(self) -> None:
+        _aware("recorded_at", self.recorded_at)
+        _required("event_id", self.event_id, 128)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditPage:
+    records: tuple[AuditRecord, ...]
+    next_cursor: AuditCursor | None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolTrajectoryEvent:
+    agent_id: str
+    correlation_id: str
+    tool_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +261,87 @@ class AuditRepository:
         )
         return tuple(_record(row) for row in rows)
 
+    def list_page(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        event_classes: Sequence[str] | None = None,
+        outcomes: Sequence[str] | None = None,
+        from_ts: datetime | None = None,
+        to_ts: datetime | None = None,
+        keyword: str | None = None,
+        cursor: AuditCursor | None = None,
+        limit: int = 50,
+    ) -> AuditPage:
+        """Return a bounded, stable, descending page for exactly one owner."""
+
+        _required("owner_id", owner_id, 512)
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        classes = _bounded_filters("event_classes", event_classes)
+        selected_outcomes = _bounded_filters("outcomes", outcomes)
+        unsupported = set(selected_outcomes).difference(
+            {"in_progress", "success", "failure", "interrupted"}
+        )
+        if unsupported:
+            raise ValueError("outcomes contains an unsupported value")
+        if from_ts is not None:
+            _aware("from_ts", from_ts)
+        if to_ts is not None:
+            _aware("to_ts", to_ts)
+        if from_ts is not None and to_ts is not None and from_ts >= to_ts:
+            raise ValueError("from_ts must precede to_ts")
+        if cursor is not None and not isinstance(cursor, AuditCursor):
+            raise ValueError("cursor must be an AuditCursor")
+
+        clauses = ["actor_user_id = %s"]
+        parameters: list[object] = [owner_id]
+        if cursor is not None:
+            clauses.append("(recorded_at, event_id) < (%s, %s)")
+            parameters.extend((cursor.recorded_at, cursor.event_id))
+        if classes:
+            clauses.append("event_class = ANY(%s)")
+            parameters.append(list(classes))
+        if selected_outcomes:
+            clauses.append("outcome = ANY(%s)")
+            parameters.append(list(selected_outcomes))
+        if from_ts is not None:
+            clauses.append("recorded_at >= %s")
+            parameters.append(from_ts)
+        if to_ts is not None:
+            clauses.append("recorded_at < %s")
+            parameters.append(to_ts)
+        if keyword is not None:
+            normalized = _required_keyword(keyword)
+            escaped = normalized.casefold().replace("\\", "\\\\").replace("%", "\\%")
+            escaped = escaped.replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            clauses.append(
+                "(LOWER(description) LIKE %s ESCAPE E'\\\\' "
+                "OR LOWER(action_type) LIKE %s ESCAPE E'\\\\')"
+            )
+            parameters.extend((pattern, pattern))
+        parameters.append(limit + 1)
+        rows = query.fetch_all(
+            f"""
+            SELECT * FROM audit_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY recorded_at DESC, event_id DESC
+            LIMIT %s
+            """,
+            tuple(parameters),
+        )
+        records = tuple(_record(row) for row in rows[:limit])
+        next_cursor = None
+        if len(rows) > limit:
+            last = records[-1]
+            next_cursor = AuditCursor(
+                recorded_at=last.recorded_at,
+                event_id=last.event.event_id,
+            )
+        return AuditPage(records=records, next_cursor=next_cursor)
+
     def load_chain(
         self,
         transaction: Transaction,
@@ -253,6 +360,53 @@ class AuditRepository:
             (chain_id, start_sequence),
         )
         return tuple(_record(row) for row in rows)
+
+    def list_tool_trajectory_events_for_administration(
+        self,
+        query: QueryExecutor,
+        *,
+        from_ts: datetime,
+        to_ts: datetime,
+        limit: int = 2000,
+    ) -> tuple[ToolTrajectoryEvent, ...]:
+        """Read the fixed audit subset used by product-owned trajectory scoring."""
+
+        _aware("from_ts", from_ts)
+        _aware("to_ts", to_ts)
+        if from_ts > to_ts:
+            raise ValueError("from_ts cannot follow to_ts")
+        if not 1 <= limit <= 2000:
+            raise ValueError("limit must be between 1 and 2000")
+        rows = query.fetch_all(
+            """
+            SELECT agent_id, correlation_id,
+                   REPLACE(REPLACE(action_type, 'tool.', ''), '.end', '') AS tool_name
+            FROM audit_events
+            WHERE event_class = 'agent_tool_call'
+              AND action_type LIKE 'tool.%.end'
+              AND agent_id IS NOT NULL
+              AND recorded_at >= %s AND recorded_at <= %s
+            ORDER BY agent_id, correlation_id, recorded_at, event_id
+            LIMIT %s
+            """,
+            (from_ts, to_ts, limit),
+        )
+        events: list[ToolTrajectoryEvent] = []
+        for row in rows:
+            agent_id = str(row.get("agent_id") or "")
+            correlation_id = str(row.get("correlation_id") or "")
+            tool_name = str(row.get("tool_name") or "")
+            _required("persisted agent_id", agent_id, 512)
+            _required("persisted correlation_id", correlation_id, 128)
+            _required("persisted tool_name", tool_name, 256)
+            events.append(
+                ToolTrajectoryEvent(
+                    agent_id=agent_id,
+                    correlation_id=correlation_id,
+                    tool_name=tool_name,
+                )
+            )
+        return tuple(events)
 
     def verify_chain(
         self,
@@ -400,11 +554,45 @@ def _canonical_event_v1(event: AuditEvent) -> bytes:
 def canonical_json(value: str | Mapping[str, Any] | Sequence[Any], *, expected_type: type) -> str:
     try:
         parsed = json.loads(value) if isinstance(value, str) else value
-        if not isinstance(parsed, expected_type):
+        if expected_type is dict:
+            if not isinstance(parsed, Mapping):
+                raise TypeError
+        elif expected_type is list:
+            if not isinstance(parsed, (list, tuple)):
+                raise TypeError
+        else:
             raise TypeError
-        return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        normalized = _normalize_json_value(parsed)
+        return json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"audit JSON must contain a {expected_type.__name__}") from exc
+
+
+def _normalize_json_value(value: object) -> object:
+    """Detach immutable driver containers into strict JSON-compatible values."""
+
+    if isinstance(value, Mapping):
+        normalized: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings")
+            normalized[key] = _normalize_json_value(item)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_normalize_json_value(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("JSON numbers must be finite")
+        return value
+    raise TypeError("value is not JSON-compatible")
 
 
 def _record(row: Record) -> AuditRecord:
@@ -464,6 +652,22 @@ def _required(name: str, value: str, maximum: int) -> None:
         raise ValueError(f"{name} must be a non-empty string of at most {maximum} characters")
 
 
+def _bounded_filters(name: str, values: Sequence[str] | None) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, (str, bytes)) or len(values) > 32:
+        raise ValueError(f"{name} must contain at most 32 values")
+    result = tuple(values)
+    for value in result:
+        _required(name, value, 128)
+    return result
+
+
+def _required_keyword(value: str) -> str:
+    _required("keyword", value, 256)
+    return value.strip()
+
+
 def _aware(name: str, value: datetime) -> None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
@@ -476,10 +680,13 @@ def _utc_iso(value: datetime) -> str:
 __all__ = (
     "GENESIS_DIGEST",
     "AuditAuthenticator",
+    "AuditCursor",
     "AuditEvent",
+    "AuditPage",
     "AuditRecord",
     "AuditRepository",
     "ChainVerification",
+    "ToolTrajectoryEvent",
     "canonical_event_bytes",
     "canonical_json",
     "verify_records",

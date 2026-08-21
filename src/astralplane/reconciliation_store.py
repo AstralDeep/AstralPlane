@@ -77,7 +77,7 @@ WHERE astralplane_reconciliation_marker.result_digest IS NULL
       OR (
           astralplane_reconciliation_marker.state = 'failed'
           AND astralplane_reconciliation_marker.error_type
-              ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0, 127}$'
+              ~ '^[A-Za-z0-9][A-Za-z0-9._-]{{0,127}}$'
       )
   )
 RETURNING {_MARKER_PROJECTION}

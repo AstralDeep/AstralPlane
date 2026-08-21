@@ -2,25 +2,103 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
+import uuid
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
+from typing import Any
 
 import pytest
 from _support import ScriptedTransaction
 
+from astralplane.database.baseline import BaselineMigrationRunner
+from astralplane.database.migrations import (
+    CURRENT_DATA_PLANE_REVISION,
+    MIGRATION_REGISTRY,
+    MigrationRunner,
+)
+from astralplane.database.pool import ConnectionPool
+from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import PlaneError
 from astralplane.repositories.audit import (
     GENESIS_DIGEST,
+    AuditCursor,
     AuditEvent,
+    AuditPage,
     AuditRecord,
     AuditRepository,
+    ToolTrajectoryEvent,
     canonical_event_bytes,
     canonical_json,
     verify_records,
 )
+from tests.fixtures.pre_split.loader import (
+    TEST_DATABASE_ENV,
+    FixtureLoadError,
+    connect_fixture_database,
+    drop_postgres_fixture,
+)
 
 NOW = datetime(2026, 8, 13, 20, tzinfo=UTC)
 KEY = b"k" * 32
+
+
+class _SingleConnectionDriverPool:
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+        self.borrowed = False
+
+    def getconn(self) -> Any:
+        if self.borrowed:
+            raise RuntimeError("audit integration connection is already borrowed")
+        self.borrowed = True
+        return self.connection
+
+    def putconn(self, connection: Any, *, close: bool = False) -> None:
+        if connection is not self.connection or not self.borrowed or close:
+            raise RuntimeError("audit integration connection was returned in an invalid state")
+        self.borrowed = False
+
+    def closeall(self) -> None:
+        return None
+
+
+@pytest.fixture
+def audit_postgres_database() -> Iterator[PlaneDatabase]:
+    database_url = os.environ.get(TEST_DATABASE_ENV)
+    if database_url is None:
+        pytest.skip(f"set {TEST_DATABASE_ENV} to an isolated PostgreSQL test database")
+    try:
+        connection = connect_fixture_database(database_url)
+    except FixtureLoadError as exc:
+        pytest.fail(str(exc))
+    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
+    cursor = connection.cursor()
+    try:
+        cursor.execute(f'CREATE SCHEMA "{schema}"')
+        cursor.execute(f'SET search_path TO "{schema}", pg_catalog')
+        connection.commit()
+    finally:
+        cursor.close()
+
+    pool = ConnectionPool(_SingleConnectionDriverPool(connection))
+    database = PlaneDatabase(pool)
+    try:
+        migration = MigrationRunner(
+            database,
+            revision=CURRENT_DATA_PLANE_REVISION,
+            registry=MIGRATION_REGISTRY,
+        )
+        BaselineMigrationRunner(database, migration).run(
+            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+        )
+        yield database
+    finally:
+        pool.close()
+        drop_postgres_fixture(connection, schema=schema)
+        connection.close()
 
 
 def authenticate(key_id: str, payload: bytes) -> bytes:
@@ -114,6 +192,78 @@ def test_canonical_json_rejects_invalid_and_sorts_keys() -> None:
     assert canonical_json([2, 1], expected_type=list) == "[2,1]"
     with pytest.raises(ValueError):
         canonical_json("not-json", expected_type=dict)
+
+
+def test_canonical_json_normalizes_detached_nested_containers() -> None:
+    detached_object = MappingProxyType(
+        {
+            "z": (
+                MappingProxyType(
+                    {
+                        "items": [2, MappingProxyType({"nested": (3, 4)})],
+                    }
+                ),
+            ),
+            "a": MappingProxyType({"enabled": True}),
+        }
+    )
+    detached_list = (
+        MappingProxyType({"b": (2, 1)}),
+        [MappingProxyType({"a": None})],
+    )
+
+    assert canonical_json(detached_object, expected_type=dict) == (
+        '{"a":{"enabled":true},"z":[{"items":[2,{"nested":[3,4]}]}]}'
+    )
+    assert canonical_json(detached_list, expected_type=list) == (
+        '[{"b":[2,1]},[{"a":null}]]'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_type"),
+    [
+        (MappingProxyType({"unsupported": frozenset({"value"})}), dict),
+        ({1: "non-string-key"}, dict),
+        ([b"bytes"], list),
+        ([float("nan")], list),
+        (MappingProxyType({"object": True}), list),
+    ],
+)
+def test_canonical_json_rejects_unsupported_detached_values(
+    value: object, expected_type: type
+) -> None:
+    with pytest.raises(ValueError):
+        canonical_json(value, expected_type=expected_type)  # type: ignore[arg-type]
+
+
+def test_real_postgresql_append_normalizes_detached_json(
+    audit_postgres_database: PlaneDatabase,
+) -> None:
+    value = event(
+        event_id=str(uuid.uuid4()),
+        correlation_id=str(uuid.uuid4()),
+        inputs_json='{"outer":{"items":[{"b":2,"a":1},[3,4]]}}',
+        outputs_json='{"summary":{"ok":true}}',
+        artifact_pointers_json='[{"meta":{"segments":[1,2]},"kind":"file"}]',
+    )
+    repository = AuditRepository()
+
+    with audit_postgres_database.transaction() as transaction:
+        appended = repository.append(transaction, value, authenticate)
+    with audit_postgres_database.transaction() as transaction:
+        reloaded = repository.get(
+            transaction,
+            chain_id=value.chain_id,
+            event_id=value.event_id,
+        )
+
+    assert appended.event.inputs_json == '{"outer":{"items":[{"a":1,"b":2},[3,4]]}}'
+    assert appended.event.outputs_json == '{"summary":{"ok":true}}'
+    assert appended.event.artifact_pointers_json == (
+        '[{"kind":"file","meta":{"segments":[1,2]}}]'
+    )
+    assert reloaded == appended
 
 
 def test_schema_v1_canonical_bytes_preserve_legacy_chain_format() -> None:
@@ -221,6 +371,135 @@ def test_owner_scoped_reads_and_limits() -> None:
         repository.list_for_chain(ScriptedTransaction(), chain_id="owner-1", limit=0)
     with pytest.raises(ValueError):
         repository.load_chain(ScriptedTransaction(), chain_id="owner-1", start_sequence=0)
+
+
+def test_descending_owner_page_supports_typed_filters_and_cursor() -> None:
+    first = event_row(recorded_at=NOW + timedelta(seconds=4))
+    second = event_row(
+        event(event_id="event-2", outcome="failure"),
+        recorded_at=NOW + timedelta(seconds=3),
+    )
+    third = event_row(
+        event(event_id="event-3"),
+        recorded_at=NOW + timedelta(seconds=2),
+    )
+    transaction = ScriptedTransaction(all_rows=[(first, second, third)])
+    cursor = AuditCursor(recorded_at=NOW + timedelta(seconds=5), event_id="event-9")
+
+    page = AuditRepository().list_page(
+        transaction,
+        owner_id="owner-1",
+        event_classes=("tool_call",),
+        outcomes=("failure",),
+        from_ts=NOW,
+        to_ts=NOW + timedelta(hours=1),
+        keyword=r"100%_safe\\path",
+        cursor=cursor,
+        limit=2,
+    )
+
+    assert isinstance(page, AuditPage)
+    assert [record.event.event_id for record in page.records] == ["event-1", "event-2"]
+    assert page.next_cursor == AuditCursor(
+        recorded_at=NOW + timedelta(seconds=3), event_id="event-2"
+    )
+    statement = transaction.calls[0][1]
+    parameters = transaction.calls[0][2]
+    assert "actor_user_id = %s" in statement
+    assert "recorded_at >= %s" in statement and "recorded_at < %s" in statement
+    assert "ORDER BY recorded_at DESC, event_id DESC" in statement
+    assert "ESCAPE E'\\\\'" in statement
+    assert parameters[-3:] == (
+        "%100\\%\\_safe\\\\\\\\path%",
+        "%100\\%\\_safe\\\\\\\\path%",
+        3,
+    )
+
+
+def test_descending_owner_page_empty_and_validation() -> None:
+    repository = AuditRepository()
+    assert repository.list_page(
+        ScriptedTransaction(all_rows=[()]), owner_id="owner-1"
+    ) == AuditPage(records=(), next_cursor=None)
+    invalid_calls = (
+        {"owner_id": "", "limit": 1},
+        {"owner_id": "owner-1", "limit": 0},
+        {"owner_id": "owner-1", "event_classes": ("",)},
+        {"owner_id": "owner-1", "outcomes": ("other",)},
+        {"owner_id": "owner-1", "from_ts": NOW.replace(tzinfo=None)},
+        {
+            "owner_id": "owner-1",
+            "from_ts": NOW + timedelta(seconds=1),
+            "to_ts": NOW,
+        },
+        {"owner_id": "owner-1", "keyword": " "},
+        {"owner_id": "owner-1", "cursor": "encoded"},
+    )
+    for arguments in invalid_calls:
+        with pytest.raises(ValueError):
+            repository.list_page(ScriptedTransaction(), **arguments)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        AuditCursor(recorded_at=NOW.replace(tzinfo=None), event_id="event-1")
+    with pytest.raises(ValueError):
+        AuditCursor(recorded_at=NOW, event_id="")
+
+
+def test_admin_trajectory_query_is_fixed_bounded_and_typed() -> None:
+    transaction = ScriptedTransaction(
+        all_rows=[
+            (
+                {
+                    "agent_id": "agent-1",
+                    "correlation_id": "turn-1",
+                    "tool_name": "search",
+                },
+            )
+        ]
+    )
+    result = AuditRepository().list_tool_trajectory_events_for_administration(
+        transaction,
+        from_ts=NOW,
+        to_ts=NOW + timedelta(hours=1),
+        limit=12,
+    )
+    assert result == (
+        ToolTrajectoryEvent(
+            agent_id="agent-1", correlation_id="turn-1", tool_name="search"
+        ),
+    )
+    assert "event_class = 'agent_tool_call'" in transaction.calls[0][1]
+    assert "action_type LIKE 'tool.%.end'" in transaction.calls[0][1]
+    assert transaction.calls[0][2] == (NOW, NOW + timedelta(hours=1), 12)
+
+
+def test_admin_trajectory_query_validates_bounds_and_corrupt_rows() -> None:
+    repository = AuditRepository()
+    for arguments in (
+        {"from_ts": NOW.replace(tzinfo=None), "to_ts": NOW, "limit": 1},
+        {"from_ts": NOW + timedelta(seconds=1), "to_ts": NOW, "limit": 1},
+        {"from_ts": NOW, "to_ts": NOW, "limit": 0},
+    ):
+        with pytest.raises(ValueError):
+            repository.list_tool_trajectory_events_for_administration(
+                ScriptedTransaction(), **arguments
+            )
+    with pytest.raises(ValueError):
+        repository.list_tool_trajectory_events_for_administration(
+            ScriptedTransaction(
+                all_rows=[
+                    (
+                        {
+                            "agent_id": None,
+                            "correlation_id": "turn-1",
+                            "tool_name": "search",
+                        },
+                    )
+                ]
+            ),
+            from_ts=NOW,
+            to_ts=NOW,
+        )
 
 
 def records() -> tuple[AuditRecord, AuditRecord]:

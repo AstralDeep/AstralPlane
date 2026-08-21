@@ -63,6 +63,15 @@ class FakeTransaction:
             (name,) = parameters  # type: ignore[misc]
             self.objects.add(str(name))
             self.executions.append(f"add:{name}")
+        elif statement == "TEST VERIFY OBJECTS":
+            required = {str(name) for name in parameters}  # type: ignore[union-attr]
+            missing = required.difference(self.objects)
+            if missing:
+                raise SchemaRevisionError(
+                    "current schema structural verification failed",
+                    metadata={"missing": ",".join(sorted(missing))},
+                )
+            self.executions.append("verify:" + ",".join(sorted(required)))
         else:
             raise AssertionError(f"unexpected SQL: {statement}")
         return SimpleNamespace(rowcount=1, status_message="OK", returned_records=())
@@ -130,6 +139,13 @@ def _add_object(name: str):
     return operation
 
 
+def _verify_objects(*names: str):
+    def operation(transaction: Any) -> None:
+        transaction.execute("TEST VERIFY OBJECTS", names)
+
+    return operation
+
+
 def _registry() -> MigrationRegistry:
     return MigrationRegistry(
         (
@@ -147,7 +163,9 @@ def _registry() -> MigrationRegistry:
                 checksum=_checksum("065-to-066"),
                 operation=_add_object("messages-owner-index"),
             ),
-        )
+        ),
+        current_schema_verifier=_verify_objects("base-schema", "messages-owner-index"),
+        current_schema_verifier_checksum=_checksum("verify-base-and-owner-index"),
     )
 
 
@@ -207,6 +225,19 @@ def test_repeated_run_is_already_current_and_does_not_reapply_steps() -> None:
     assert sum(item.startswith("add:") for item in database.executions) == add_count
 
 
+def test_current_metadata_cannot_hide_structural_corruption() -> None:
+    database = FakeDatabase()
+    runner = _runner(database)
+    runner.run(expected_revision="066.001")
+    database.objects.remove("messages-owner-index")
+
+    with pytest.raises(SchemaRevisionError, match="structural verification"):
+        runner.run(expected_revision="066.001")
+
+    assert database.metadata["revision"] == "066.001"
+    assert database.rollbacks == 1
+
+
 def test_current_marker_without_digest_is_rejected_without_relabeling() -> None:
     database = FakeDatabase(revision="066.001", objects={"base-schema"})
 
@@ -239,7 +270,9 @@ def _pinned_predecessor_runner(database: FakeDatabase) -> MigrationRunner:
                 checksum=_checksum("067-to-074"),
                 operation=_add_object("authority-schema"),
             ),
-        )
+        ),
+        current_schema_verifier=_verify_objects("authority-schema"),
+        current_schema_verifier_checksum=_checksum("verify-authority-schema"),
     )
     revision = DataPlaneRevision(
         schema_revision="074.001",
@@ -248,6 +281,63 @@ def _pinned_predecessor_runner(database: FakeDatabase) -> MigrationRunner:
         accepted_predecessor_digests=(("067.001", _checksum("067-registry")),),
     )
     return MigrationRunner(database, revision=revision, registry=registry)  # type: ignore[arg-type]
+
+
+def _full_lineage_runner(database: FakeDatabase) -> MigrationRunner:
+    registry = MigrationRegistry(
+        (
+            Migration(
+                name="066-to-067",
+                source_revisions=("066.001",),
+                target_revision="067.001",
+                checksum=_checksum("066-to-067"),
+                operation=_add_object("recovery-schema"),
+            ),
+            Migration(
+                name="067-to-074",
+                source_revisions=("067.001",),
+                target_revision="074.001",
+                checksum=_checksum("067-to-074"),
+                operation=_add_object("authority-schema"),
+            ),
+        ),
+        current_schema_verifier=_verify_objects("recovery-schema", "authority-schema"),
+        current_schema_verifier_checksum=_checksum("verify-recovery-and-authority"),
+    )
+    revision = DataPlaneRevision(
+        schema_revision="074.001",
+        read_compatible_from=("066.001", "067.001"),
+        migration_digest=registry.digest,
+        accepted_predecessor_digests=(("067.001", _checksum("067-registry")),),
+    )
+    return MigrationRunner(database, revision=revision, registry=registry)  # type: ignore[arg-type]
+
+
+def test_pre_split_066_without_plane_digest_runs_both_current_edges() -> None:
+    database = FakeDatabase(revision="066.001", objects={"legacy"})
+
+    report = _full_lineage_runner(database).run(expected_revision="074.001")
+
+    assert report.source_revision == "066.001"
+    assert report.applied_steps == ("066-to-067", "067-to-074")
+    assert database.objects == {"legacy", "recovery-schema", "authority-schema"}
+    assert database.metadata == {
+        "revision": "074.001",
+        "astralplane_migration_digest": report.migration_digest,
+    }
+
+
+def test_pre_split_066_rejects_an_unrecognized_plane_digest() -> None:
+    database = FakeDatabase(revision="066.001", digest="f" * 64, objects={"legacy"})
+
+    with pytest.raises(SchemaRevisionError, match="unrecognized migration-set digest"):
+        _full_lineage_runner(database).run(expected_revision="074.001")
+
+    assert database.metadata == {
+        "revision": "066.001",
+        "astralplane_migration_digest": "f" * 64,
+    }
+    assert database.objects == {"legacy"}
 
 
 def test_exact_pinned_predecessor_digest_is_accepted_and_replaced_atomically() -> None:
@@ -347,7 +437,9 @@ def test_migration_failure_rolls_back_schema_and_revision_together() -> None:
                 checksum=_checksum("failing"),
                 operation=fail_after_write,
             ),
-        )
+        ),
+        current_schema_verifier=_verify_objects("must-roll-back"),
+        current_schema_verifier_checksum=_checksum("verify-must-roll-back"),
     )
     database = FakeDatabase(revision="065.001", objects={"legacy"})
 
@@ -399,6 +491,27 @@ def test_runner_rejects_registry_digest_mismatch_at_construction() -> None:
         MigrationRunner(database, revision=wrong_revision, registry=registry)  # type: ignore[arg-type]
 
 
+def test_runner_rejects_a_registry_without_structural_verification() -> None:
+    registry = MigrationRegistry(
+        (
+            Migration(
+                name="empty-to-066",
+                source_revisions=(None,),
+                target_revision="066.001",
+                checksum=_checksum("empty-to-066"),
+                operation=_add_object("base-schema"),
+            ),
+        )
+    )
+    revision = DataPlaneRevision(
+        schema_revision="066.001",
+        read_compatible_from=("065.001",),
+        migration_digest=registry.digest,
+    )
+    with pytest.raises(MigrationDefinitionError, match="structural verifier"):
+        MigrationRunner(FakeDatabase(), revision=revision, registry=registry)  # type: ignore[arg-type]
+
+
 def test_registry_cycle_is_detected_and_rolled_back() -> None:
     registry = MigrationRegistry(
         (
@@ -416,7 +529,9 @@ def test_registry_cycle_is_detected_and_rolled_back() -> None:
                 checksum=_checksum("backward"),
                 operation=_add_object("backward"),
             ),
-        )
+        ),
+        current_schema_verifier=_verify_objects("never-reached"),
+        current_schema_verifier_checksum=_checksum("verify-never-reached"),
     )
     revision = DataPlaneRevision(
         schema_revision="067.001",

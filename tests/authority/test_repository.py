@@ -65,9 +65,11 @@ class ScriptedTransaction:
         self,
         *,
         one: list[dict[str, Any] | None | BaseException] | None = None,
+        many: list[tuple[dict[str, Any], ...] | BaseException] | None = None,
         execute: list[Result | BaseException] | None = None,
     ) -> None:
         self.one = deque(one or [])
+        self.many = deque(many or [])
         self.execute_results = deque(execute or [])
         self.calls: list[tuple[str, str, object]] = []
         self.savepoints: list[str] = []
@@ -89,7 +91,12 @@ class ScriptedTransaction:
         parameters: object = (),
     ) -> tuple[dict[str, Any], ...]:
         self.calls.append(("all", statement, parameters))
-        return ()
+        if not self.many:
+            return ()
+        value = self.many.popleft()
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     def execute(self, statement: str, parameters: object = ()) -> Result:
         self.calls.append(("execute", statement, parameters))
@@ -139,6 +146,24 @@ def _binding(**changes: object) -> AgentAuthorityBinding:
     }
     values.update(changes)
     return AgentAuthorityBinding(**values)  # type: ignore[arg-type]
+
+
+def _provisioning_binding() -> AgentAuthorityBinding:
+    return AgentAuthorityBinding.provisioning_intent(
+        binding_id="binding-pending",
+        owner_id="owner-1",
+        agent_id="agent-1",
+        runtime_id="runtime-1",
+        runtime_generation=1,
+        population=AuthorityPopulation.SERVER_DYNAMIC,
+        tenant_id="tenant-1",
+        envelope_id="envelope-1",
+        policy_digest=POLICY_DIGEST,
+        machine_digest=MACHINE_DIGEST,
+        config_epoch=7,
+        capabilities=("astral.tools.read",),
+        created_at=NOW,
+    )
 
 
 def _lifecycle(**changes: object) -> AuthorityLifecycleOperation:
@@ -390,6 +415,191 @@ def test_binding_conflicts_and_corrupt_rows_are_typed() -> None:
         )
 
 
+def test_active_binding_query_is_exact_owner_runtime_generation_scoped() -> None:
+    repository = AuthorityRepository()
+    binding = _binding()
+    transaction = ScriptedTransaction(one=[_row(binding)])
+
+    assert (
+        repository.get_active_binding(
+            transaction,
+            owner_id="owner-1",
+            agent_id="agent-1",
+            runtime_id="runtime-1",
+            runtime_generation=1,
+        )
+        == binding
+    )
+    _, statement, parameters = transaction.calls[0]
+    assert "state = 'active'" in statement
+    assert parameters == ("owner-1", "agent-1", "runtime-1", 1)
+    assert (
+        repository.get_active_binding(
+            ScriptedTransaction(one=[None]),
+            owner_id="owner-1",
+            agent_id="agent-1",
+            runtime_id="runtime-1",
+            runtime_generation=2,
+        )
+        is None
+    )
+
+    invalid_scopes = (
+        {"owner_id": " bad owner "},
+        {"agent_id": ""},
+        {"runtime_id": "bad runtime"},
+        {"runtime_generation": 0},
+        {"runtime_generation": True},
+    )
+    base: dict[str, object] = {
+        "owner_id": "owner-1",
+        "agent_id": "agent-1",
+        "runtime_id": "runtime-1",
+        "runtime_generation": 1,
+    }
+    for change in invalid_scopes:
+        with pytest.raises(RepositoryValidationError):
+            repository.get_active_binding(  # type: ignore[arg-type]
+                ScriptedTransaction(),
+                **(base | change),
+            )
+
+    wrong_owner = _row(binding)
+    wrong_owner["owner_id"] = "owner-2"
+    with pytest.raises(RepositoryDataError, match="exact scope"):
+        repository.get_active_binding(
+            ScriptedTransaction(one=[wrong_owner]),
+            owner_id="owner-1",
+            agent_id="agent-1",
+            runtime_id="runtime-1",
+            runtime_generation=1,
+        )
+
+
+def test_latest_binding_query_is_population_scoped_and_deterministic() -> None:
+    repository = AuthorityRepository()
+    binding = _binding()
+    transaction = ScriptedTransaction(one=[_row(binding)])
+
+    assert (
+        repository.get_latest_binding(
+            transaction,
+            owner_id="owner-1",
+            agent_id="agent-1",
+            population=AuthorityPopulation.SERVER_DYNAMIC,
+        )
+        == binding
+    )
+    _, statement, parameters = transaction.calls[0]
+    assert "ORDER BY created_at DESC, binding_id DESC" in statement
+    assert "LIMIT 1" in statement
+    assert parameters == ("owner-1", "agent-1", "server_dynamic")
+
+    with pytest.raises(RepositoryValidationError, match="population"):
+        repository.get_latest_binding(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            agent_id="agent-1",
+            population="server_dynamic",  # type: ignore[arg-type]
+        )
+    wrong_population = _row(binding)
+    wrong_population["population"] = AuthorityPopulation.BYO_USER.value
+    with pytest.raises(RepositoryDataError, match="population scope"):
+        repository.get_latest_binding(
+            ScriptedTransaction(one=[wrong_population]),
+            owner_id="owner-1",
+            agent_id="agent-1",
+            population=AuthorityPopulation.SERVER_DYNAMIC,
+        )
+
+
+def test_provisioning_binding_activation_is_a_one_time_remote_identity_cas() -> None:
+    repository = AuthorityRepository()
+    intent = _provisioning_binding()
+    activated = replace(
+        intent,
+        warden_id="warden-1",
+        lease_id="lease-1",
+        lineage_id="lineage-1",
+        subject_id="agent-1",
+        lease_sequence=1,
+        lease_expires_at_ns=1_800_000_000_000_000_000,
+        state=AuthorityBindingState.ACTIVE,
+        updated_at=NOW + timedelta(seconds=1),
+        version=1,
+    )
+
+    transaction = ScriptedTransaction(one=[_row(activated)])
+    assert repository.activate_binding(
+        transaction,
+        activated,
+        expected_version=0,
+    ) == activated
+    _, statement, parameters = transaction.calls[0]
+    assert "state = 'provisioning' AND version = %s" in statement
+    assert "lease_sequence = 0 AND lease_expires_at_ns = 0" in statement
+    assert intent.warden_id in parameters  # type: ignore[operator]
+    assert intent.lease_id in parameters  # type: ignore[operator]
+
+    with pytest.raises(AuthorityCompareAndSetConflictError, match="activation"):
+        repository.activate_binding(
+            ScriptedTransaction(one=[None]),
+            activated,
+            expected_version=0,
+        )
+    with pytest.raises(RepositoryValidationError, match="active state"):
+        repository.activate_binding(
+            ScriptedTransaction(),
+            replace(activated, state=AuthorityBindingState.QUIESCENT),
+            expected_version=0,
+        )
+
+
+def test_failed_provisioning_binding_closes_through_a_dedicated_cas() -> None:
+    repository = AuthorityRepository()
+    intent = _provisioning_binding()
+    abandoned = replace(
+        intent,
+        state=AuthorityBindingState.CLOSED,
+        updated_at=NOW + timedelta(seconds=1),
+        version=1,
+    )
+
+    transaction = ScriptedTransaction(one=[_row(abandoned)])
+    assert repository.abandon_provisioning_binding(
+        transaction,
+        abandoned,
+        expected_version=0,
+    ) == abandoned
+    _, statement, parameters = transaction.calls[0]
+    assert "WHERE owner_id = %s AND binding_id = %s" in statement
+    assert parameters[-2:] == (AuthorityBindingState.PROVISIONING.value, 0)  # type: ignore[index]
+
+    with pytest.raises(AuthorityCompareAndSetConflictError):
+        repository.abandon_provisioning_binding(
+            ScriptedTransaction(one=[None]),
+            abandoned,
+            expected_version=0,
+        )
+    with pytest.raises(RepositoryValidationError, match="closed state"):
+        repository.abandon_provisioning_binding(
+            ScriptedTransaction(),
+            intent,
+            expected_version=0,
+        )
+    with pytest.raises(RepositoryValidationError, match="pending authority fence"):
+        repository.abandon_provisioning_binding(
+            ScriptedTransaction(),
+            replace(
+                _binding(),
+                state=AuthorityBindingState.CLOSED,
+                updated_at=NOW + timedelta(seconds=1),
+                version=1,
+            ),
+            expected_version=0,
+        )
+
+
 def test_lifecycle_operations_replay_only_an_identical_request_fingerprint() -> None:
     repository = AuthorityRepository()
     operation = _lifecycle()
@@ -488,6 +698,91 @@ def test_lifecycle_read_and_transition_use_owner_state_and_version_fences() -> N
         )
 
 
+def test_recoverable_lifecycle_query_is_owner_partitioned_bounded_and_skip_locked() -> None:
+    repository = AuthorityRepository()
+    operation = _lifecycle()
+    transaction = ScriptedTransaction(many=[(_row(operation),)])
+
+    assert repository.list_recoverable_lifecycle_operations(
+        transaction,
+        owner_id="owner-1",
+        due_at=NOW,
+        limit=10,
+    ) == (operation,)
+    _, statement, parameters = transaction.calls[0]
+    assert "owner_id = %s" in statement
+    assert "status IN ('pending', 'in_flight', 'uncertain')" in statement
+    assert "FOR UPDATE SKIP LOCKED" in statement
+    assert parameters == ("owner-1", NOW, 10)
+
+    with pytest.raises(RepositoryValidationError, match="scope"):
+        repository.list_recoverable_lifecycle_operations(
+            ScriptedTransaction(),
+            owner_id=" bad owner ",
+            due_at=NOW,
+        )
+    with pytest.raises(RepositoryValidationError, match="limit"):
+        repository.list_recoverable_lifecycle_operations(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            due_at=NOW,
+            limit=201,
+        )
+
+
+def test_recovery_owner_partitions_are_bounded_ordered_and_cover_both_queues() -> None:
+    repository = AuthorityRepository()
+    cutoff = NOW - timedelta(minutes=1)
+    transaction = ScriptedTransaction(
+        many=[
+            (
+                {"owner_id": "owner-1", "recovery_at": cutoff},
+                {"owner_id": "owner-2", "recovery_at": NOW},
+            )
+        ]
+    )
+
+    assert repository.list_recovery_owners(
+        transaction,
+        lifecycle_due_at=NOW,
+        effect_updated_before=cutoff,
+        limit=25,
+    ) == ("owner-1", "owner-2")
+    _, statement, parameters = transaction.calls[0]
+    assert "astralplane_authority_lifecycle_operation" in statement
+    assert "astralplane_protected_effect_operation" in statement
+    assert "UNION ALL" in statement
+    assert "FOR UPDATE" not in statement
+    assert parameters == (NOW, cutoff, 25)
+
+    with pytest.raises(RepositoryValidationError, match="UTC-aware"):
+        repository.list_recovery_owners(
+            ScriptedTransaction(),
+            lifecycle_due_at=NOW.replace(tzinfo=None),
+            effect_updated_before=cutoff,
+        )
+    with pytest.raises(RepositoryValidationError, match="limit"):
+        repository.list_recovery_owners(
+            ScriptedTransaction(),
+            lifecycle_due_at=NOW,
+            effect_updated_before=cutoff,
+            limit=1001,
+        )
+    with pytest.raises(RepositoryDataError, match="nondeterministic"):
+        repository.list_recovery_owners(
+            ScriptedTransaction(
+                many=[
+                    (
+                        {"owner_id": "owner-2", "recovery_at": NOW},
+                        {"owner_id": "owner-1", "recovery_at": cutoff},
+                    )
+                ]
+            ),
+            lifecycle_due_at=NOW,
+            effect_updated_before=cutoff,
+        )
+
+
 def test_protected_effect_intent_is_idempotent_and_owner_isolated() -> None:
     repository = AuthorityRepository()
     initial = _effect(
@@ -579,6 +874,115 @@ def test_protected_effect_transitions_are_explicit_cas_updates() -> None:
         )
         is None
     )
+
+
+def test_recoverable_effect_query_is_stale_owner_bounded_and_skip_locked() -> None:
+    repository = AuthorityRepository()
+    pending = _effect(
+        operation_id="operation-a",
+        status=ProtectedEffectStatus.LETS_PENDING,
+        receipt_id=None,
+        receipt_digest=None,
+        updated_at=NOW,
+    )
+    receipt = _effect(
+        operation_id="operation-b",
+        status=ProtectedEffectStatus.RECEIPT_CLAIMED,
+        updated_at=NOW + timedelta(seconds=1),
+    )
+    uncertain = _effect(
+        operation_id="operation-c",
+        status=ProtectedEffectStatus.OUTCOME_UNCERTAIN,
+        error_code="outcome-unknown",
+        updated_at=NOW + timedelta(seconds=2),
+    )
+    cutoff = NOW + timedelta(seconds=3)
+    transaction = ScriptedTransaction(
+        many=[tuple(_row(item) for item in (pending, receipt, uncertain))]
+    )
+
+    assert repository.list_recoverable_protected_effects(
+        transaction,
+        owner_id="owner-1",
+        updated_before=cutoff,
+        limit=3,
+    ) == (pending, receipt, uncertain)
+    _, statement, parameters = transaction.calls[0]
+    for status in (
+        "created",
+        "astral_authorized",
+        "lets_pending",
+        "receipt_received",
+        "receipt_claimed",
+        "executing",
+        "outcome_uncertain",
+    ):
+        assert f"'{status}'" in statement
+    for terminal_status in ("succeeded", "denied", "failed_closed", "effect_failed"):
+        assert f"'{terminal_status}'" not in statement
+    assert "updated_at < %s" in statement
+    assert "ORDER BY updated_at, operation_id" in statement
+    assert "FOR UPDATE SKIP LOCKED" in statement
+    assert parameters == ("owner-1", cutoff, 3)
+    assert "same caller-owned transaction" in (
+        AuthorityRepository.list_recoverable_protected_effects.__doc__ or ""
+    )
+
+
+def test_recoverable_effect_query_rejects_invalid_or_out_of_scope_results() -> None:
+    repository = AuthorityRepository()
+    cutoff = NOW + timedelta(seconds=1)
+
+    with pytest.raises(RepositoryValidationError, match="owner"):
+        repository.list_recoverable_protected_effects(
+            ScriptedTransaction(),
+            owner_id=" bad owner ",
+            updated_before=cutoff,
+        )
+    with pytest.raises(RepositoryValidationError, match="UTC-aware"):
+        repository.list_recoverable_protected_effects(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            updated_before=datetime(2026, 8, 14, 18),
+        )
+    for limit in (0, True, 201):
+        with pytest.raises(RepositoryValidationError, match="limit"):
+            repository.list_recoverable_protected_effects(
+                ScriptedTransaction(),
+                owner_id="owner-1",
+                updated_before=cutoff,
+                limit=limit,
+            )
+
+    wrong_owner = _row(_effect(updated_at=NOW))
+    wrong_owner["owner_id"] = "owner-2"
+    with pytest.raises(RepositoryDataError, match="stale owner scope"):
+        repository.list_recoverable_protected_effects(
+            ScriptedTransaction(many=[(wrong_owner,)]),
+            owner_id="owner-1",
+            updated_before=cutoff,
+        )
+
+    terminal = _effect(
+        status=ProtectedEffectStatus.SUCCEEDED,
+        effect_result_digest=EFFECT_DIGEST,
+        updated_at=NOW,
+    )
+    with pytest.raises(RepositoryDataError, match="stale owner scope"):
+        repository.list_recoverable_protected_effects(
+            ScriptedTransaction(many=[(_row(terminal),)]),
+            owner_id="owner-1",
+            updated_before=cutoff,
+        )
+
+    later = _effect(operation_id="operation-z", updated_at=NOW)
+    earlier = _effect(operation_id="operation-a", updated_at=NOW)
+    with pytest.raises(RepositoryDataError, match="ordered"):
+        repository.list_recoverable_protected_effects(
+            ScriptedTransaction(many=[(_row(later), _row(earlier))]),
+            owner_id="owner-1",
+            updated_before=cutoff,
+        )
 
 
 def test_receipt_claim_watermark_effect_and_outbox_share_one_savepoint() -> None:

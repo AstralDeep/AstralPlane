@@ -15,6 +15,15 @@ from astralplane.database.migrations import (
     PLANE_SCHEMA_067_MIGRATION,
     PLANE_SCHEMA_067_REGISTRY_DIGEST,
     PLANE_SCHEMA_067_STATEMENTS,
+    PLANE_SCHEMA_074_001_REGISTRY_DIGEST,
+    PLANE_SCHEMA_074_002_MIGRATION,
+    PLANE_SCHEMA_074_002_REGISTRY_DIGEST,
+    PLANE_SCHEMA_074_002_STATEMENTS,
+    PLANE_SCHEMA_074_003_MIGRATION,
+    PLANE_SCHEMA_074_003_REGISTRY_DIGEST,
+    PLANE_SCHEMA_074_003_STATEMENTS,
+    PLANE_SCHEMA_074_004_MIGRATION,
+    PLANE_SCHEMA_074_004_STATEMENTS,
     PLANE_SCHEMA_074_MIGRATION,
     PLANE_SCHEMA_074_STATEMENTS,
 )
@@ -38,16 +47,25 @@ class _RecordingTransaction:
 
 
 def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> None:
-    assert SCHEMA_REVISION == "074.001"
-    assert READ_COMPATIBLE_FROM == "067.001"
+    assert SCHEMA_REVISION == "074.004"
+    assert READ_COMPATIBLE_FROM == "066.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
     assert MIGRATION_REGISTRY.digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.schema_revision == SCHEMA_REVISION
-    assert CURRENT_DATA_PLANE_REVISION.read_compatible_from == (READ_COMPATIBLE_FROM,)
+    assert CURRENT_DATA_PLANE_REVISION.read_compatible_from == (
+        READ_COMPATIBLE_FROM,
+        "067.001",
+        "074.001",
+        "074.002",
+        "074.003",
+    )
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
         ("067.001", PLANE_SCHEMA_067_REGISTRY_DIGEST),
+        ("074.001", PLANE_SCHEMA_074_001_REGISTRY_DIGEST),
+        ("074.002", PLANE_SCHEMA_074_002_REGISTRY_DIGEST),
+        ("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),
     )
     assert CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("067.001") == (
         PLANE_SCHEMA_067_REGISTRY_DIGEST
@@ -58,7 +76,23 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         "ae2285e6764cf084eeaf6099443d85fb9b27ae930fcb0684e4e0f458d17bb4f9"
     )
     assert PLANE_SCHEMA_074_MIGRATION.source_revisions == ("067.001",)
-    assert PLANE_SCHEMA_074_MIGRATION.target_revision == SCHEMA_REVISION
+    assert PLANE_SCHEMA_074_MIGRATION.target_revision == "074.001"
+    assert PLANE_SCHEMA_074_001_REGISTRY_DIGEST == (
+        "02ee01830e51c97edbeb384eb05f25b5101efa6c0f564383bab5b7b90a7e80cf"
+    )
+    assert PLANE_SCHEMA_074_002_MIGRATION.source_revisions == ("074.001",)
+    assert PLANE_SCHEMA_074_002_MIGRATION.target_revision == "074.002"
+    assert PLANE_SCHEMA_074_003_MIGRATION.source_revisions == ("074.002",)
+    assert PLANE_SCHEMA_074_003_MIGRATION.target_revision == "074.003"
+    assert PLANE_SCHEMA_074_004_MIGRATION.source_revisions == ("074.003",)
+    assert PLANE_SCHEMA_074_004_MIGRATION.target_revision == SCHEMA_REVISION
+    assert MIGRATION_REGISTRY.migrations == (
+        PLANE_SCHEMA_067_MIGRATION,
+        PLANE_SCHEMA_074_MIGRATION,
+        PLANE_SCHEMA_074_002_MIGRATION,
+        PLANE_SCHEMA_074_003_MIGRATION,
+        PLANE_SCHEMA_074_004_MIGRATION,
+    )
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {
         "astralplane_outbox",
@@ -86,7 +120,33 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert "astralplane_receipt_watermark_require_advance" in authority_sql
     assert "idx_astralplane_outbox_authority_pending" in authority_sql
     assert "astralplane_outbox_payload_size_check" in authority_sql
+    assert "astralplane_authority_binding_remote_state_check" in authority_sql
+    assert "^pending:warden:[0-9a-f]{32}$" in authority_sql
+    assert "lease_expires_at_ns = 0" in authority_sql
+    assert "state IN ('provisioning', 'closed')" in authority_sql
+    assert "state <> 'provisioning'" in authority_sql
     assert "astralplane_authority_postcondition" in authority_sql
+
+    quality_sql = "\n".join(PLANE_SCHEMA_074_002_STATEMENTS)
+    assert {
+        "test_runs",
+        "test_case_results",
+        "test_evidence",
+        "audit_entries",
+        "latex_artifacts",
+    } <= {word for statement in PLANE_SCHEMA_074_002_STATEMENTS for word in statement.split()}
+    assert "system:quality-audit" in quality_sql
+    assert "test_case_results_owner_run_fk" in quality_sql
+    assert "astralplane_quality_audit_postcondition" in quality_sql
+
+    runtime_contract_sql = "\n".join(PLANE_SCHEMA_074_003_STATEMENTS)
+    assert "legacy_runtime_contract" in runtime_contract_sql
+    assert "agent_host_session_runtime_contract_version_check" in runtime_contract_sql
+
+    attachment_materialization_sql = "\n".join(PLANE_SCHEMA_074_004_STATEMENTS)
+    assert "user_attachments_materialization_state_check" in attachment_materialization_sql
+    assert "astralplane_blob_owner_state" in attachment_materialization_sql
+    assert "astralplane_purge_tombstone_target_shape_check" in attachment_materialization_sql
 
     canonical = json.dumps(
         PLANE_SCHEMA_067_STATEMENTS,
@@ -100,6 +160,30 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         separators=(",", ":"),
     ).encode("ascii")
     assert PLANE_SCHEMA_074_MIGRATION.checksum == hashlib.sha256(canonical_authority).hexdigest()
+    canonical_quality = json.dumps(
+        PLANE_SCHEMA_074_002_STATEMENTS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    assert PLANE_SCHEMA_074_002_MIGRATION.checksum == hashlib.sha256(
+        canonical_quality
+    ).hexdigest()
+    canonical_runtime_contract = json.dumps(
+        PLANE_SCHEMA_074_003_STATEMENTS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    assert PLANE_SCHEMA_074_003_MIGRATION.checksum == hashlib.sha256(
+        canonical_runtime_contract
+    ).hexdigest()
+    canonical_attachment_materialization = json.dumps(
+        PLANE_SCHEMA_074_004_STATEMENTS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    assert PLANE_SCHEMA_074_004_MIGRATION.checksum == hashlib.sha256(
+        canonical_attachment_materialization
+    ).hexdigest()
 
     declared = DataPlaneRevision(
         schema_revision="067.001",
@@ -121,6 +205,24 @@ def test_canonical_migration_executes_every_repeat_safe_statement_without_rewrit
     transaction = _RecordingTransaction()
     PLANE_SCHEMA_074_MIGRATION.apply(transaction)  # type: ignore[arg-type]
     assert transaction.executions == [(statement, ()) for statement in PLANE_SCHEMA_074_STATEMENTS]
+
+    transaction = _RecordingTransaction()
+    PLANE_SCHEMA_074_002_MIGRATION.apply(transaction)  # type: ignore[arg-type]
+    assert transaction.executions == [
+        (statement, ()) for statement in PLANE_SCHEMA_074_002_STATEMENTS
+    ]
+
+    transaction = _RecordingTransaction()
+    PLANE_SCHEMA_074_003_MIGRATION.apply(transaction)  # type: ignore[arg-type]
+    assert transaction.executions == [
+        (statement, ()) for statement in PLANE_SCHEMA_074_003_STATEMENTS
+    ]
+
+    transaction = _RecordingTransaction()
+    PLANE_SCHEMA_074_004_MIGRATION.apply(transaction)  # type: ignore[arg-type]
+    assert transaction.executions == [
+        (statement, ()) for statement in PLANE_SCHEMA_074_004_STATEMENTS
+    ]
 
 
 @pytest.mark.parametrize("value", ["66.1", "066.01", "066.0001", "v066.001", "", 1])

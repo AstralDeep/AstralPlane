@@ -16,7 +16,14 @@ from astralplane.compatibility import (
 
 
 def test_current_and_predecessor_schema_are_compatible() -> None:
-    for revision in ("066.001", "067.001"):
+    for revision in (
+        "066.001",
+        "067.001",
+        "074.001",
+        "074.002",
+        "074.003",
+        "074.004",
+    ):
         report = inspect_compatibility(
             expected_contract_version=CONTRACT_VERSION,
             observed_schema_revision=revision,

@@ -7,7 +7,6 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from pathlib import PurePath
 from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 Statement: TypeAlias = str
@@ -87,20 +86,6 @@ class Repository(Protocol):
     """Neutral repository whose caller declares transaction ownership."""
 
     def health(self, transaction: Transaction) -> Mapping[str, object]: ...
-
-
-@runtime_checkable
-class BlobStore(Protocol):
-    """Storage mechanics over an explicitly configured durable root."""
-
-    @property
-    def root(self) -> PurePath: ...
-
-    def put(self, *, owner_id: str, key: str, content: bytes) -> str: ...
-
-    def get(self, *, owner_id: str, key: str) -> bytes: ...
-
-    def delete(self, *, owner_id: str, key: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,7 +290,6 @@ MigrationCallable: TypeAlias = Callable[[Transaction], None]
 ReconcilerFactory: TypeAlias = Callable[[], Iterator[ProductReconciler]]
 
 __all__ = (
-    "BlobStore",
     "ClaimedOutboxEntry",
     "CommandResultContract",
     "IsolationLevel",

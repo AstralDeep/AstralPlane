@@ -22,6 +22,11 @@ from astralplane.reconciliation_store import (
     _marker_from_row,
 )
 
+
+def test_failed_marker_retry_sql_uses_the_same_bounded_identity_regex() -> None:
+    assert "{0,127}" in store_module._MARK_STARTED_SQL
+    assert "{0, 127}" not in store_module._MARK_STARTED_SQL
+
 REVISION = "067.001"
 PLAN_DIGEST = "a" * 64
 RESULT_DIGEST = "b" * 64

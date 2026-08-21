@@ -99,6 +99,26 @@ class RevocationQueueRepository:
         )
         return tuple(_record(row) for row in rows)
 
+    def pending_for_administration(
+        self,
+        query: QueryExecutor,
+        *,
+        limit: int = 20,
+    ) -> tuple[RevocationQueueRecord, ...]:
+        """Return bounded cross-owner work for the trusted revocation drainer."""
+
+        bounded_limit = _bounded_limit(limit, maximum=200)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._FIELDS}
+            FROM auth_revocation_queue
+            ORDER BY enqueued_at, id
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        )
+        return tuple(_record(row) for row in rows)
+
     def resolve(
         self,
         transaction: Transaction,

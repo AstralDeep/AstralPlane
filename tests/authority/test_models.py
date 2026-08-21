@@ -11,6 +11,7 @@ from astralplane.authority.models import (
     AgentAuthorityBinding,
     AuthorityBindingState,
     AuthorityPopulation,
+    pending_authority_identity,
 )
 from astralplane.errors import DomainValidationError
 
@@ -73,6 +74,84 @@ def test_only_declared_terminal_states_are_terminal() -> None:
         AuthorityBindingState.EXPIRED,
     }
     assert {state for state in AuthorityBindingState if state.terminal} == terminals
+
+
+def test_provisioning_intent_reserves_deterministic_non_authoritative_identities() -> None:
+    intent = AgentAuthorityBinding.provisioning_intent(
+        binding_id="binding-pending",
+        owner_id="owner-1",
+        agent_id="agent-1",
+        runtime_id="runtime-1",
+        runtime_generation=3,
+        population=AuthorityPopulation.SERVER_DYNAMIC,
+        tenant_id="tenant-1",
+        envelope_id="envelope-1",
+        policy_digest=POLICY_DIGEST,
+        machine_digest=MACHINE_DIGEST,
+        config_epoch=7,
+        capabilities=("astral.tools.read",),
+        created_at=datetime(2026, 8, 14, 16, tzinfo=UTC),
+    )
+
+    assert intent.state is AuthorityBindingState.PROVISIONING
+    assert intent.lease_sequence == 0
+    assert intent.lease_expires_at_ns == 0
+    assert (
+        intent.warden_id,
+        intent.lease_id,
+        intent.lineage_id,
+        intent.subject_id,
+    ) == (
+        pending_authority_identity(intent.binding_id, field="warden"),
+        pending_authority_identity(intent.binding_id, field="lease"),
+        pending_authority_identity(intent.binding_id, field="lineage"),
+        pending_authority_identity(intent.binding_id, field="subject"),
+    )
+
+    with pytest.raises(DomainValidationError, match="not supported"):
+        pending_authority_identity(intent.binding_id, field="unknown")  # type: ignore[arg-type]
+
+
+def test_pending_remote_identities_are_limited_to_provisioning_or_closed() -> None:
+    intent = AgentAuthorityBinding.provisioning_intent(
+        binding_id="binding-pending",
+        owner_id="owner-1",
+        agent_id="agent-1",
+        runtime_id="runtime-1",
+        runtime_generation=3,
+        population=AuthorityPopulation.SERVER_DYNAMIC,
+        tenant_id="tenant-1",
+        envelope_id="envelope-1",
+        policy_digest=POLICY_DIGEST,
+        machine_digest=MACHINE_DIGEST,
+        config_epoch=7,
+        capabilities=("astral.tools.read",),
+        created_at=datetime(2026, 8, 14, 16, tzinfo=UTC),
+    )
+
+    with pytest.raises(DomainValidationError, match="issued lease metadata"):
+        replace(intent, lease_expires_at_ns=1)
+
+    abandoned = replace(
+        intent,
+        state=AuthorityBindingState.CLOSED,
+        updated_at=intent.updated_at + timedelta(seconds=1),
+        version=1,
+    )
+    assert abandoned.warden_id == intent.warden_id
+    assert abandoned.lease_sequence == 0
+    assert abandoned.lease_expires_at_ns == 0
+
+    with pytest.raises(DomainValidationError, match="pending remote identity"):
+        replace(intent, state=AuthorityBindingState.ACTIVE, lease_expires_at_ns=1)
+    for state in (AuthorityBindingState.REVOKED, AuthorityBindingState.EXPIRED):
+        with pytest.raises(DomainValidationError, match="pending remote identity"):
+            replace(intent, state=state, lease_expires_at_ns=1)
+    with pytest.raises(DomainValidationError, match="deterministic pending"):
+        _binding(
+            state=AuthorityBindingState.PROVISIONING,
+            lease_expires_at_ns=0,
+        )
 
 
 @pytest.mark.parametrize(

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
 from astralplane.contracts import Record, Transaction
 from astralplane.errors import PlaneError
+from astralplane.repositories import RepositoryValidationError
 
 
 class VoiceSessionState(StrEnum):
@@ -40,6 +43,132 @@ _TERMINAL_TURN_STATES = {
     VoiceTurnState.CANCELLED,
     VoiceTurnState.ABANDONED,
 }
+
+_SESSION_INSERT_FIELDS = (
+    "session_id",
+    "user_id",
+    "activation_id",
+    "device_id",
+    "device_kind",
+    "transport",
+    "room_name",
+    "participant_identity",
+    "visible_chat_id",
+    "generation",
+    "media_grant_revision",
+    "owner_connection_generation",
+    "control_binding_id",
+    "control_binding_expires_at",
+    "lease_expires_at",
+    "last_interaction_at",
+    "started_at",
+    "updated_at",
+    "takeover_of_session_id",
+    "media_grant_nonce_hash",
+    "media_grant_expires_at",
+    "media_grant_issued_at",
+)
+_SESSION_PATCH_FIELDS = frozenset(
+    {
+        "participant_identity",
+        "worker_identity",
+        "visible_chat_id",
+        "chat_context_revision",
+        "applied_visible_chat_id",
+        "applied_chat_context_revision",
+        "state",
+        "speech_muted",
+        "microphone_enabled",
+        "foreground_active",
+        "foreground_reason",
+        "generation",
+        "media_grant_revision",
+        "owner_connection_generation",
+        "control_binding_id",
+        "control_binding_expires_at",
+        "lease_expires_at",
+        "control_owner_id",
+        "control_lease_expires_at",
+        "last_interaction_at",
+        "idle_started_at",
+        "updated_at",
+        "ended_at",
+        "end_reason",
+        "chat_unavailable_at",
+        "media_grant_nonce_hash",
+        "media_grant_expires_at",
+        "media_grant_consumed_at",
+        "last_media_refresh_id",
+        "media_grant_issued_at",
+        "worker_assignment_id",
+        "worker_rtc_grant_revision",
+        "worker_rtc_grant_issued_at",
+        "worker_rtc_grant_expires_at",
+    }
+)
+_TURN_INSERT_FIELDS = (
+    "turn_id",
+    "client_turn_id",
+    "session_id",
+    "session_generation",
+    "media_grant_revision",
+    "user_id",
+    "chat_id",
+    "chat_context_revision",
+    "execution_base_render_revision",
+    "submission_id",
+    "request_generation",
+    "result_request_generation",
+    "state",
+    "is_foreground",
+    "created_at",
+    "updated_at",
+)
+_TURN_PATCH_FIELDS = frozenset(
+    {
+        "detected_language",
+        "spoken_output_policy",
+        "output_reason",
+        "result_request_generation",
+        "accepted_connection_generation",
+        "message_id",
+        "acceptance_commit_id",
+        "result_commit_id",
+        "operation_id",
+        "background_task_id",
+        "state",
+        "is_foreground",
+        "terminal_kind",
+        "rejection_reason",
+        "rejection_retry_policy",
+        "origin_chat_unavailable_at",
+        "origin_chat_unavailable_reason",
+        "result_id",
+        "recap_source",
+        "sensitivity",
+        "sensitive_consent_at",
+        "sensitive_consent_method",
+        "sensitive_consent_consumed_at",
+        "announcement_sequence",
+        "result_reserved_samples",
+        "result_quantum_count",
+        "last_announcement_kind",
+        "last_phrase_key",
+        "next_announcement_due_at",
+        "announcement_claim_id",
+        "announcement_claim_expires_at",
+        "last_announcement_started_at",
+        "last_speech_finished_at",
+        "last_client_playout_started_at",
+        "last_client_playout_finished_at",
+        "last_client_playout_sequence",
+        "accepted_at",
+        "processing_started_at",
+        "waiting_started_at",
+        "terminal_at",
+        "updated_at",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +303,728 @@ class VoiceTurn:
 
 class VoiceRepository:
     """Persist supplied metadata; media workers and transport remain product-owned."""
+
+    def lock_identity(
+        self,
+        transaction: Transaction,
+        *,
+        namespace: str,
+        parts: tuple[str, ...],
+    ) -> None:
+        """Serialize one bounded product identity for the current transaction."""
+
+        _required("namespace", namespace, 64)
+        if not parts or any(not isinstance(part, str) or not part for part in parts):
+            raise RepositoryValidationError("voice lock parts must be non-empty strings")
+        digest = hashlib.sha256()
+        digest.update(b"astraldeep.voice.repository.v1\0")
+        digest.update(namespace.encode("ascii"))
+        for part in parts:
+            encoded = part.encode("utf-8")
+            digest.update(len(encoded).to_bytes(4, "big"))
+            digest.update(encoded)
+        lock_id = int.from_bytes(digest.digest()[:8], "big", signed=True)
+        transaction.execute("SELECT pg_advisory_xact_lock(%s)", (lock_id,))
+
+    def get_session_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_session WHERE user_id = %s AND session_id = %s"
+            + suffix,
+            (owner_id, session_id),
+        )
+
+    def get_session_record_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        session_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_session WHERE session_id = %s" + suffix,
+            (session_id,),
+        )
+
+    def get_activation_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        activation_id: str,
+        for_update: bool = True,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_session WHERE user_id = %s AND activation_id = %s"
+            + suffix,
+            (owner_id, activation_id),
+        )
+
+    def get_live_session_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_session WHERE user_id = %s AND ended_at IS NULL"
+            + suffix,
+            (owner_id,),
+        )
+
+    def get_turn_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        turn_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_turn WHERE user_id = %s AND turn_id = %s" + suffix,
+            (owner_id, turn_id),
+        )
+
+    def get_turn_record_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        turn_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_turn WHERE turn_id = %s" + suffix,
+            (turn_id,),
+        )
+
+    def get_client_turn_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        client_turn_id: str,
+        for_update: bool = False,
+    ) -> Record | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        return transaction.fetch_one(
+            "SELECT * FROM voice_turn WHERE user_id = %s AND client_turn_id = %s"
+            + suffix,
+            (owner_id, client_turn_id),
+        )
+
+    def get_submission_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        submission_id: str,
+        request_generation: str,
+    ) -> Record | None:
+        return transaction.fetch_one(
+            "SELECT * FROM voice_turn WHERE user_id = %s "
+            "AND submission_id = %s AND request_generation = %s",
+            (owner_id, submission_id, request_generation),
+        )
+
+    def max_client_playout_sequence(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+    ) -> int:
+        row = transaction.fetch_one(
+            "SELECT COALESCE(MAX(last_client_playout_sequence), -1) AS sequence "
+            "FROM voice_turn WHERE user_id = %s AND session_id = %s",
+            (owner_id, session_id),
+        )
+        return -1 if row is None else int(row["sequence"])
+
+    def has_turn_in_states(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        states: tuple[str, ...],
+    ) -> bool:
+        if not states:
+            raise RepositoryValidationError("voice turn state inventory cannot be empty")
+        return (
+            transaction.fetch_one(
+                "SELECT 1 FROM voice_turn WHERE session_id = %s "
+                "AND user_id = %s AND state = ANY(%s) LIMIT 1",
+                (session_id, owner_id, list(states)),
+            )
+            is not None
+        )
+
+    def list_true_idle_session_records_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        cutoff: datetime,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            SELECT * FROM voice_session
+            WHERE ended_at IS NULL AND state = 'active'
+              AND idle_started_at IS NOT NULL
+              AND idle_started_at <= %s
+            ORDER BY idle_started_at, session_id
+            FOR UPDATE SKIP LOCKED
+            """,
+            (cutoff,),
+        )
+
+    def chat_exists(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+        for_update: bool = False,
+    ) -> bool:
+        suffix = " FOR UPDATE" if for_update else ""
+        return (
+            transaction.fetch_one(
+                "SELECT id FROM chats WHERE id = %s AND user_id = %s" + suffix,
+                (chat_id, owner_id),
+            )
+            is not None
+        )
+
+    def get_chat_render_revision(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+        for_share: bool = False,
+    ) -> int | None:
+        suffix = " FOR SHARE" if for_share else ""
+        row = transaction.fetch_one(
+            "SELECT render_revision FROM chats WHERE id = %s AND user_id = %s"
+            + suffix,
+            (chat_id, owner_id),
+        )
+        return None if row is None else int(row.get("render_revision") or 0)
+
+    def list_chat_turn_records_for_update(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            "SELECT * FROM voice_turn WHERE user_id = %s AND chat_id = %s "
+            "ORDER BY created_at, turn_id FOR UPDATE",
+            (owner_id, chat_id),
+        )
+
+    def list_chat_session_records_for_update(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            "SELECT * FROM voice_session WHERE user_id = %s "
+            "AND visible_chat_id = %s ORDER BY started_at, session_id FOR UPDATE",
+            (owner_id, chat_id),
+        )
+
+    def abandon_chat_turns(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        turn_ids: tuple[str, ...],
+        reason: str,
+        now: datetime,
+        accepted: bool,
+    ) -> int:
+        if not turn_ids:
+            return 0
+        if accepted:
+            result = transaction.execute(
+                """
+                UPDATE voice_turn
+                SET state = 'abandoned', terminal_kind = 'abandoned',
+                    rejection_reason = NULL,
+                    rejection_retry_policy = NULL,
+                    origin_chat_unavailable_at = %s,
+                    origin_chat_unavailable_reason = %s,
+                    is_foreground = FALSE,
+                    next_announcement_due_at = NULL,
+                    announcement_claim_id = NULL,
+                    announcement_claim_expires_at = NULL,
+                    terminal_at = %s, updated_at = %s
+                WHERE user_id = %s AND turn_id = ANY(%s::uuid[])
+                  AND origin_chat_unavailable_at IS NULL
+                  AND (
+                    accepted_at IS NOT NULL
+                    OR state IN ('accepted', 'processing', 'waiting_on_user')
+                  )
+                """,
+                (now, reason, now, now, owner_id, list(turn_ids)),
+            )
+        else:
+            result = transaction.execute(
+                """
+                UPDATE voice_turn
+                SET state = 'abandoned', terminal_kind = 'abandoned',
+                    rejection_reason = 'chat_unavailable',
+                    rejection_retry_policy = 'explicit_user_retry',
+                    origin_chat_unavailable_at = NULL,
+                    origin_chat_unavailable_reason = NULL,
+                    is_foreground = FALSE,
+                    next_announcement_due_at = NULL,
+                    announcement_claim_id = NULL,
+                    announcement_claim_expires_at = NULL,
+                    terminal_at = %s, updated_at = %s
+                WHERE user_id = %s AND turn_id = ANY(%s::uuid[])
+                  AND state IN ('recognizing', 'submitting')
+                """,
+                (now, now, owner_id, list(turn_ids)),
+            )
+        return int(result.rowcount)
+
+    def abort_staged_chat_result_commits(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+        now: datetime,
+    ) -> tuple[str, ...]:
+        rows = transaction.fetch_all(
+            """
+            SELECT commit_id
+            FROM conversation_commit
+            WHERE chat_id = %s AND owner_user_id = %s
+              AND publication_role = 'assistant_result'
+              AND state = 'staged'
+            ORDER BY started_at, commit_id
+            FOR UPDATE
+            """,
+            (chat_id, owner_id),
+        )
+        commit_ids = tuple(str(row["commit_id"]) for row in rows)
+        for commit_id in commit_ids:
+            transaction.execute(
+                "DELETE FROM saved_components WHERE conversation_commit_id = %s",
+                (commit_id,),
+            )
+            transaction.execute(
+                "DELETE FROM workspace_layout WHERE conversation_commit_id = %s",
+                (commit_id,),
+            )
+            transaction.execute(
+                "DELETE FROM messages WHERE conversation_commit_id = %s",
+                (commit_id,),
+            )
+            transaction.execute(
+                """
+                UPDATE conversation_commit
+                SET state = 'aborted', aborted_at = %s,
+                    execution_base_commit_id = NULL
+                WHERE commit_id = %s AND state = 'staged'
+                """,
+                (now, commit_id),
+            )
+        return commit_ids
+
+    def delete_owned_chat(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        chat_id: str,
+    ) -> bool:
+        result = transaction.execute(
+            "DELETE FROM chats WHERE id = %s AND user_id = %s",
+            (chat_id, owner_id),
+        )
+        return int(result.rowcount) == 1
+
+    def insert_session_record(
+        self,
+        transaction: Transaction,
+        *,
+        values: Mapping[str, object],
+    ) -> Record:
+        normalized = _exact_values(values, _SESSION_INSERT_FIELDS, "voice session")
+        placeholders = ", ".join("%s" for _field in _SESSION_INSERT_FIELDS)
+        row = transaction.fetch_one(
+            "INSERT INTO voice_session ("
+            + ", ".join(_SESSION_INSERT_FIELDS)
+            + ") VALUES ("
+            + placeholders
+            + ") RETURNING *",
+            tuple(normalized[field] for field in _SESSION_INSERT_FIELDS),
+        )
+        if row is None:
+            raise PlaneError(
+                "voice session insert returned no row",
+                code="voice_session_insert_failed",
+            )
+        return row
+
+    def insert_turn_record(
+        self,
+        transaction: Transaction,
+        *,
+        values: Mapping[str, object],
+    ) -> Record:
+        normalized = _exact_values(values, _TURN_INSERT_FIELDS, "voice turn")
+        placeholders = ", ".join("%s" for _field in _TURN_INSERT_FIELDS)
+        row = transaction.fetch_one(
+            "INSERT INTO voice_turn ("
+            + ", ".join(_TURN_INSERT_FIELDS)
+            + ") VALUES ("
+            + placeholders
+            + ") RETURNING *",
+            tuple(normalized[field] for field in _TURN_INSERT_FIELDS),
+        )
+        if row is None:
+            raise PlaneError("voice turn insert returned no row", code="voice_turn_insert_failed")
+        return row
+
+    def patch_session_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        updates: Mapping[str, object],
+        require_live: bool | None = None,
+    ) -> Record | None:
+        normalized = _patch_values(updates, _SESSION_PATCH_FIELDS, "voice session")
+        assignments = ", ".join(f"{field} = %s" for field in normalized)
+        predicates = ["session_id = %s", "user_id = %s"]
+        parameters: list[object] = [*normalized.values(), session_id, owner_id]
+        if require_live is True:
+            predicates.append("ended_at IS NULL")
+        elif require_live is False:
+            predicates.append("ended_at IS NOT NULL")
+        return transaction.fetch_one(
+            "UPDATE voice_session SET "
+            + assignments
+            + " WHERE "
+            + " AND ".join(predicates)
+            + " RETURNING *",
+            tuple(parameters),
+        )
+
+    def patch_turn_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        turn_id: str,
+        updates: Mapping[str, object],
+        expected_states: tuple[str, ...] | None = None,
+    ) -> Record | None:
+        normalized = _patch_values(updates, _TURN_PATCH_FIELDS, "voice turn")
+        assignments = ", ".join(f"{field} = %s" for field in normalized)
+        predicates = ["turn_id = %s", "user_id = %s"]
+        parameters: list[object] = [*normalized.values(), turn_id, owner_id]
+        if expected_states is not None:
+            if not expected_states or any(not isinstance(state, str) for state in expected_states):
+                raise RepositoryValidationError("expected voice turn states are invalid")
+            predicates.append("state = ANY(%s)")
+            parameters.append(list(expected_states))
+        return transaction.fetch_one(
+            "UPDATE voice_turn SET "
+            + assignments
+            + " WHERE "
+            + " AND ".join(predicates)
+            + " RETURNING *",
+            tuple(parameters),
+        )
+
+    def complete_announcement_claim(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        turn_id: str,
+        claim_id: str | None,
+        claim_expires_at: datetime | None,
+    ) -> bool:
+        result = transaction.execute(
+            """
+            UPDATE voice_turn
+            SET announcement_claim_id = %s,
+                announcement_claim_expires_at = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE turn_id = %s AND user_id = %s
+            """,
+            (claim_id, claim_expires_at, turn_id, owner_id),
+        )
+        return int(result.rowcount) == 1
+
+    def abandon_unaccepted_session_turns(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        generation: int,
+        now: datetime,
+    ) -> int:
+        result = transaction.execute(
+            """
+            UPDATE voice_turn
+            SET state = 'abandoned', terminal_kind = 'abandoned',
+                rejection_reason = 'stale_session',
+                rejection_retry_policy = 'explicit_user_retry',
+                terminal_at = %s, updated_at = %s
+            WHERE session_id = %s AND user_id = %s AND session_generation = %s
+              AND state IN ('recognizing', 'submitting')
+            """,
+            (now, now, session_id, owner_id, generation),
+        )
+        return int(result.rowcount)
+
+    def clear_foreground_turns(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        now: datetime,
+        except_turn_id: str | None = None,
+    ) -> int:
+        exclusion = "" if except_turn_id is None else " AND turn_id <> %s"
+        parameters: tuple[object, ...] = (now, session_id, owner_id)
+        if except_turn_id is not None:
+            parameters += (except_turn_id,)
+        result = transaction.execute(
+            """
+            UPDATE voice_turn
+            SET is_foreground = FALSE, updated_at = %s
+            WHERE session_id = %s AND user_id = %s AND is_foreground
+              AND state NOT IN (
+                'succeeded', 'failed', 'refused', 'cancelled', 'abandoned'
+              )
+            """
+            + exclusion,
+            parameters,
+        )
+        return int(result.rowcount)
+
+    def list_owned_live_session_records_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        control_owner_id: str,
+        limit: int,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            SELECT * FROM voice_session
+            WHERE ended_at IS NULL AND control_owner_id = %s
+            ORDER BY started_at, session_id
+            FOR UPDATE SKIP LOCKED
+            LIMIT %s
+            """,
+            (control_owner_id, limit),
+        )
+
+    def list_expired_session_records_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        now: datetime,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            SELECT * FROM voice_session
+            WHERE ended_at IS NULL AND lease_expires_at <= %s
+            ORDER BY lease_expires_at, session_id
+            FOR UPDATE SKIP LOCKED
+            """,
+            (now,),
+        )
+
+    def list_renewable_control_session_records_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        control_owner_id: str,
+        now: datetime,
+        limit: int,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            SELECT * FROM voice_session
+            WHERE ended_at IS NULL
+              AND control_owner_id = %s
+              AND control_lease_expires_at > %s
+            ORDER BY control_lease_expires_at, session_id
+            FOR UPDATE SKIP LOCKED
+            LIMIT %s
+            """,
+            (control_owner_id, now, limit),
+        )
+
+    def release_control_lease_record(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+    ) -> bool:
+        result = transaction.execute(
+            """
+            UPDATE voice_session
+            SET control_owner_id = NULL, control_lease_expires_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE session_id = %s AND user_id = %s
+            """,
+            (session_id, owner_id),
+        )
+        return int(result.rowcount) == 1
+
+    def reconcile_ended_unaccepted_turns_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            WITH candidates AS (
+                SELECT turn.turn_id
+                FROM voice_turn AS turn
+                JOIN voice_session AS session
+                  ON session.session_id = turn.session_id
+                WHERE session.ended_at IS NOT NULL
+                  AND turn.state IN ('recognizing', 'submitting')
+                ORDER BY turn.updated_at, turn.turn_id
+                FOR UPDATE OF turn SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE voice_turn AS turn
+            SET state = 'abandoned', terminal_kind = 'abandoned',
+                rejection_reason = 'stale_session',
+                rejection_retry_policy = 'explicit_user_retry',
+                terminal_at = %s, updated_at = %s
+            FROM candidates
+            WHERE turn.turn_id = candidates.turn_id
+            RETURNING turn.*
+            """,
+            (limit, now, now),
+        )
+
+    def reconcile_ended_terminal_operation_turns_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[Record, ...]:
+        return transaction.fetch_all(
+            """
+            WITH operation_candidates AS (
+                SELECT
+                    turn.turn_id,
+                    operation.state AS operation_state,
+                    (
+                        acceptance.state = 'committed'
+                        AND acceptance.publication_role = 'user_acceptance'
+                        AND acceptance.owner_user_id = turn.user_id
+                        AND acceptance.chat_id = turn.chat_id
+                        AND acceptance.request_generation = turn.request_generation
+                        AND acceptance.operation_id = turn.operation_id
+                        AND acceptance.operation_execution_generation
+                            = operation.execution_generation
+                        AND result.state = 'committed'
+                        AND result.publication_role = 'assistant_result'
+                        AND result.owner_user_id = turn.user_id
+                        AND result.chat_id = turn.chat_id
+                        AND result.request_generation = turn.result_request_generation
+                        AND result.operation_id = turn.operation_id
+                        AND result.operation_execution_generation
+                            = operation.execution_generation
+                        AND result.parent_commit_id = turn.acceptance_commit_id
+                    ) AS exact_result_committed,
+                    turn.result_commit_id
+                FROM voice_turn AS turn
+                JOIN voice_session AS session
+                  ON session.session_id = turn.session_id
+                JOIN operation_record AS operation
+                  ON operation.operation_id = turn.operation_id
+                LEFT JOIN conversation_commit AS acceptance
+                  ON acceptance.commit_id = turn.acceptance_commit_id
+                LEFT JOIN conversation_commit AS result
+                  ON result.commit_id = turn.result_commit_id
+                WHERE session.ended_at IS NOT NULL
+                  AND turn.state IN ('accepted', 'processing', 'waiting_on_user')
+                  AND operation.state IN (
+                    'completed', 'failed', 'cancelled', 'retryable'
+                  )
+                  AND operation.operation_kind = 'voice_chat_message'
+                  AND operation.owner_scope = 'user'
+                  AND operation.owner_user_id = turn.user_id
+                  AND operation.chat_id = turn.chat_id
+                  AND operation.request_generation = turn.request_generation
+                  AND operation.connection_generation
+                      = turn.accepted_connection_generation
+                ORDER BY turn.updated_at, turn.turn_id
+                FOR UPDATE OF turn SKIP LOCKED
+                LIMIT %s
+            ), candidates AS (
+                SELECT
+                    turn_id,
+                    CASE
+                        WHEN operation_state = 'completed' AND exact_result_committed
+                            THEN 'succeeded'
+                        WHEN operation_state = 'cancelled' THEN 'cancelled'
+                        ELSE 'failed'
+                    END AS terminal_kind,
+                    CASE
+                        WHEN exact_result_committed THEN result_commit_id
+                        ELSE NULL
+                    END AS terminal_result_commit_id
+                FROM operation_candidates
+            )
+            UPDATE voice_turn AS turn
+            SET state = candidates.terminal_kind,
+                terminal_kind = candidates.terminal_kind,
+                result_commit_id = candidates.terminal_result_commit_id,
+                recap_source = 'terminal_status',
+                sensitivity = 'unknown',
+                is_foreground = FALSE,
+                next_announcement_due_at = NULL,
+                announcement_claim_id = NULL,
+                announcement_claim_expires_at = NULL,
+                terminal_at = %s,
+                updated_at = %s
+            FROM candidates
+            WHERE turn.turn_id = candidates.turn_id
+            RETURNING turn.*
+            """,
+            (limit, now, now),
+        )
 
     def create_session(self, transaction: Transaction, session: VoiceSessionCreate) -> VoiceSession:
         row = transaction.fetch_one(
@@ -457,6 +1308,39 @@ class VoiceRepository:
 def _required(name: str, value: str, maximum: int) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a non-empty string of at most {maximum} characters")
+
+
+def _exact_values(
+    values: Mapping[str, object],
+    expected: tuple[str, ...],
+    subject: str,
+) -> dict[str, object]:
+    if not isinstance(values, Mapping):
+        raise RepositoryValidationError(f"{subject} values must be a mapping")
+    missing = set(expected) - set(values)
+    unknown = set(values) - set(expected)
+    if missing or unknown:
+        raise RepositoryValidationError(
+            f"{subject} values do not match the repository contract",
+            metadata={"missing": sorted(missing), "unknown": sorted(unknown)},
+        )
+    return {field: values[field] for field in expected}
+
+
+def _patch_values(
+    values: Mapping[str, object],
+    allowed: frozenset[str],
+    subject: str,
+) -> dict[str, object]:
+    if not isinstance(values, Mapping) or not values:
+        raise RepositoryValidationError(f"{subject} updates must be a non-empty mapping")
+    unknown = set(values) - allowed
+    if unknown:
+        raise RepositoryValidationError(
+            f"{subject} updates contain unsupported fields",
+            metadata={"unknown": sorted(unknown)},
+        )
+    return dict(values)
 
 
 def _aware(name: str, value: datetime) -> None:

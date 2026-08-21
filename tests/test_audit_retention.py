@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from repositories._support import ScriptedTransaction
 
 from astralplane.audit_retention import (
     AuditRetentionError,
@@ -22,6 +21,7 @@ from astralplane.repositories.audit import (
     AuditRepository,
     canonical_event_bytes,
 )
+from tests.repositories._support import ScriptedTransaction
 
 NOW = datetime(2026, 8, 13, 20, tzinfo=UTC)
 EVENT_KEY = b"e" * 32

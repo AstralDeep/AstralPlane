@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
+from astralplane.blob_store import ExplicitRootStreamingBlobStore
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
@@ -18,16 +24,21 @@ from astralplane.repositories import (
 from astralplane.repositories.artifacts import (
     ArtifactRepository,
     ArtifactVersionRepository,
+    AttachmentMaterializationBeginResult,
+    AttachmentMaterializationCoordinator,
+    AttachmentMaterializationState,
     AttachmentRecord,
     AttachmentRepository,
     BlobMetadataRepository,
     MaterializationRepository,
     MessageAttachmentRepository,
+    _AttachmentMaterializationPublishFence,
+    _digest,
+    _pending_materialization,
 )
 
 NOW = datetime(2026, 8, 13, 23, 0, tzinfo=UTC)
 DIGEST_A = "a" * 64
-DIGEST_B = "b" * 64
 
 
 @dataclass(frozen=True)
@@ -57,6 +68,33 @@ class FakeTransaction:
         return self.fetch_all_results.popleft() if self.fetch_all_results else ()
 
 
+class FakeDatabase:
+    def __init__(
+        self,
+        transaction: FakeTransaction,
+        *,
+        fail_commit: bool = False,
+        commit_entered: threading.Event | None = None,
+        release_commit: threading.Event | None = None,
+    ) -> None:
+        self._transaction = transaction
+        self._fail_commit = fail_commit
+        self._commit_entered = commit_entered
+        self._release_commit = release_commit
+        self.transaction_count = 0
+
+    @contextmanager
+    def transaction(self, **_: object):
+        self.transaction_count += 1
+        yield self._transaction
+        if self._commit_entered is not None:
+            self._commit_entered.set()
+        if self._release_commit is not None:
+            assert self._release_commit.wait(timeout=5)
+        if self._fail_commit:
+            raise RuntimeError("simulated commit failure")
+
+
 def returned(row: dict[str, Any], *, rowcount: int = 1) -> Result:
     return Result(rowcount=rowcount, returned_records=(row,))
 
@@ -71,7 +109,7 @@ def attachment_record(**changes: Any) -> AttachmentRecord:
         "extension": "txt",
         "size_bytes": 12,
         "sha256": DIGEST_A,
-        "storage_locator": "owner-1/attachment-1.txt",
+        "storage_locator": "owner-1/attachment-1/report.txt",
         "created_at": 10,
         "deleted_at": None,
     }
@@ -94,6 +132,25 @@ def attachment_row(**changes: Any) -> dict[str, Any]:
         "created_at": record.created_at,
         "deleted_at": record.deleted_at,
     }
+    row.update(changes)
+    return row
+
+
+def pending_row(**changes: Any) -> dict[str, Any]:
+    row = attachment_row(
+        content_type="application/x-astralplane-pending-materialization",
+        size_bytes=0,
+        sha256="0" * 64,
+        storage_path="owner-1/attachment-1/report.txt",
+    )
+    row.update(
+        materialization_state="pending",
+        materialization_lease_id="lease-1",
+        materialization_lease_version=0,
+        materialization_lease_expires_at=NOW + timedelta(minutes=5),
+        materialization_max_bytes=1024,
+        materialization_storage_key="attachment-1/report.txt",
+    )
     row.update(changes)
     return row
 
@@ -140,55 +197,889 @@ def version_row(**changes: Any) -> dict[str, Any]:
     return row
 
 
-def test_materialization_registers_and_replays_exact_metadata() -> None:
+def test_materialization_result_and_pending_record_invariants_fail_closed() -> None:
+    with pytest.raises(ValueError, match="pending begin result"):
+        AttachmentMaterializationBeginResult(
+            state=AttachmentMaterializationState.PENDING
+        )
+    with pytest.raises(ValueError, match="ready begin result"):
+        AttachmentMaterializationBeginResult(
+            state=AttachmentMaterializationState.READY
+        )
+    with pytest.raises(RepositoryValidationError, match="lowercase SHA-256"):
+        _digest("not-a-digest")
+
+    with pytest.raises(RepositoryDataError, match="is not pending"):
+        _pending_materialization(pending_row(materialization_state="ready"))
+    with pytest.raises(RepositoryDataError, match="is abandoned"):
+        _pending_materialization(pending_row(deleted_at=10))
+    with pytest.raises(RepositoryDataError, match="timezone-aware"):
+        _pending_materialization(
+            pending_row(materialization_lease_expires_at=datetime(2026, 8, 13))
+        )
+
+
+def test_pending_materialization_identity_collision_without_a_row_fails_closed() -> None:
+    transaction = FakeTransaction()
+    transaction.execute_results.extend((Result(), Result(rowcount=0)))
+    transaction.fetch_one_results.extend(({"state": "active"}, None))
+    with pytest.raises(RepositoryConflictError, match="another namespace"):
+        MaterializationRepository().begin_pending_materialization(
+            transaction,
+            attachment_id="attachment-1",
+            owner_id="owner-1",
+            filename="report.txt",
+            category="text",
+            extension="txt",
+            storage_locator="owner-1/attachment-1/report.txt",
+            storage_key="attachment-1/report.txt",
+            max_bytes=1024,
+            created_at=10,
+            lease_id="lease-1",
+            lease_seconds=300,
+        )
+
+
+def test_pending_materialization_begins_and_replays_hidden_identity() -> None:
     repository = MaterializationRepository()
     transaction = FakeTransaction()
-    transaction.execute_results.append(returned(attachment_row()))
+    transaction.execute_results.extend((Result(), returned(pending_row())))
+    transaction.fetch_one_results.append({"state": "active"})
 
-    created = repository.register(transaction, attachment_record())
+    created = repository.begin_pending_materialization(
+        transaction,
+        attachment_id="attachment-1",
+        owner_id="owner-1",
+        filename="report.txt",
+        category="text",
+        extension="txt",
+        storage_locator="owner-1/attachment-1/report.txt",
+        storage_key="attachment-1/report.txt",
+        max_bytes=1024,
+        created_at=10,
+        lease_id="lease-1",
+        lease_seconds=300,
+    )
 
-    assert created == attachment_record()
-    assert transaction.calls[0][2][0:2] == ("attachment-1", "owner-1")
-    assert "%s" in transaction.calls[0][1]
-    assert "?" not in transaction.calls[0][1]
+    assert created.state is AttachmentMaterializationState.PENDING
+    assert created.pending is not None
+    assert created.pending.storage_key == "attachment-1/report.txt"
+    assert "materialization_state" in transaction.calls[-1][1]
+    assert "%s" in transaction.calls[-1][1]
+    assert "?" not in transaction.calls[-1][1]
 
     replay = FakeTransaction()
-    replay.execute_results.append(Result(rowcount=0))
-    replay.fetch_one_results.append(attachment_row())
-    assert repository.register(replay, attachment_record()) == created
+    replay.execute_results.extend((Result(), Result(rowcount=0)))
+    replay.fetch_one_results.extend(({"state": "active"}, pending_row()))
+    assert (
+        repository.begin_pending_materialization(
+            replay,
+            attachment_id="attachment-1",
+            owner_id="owner-1",
+            filename="report.txt",
+            category="text",
+            extension="txt",
+            storage_locator="owner-1/attachment-1/report.txt",
+            storage_key="attachment-1/report.txt",
+            max_bytes=1024,
+            created_at=10,
+            lease_id="lease-1",
+            lease_seconds=600,
+        )
+        == created
+    )
 
 
-def test_materialization_conflicts_are_not_reported_as_success() -> None:
+def test_pending_materialization_conflicts_are_not_reported_as_success() -> None:
     repository = MaterializationRepository()
     foreign = FakeTransaction()
-    foreign.execute_results.append(Result(rowcount=0))
-    foreign.fetch_one_results.append(None)
-    with pytest.raises(RepositoryConflictError, match="another namespace"):
-        repository.register(foreign, attachment_record())
+    foreign.execute_results.append(Result())
+    foreign.fetch_one_results.append({"state": "retired"})
+    with pytest.raises(RepositoryConflictError, match="retired"):
+        repository.begin_pending_materialization(
+            foreign,
+            attachment_id="attachment-1",
+            owner_id="owner-1",
+            filename="report.txt",
+            category="text",
+            extension="txt",
+            storage_locator="owner-1/attachment-1/report.txt",
+            storage_key="attachment-1/report.txt",
+            max_bytes=1024,
+            created_at=10,
+            lease_id="lease-1",
+            lease_seconds=300,
+        )
 
     changed = FakeTransaction()
-    changed.execute_results.append(Result(rowcount=0))
-    changed.fetch_one_results.append(attachment_row(size_bytes=99))
+    changed.execute_results.extend((Result(), Result(rowcount=0)))
+    changed.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            pending_row(
+                filename="other.txt",
+                storage_path="owner-1/attachment-1/other.txt",
+                materialization_storage_key="attachment-1/other.txt",
+            ),
+        )
+    )
     with pytest.raises(RepositoryConflictError, match="different semantics"):
-        repository.register(changed, attachment_record())
+        repository.begin_pending_materialization(
+            changed,
+            attachment_id="attachment-1",
+            owner_id="owner-1",
+            filename="report.txt",
+            category="text",
+            extension="txt",
+            storage_locator="owner-1/attachment-1/report.txt",
+            storage_key="attachment-1/report.txt",
+            max_bytes=1024,
+            created_at=10,
+            lease_id="lease-1",
+            lease_seconds=300,
+        )
 
 
 @pytest.mark.parametrize(
-    "record",
+    "kwargs",
     [
-        attachment_record(attachment_id=""),
-        attachment_record(filename=""),
-        attachment_record(category="unknown"),
-        attachment_record(extension=3),
-        attachment_record(size_bytes=-1),
-        attachment_record(sha256="ABC"),
-        attachment_record(storage_locator=""),
-        attachment_record(deleted_at=20),
+        {"attachment_id": "bad/path"},
+        {"attachment_id": "CON"},
+        {"storage_key": "other/report.txt"},
+        {"storage_key": "attachment-1"},
+        {"storage_key": "attachment-1/other.txt"},
+        {"storage_key": ".astralplane-hidden/report.txt"},
+        {"storage_locator": "attachment-1/report.txt"},
+        {"storage_locator": "owner-2/attachment-1/report.txt"},
+        {"storage_locator": "owner-1/.astralplane-hidden/report.txt"},
+        {"filename": "nested/report.txt"},
+        {"category": "unknown"},
+        {"max_bytes": 0},
+        {"max_bytes": 1 << 63},
+        {"lease_id": "bad lease"},
+        {"lease_id": "a" * 129},
+        {"lease_seconds": 0},
     ],
 )
-def test_materialization_validates_bounded_metadata(record: AttachmentRecord) -> None:
+def test_materialization_validates_bounded_pending_identity(kwargs: dict[str, Any]) -> None:
+    values: dict[str, Any] = {
+        "attachment_id": "attachment-1",
+        "owner_id": "owner-1",
+        "filename": "report.txt",
+        "category": "text",
+        "extension": "txt",
+        "storage_locator": "owner-1/attachment-1/report.txt",
+        "storage_key": "attachment-1/report.txt",
+        "max_bytes": 1024,
+        "created_at": 10,
+        "lease_id": "lease-1",
+        "lease_seconds": 300,
+    }
+    values.update(kwargs)
     with pytest.raises(RepositoryValidationError):
-        MaterializationRepository().register(FakeTransaction(), record)
+        MaterializationRepository().begin_pending_materialization(
+            FakeTransaction(),
+            **values,
+        )
+
+
+def test_pending_lease_renews_by_db_clock_and_exact_version() -> None:
+    repository = MaterializationRepository()
+    transaction = FakeTransaction()
+    transaction.execute_results.extend(
+        (Result(), returned(pending_row(materialization_lease_version=1)))
+    )
+    transaction.fetch_one_results.append({"state": "active"})
+
+    renewed = repository.renew_pending_materialization(
+        transaction,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+        lease_seconds=300,
+    )
+
+    assert renewed.lease_version == 1
+    sql = transaction.calls[-1][1]
+    assert "clock_timestamp()" in sql
+    assert "materialization_lease_version = %s" in sql
+
+
+def test_pending_lease_renewal_replays_exactly_and_rejects_stale_or_missing_rows() -> None:
+    repository = MaterializationRepository()
+    replay = FakeTransaction()
+    replay.execute_results.extend((Result(), Result(rowcount=0)))
+    replay.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            pending_row(materialization_lease_version=1),
+        )
+    )
+    assert repository.renew_pending_materialization(
+        replay,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+        lease_seconds=300,
+    ).lease_version == 1
+
+    stale = FakeTransaction()
+    stale.execute_results.extend((Result(), Result(rowcount=0)))
+    stale.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            pending_row(materialization_lease_version=3),
+        )
+    )
+    with pytest.raises(RepositoryConflictError):
+        repository.renew_pending_materialization(
+            stale,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            lease_seconds=300,
+        )
+
+    missing = FakeTransaction()
+    missing.execute_results.extend((Result(), Result(rowcount=0)))
+    missing.fetch_one_results.extend(({"state": "active"}, None))
+    with pytest.raises(RepositoryNotFoundError):
+        repository.renew_pending_materialization(
+            missing,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            lease_seconds=300,
+        )
+
+
+def test_finalize_pending_materialization_replays_exact_evidence_and_rejects_drift() -> None:
+    repository = MaterializationRepository()
+    digest = hashlib.sha256(b"data").hexdigest()
+    fence = _AttachmentMaterializationPublishFence(
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        filename="report.txt",
+        storage_key="attachment-1/report.txt",
+        storage_locator="owner-1/attachment-1/report.txt",
+        max_bytes=4,
+        lease_id="lease-1",
+        lease_version=0,
+    )
+    ready = attachment_row(size_bytes=4, sha256=digest) | {
+        "materialization_state": "ready",
+        "materialization_lease_id": "lease-1",
+        "materialization_lease_version": 1,
+        "materialization_lease_expires_at": NOW + timedelta(minutes=5),
+        "materialization_max_bytes": 4,
+        "materialization_storage_key": "attachment-1/report.txt",
+    }
+
+    replay = FakeTransaction()
+    replay.execute_results.extend((Result(), Result(rowcount=0)))
+    replay.fetch_one_results.extend(({"state": "active"}, ready))
+    finalized = repository._finalize_pending_materialization(
+        replay,
+        fence=fence,
+        content_type="text/plain",
+        size_bytes=4,
+        sha256=digest,
+    )
+    assert finalized.size_bytes == 4
+    assert finalized.sha256 == digest
+
+    drift = FakeTransaction()
+    drift.execute_results.extend((Result(), Result(rowcount=0)))
+    drift.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            ready | {"materialization_lease_version": 2},
+        )
+    )
+    with pytest.raises(RepositoryConflictError):
+        repository._finalize_pending_materialization(
+            drift,
+            fence=fence,
+            content_type="text/plain",
+            size_bytes=4,
+            sha256=digest,
+        )
+
+    missing = FakeTransaction()
+    missing.execute_results.extend((Result(), Result(rowcount=0)))
+    missing.fetch_one_results.extend(({"state": "active"}, None))
+    with pytest.raises(RepositoryNotFoundError):
+        repository._finalize_pending_materialization(
+            missing,
+            fence=fence,
+            content_type="text/plain",
+            size_bytes=4,
+            sha256=digest,
+        )
+
+
+@pytest.mark.parametrize(
+    "content_type, digest, message",
+    [
+        (
+            "application/x-astralplane-pending-materialization",
+            DIGEST_A,
+            "content_type is reserved",
+        ),
+        ("text/plain", "0" * 64, "sha256 is reserved"),
+    ],
+)
+def test_finalize_pending_materialization_rejects_reserved_final_evidence(
+    content_type: str,
+    digest: str,
+    message: str,
+) -> None:
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.append({"state": "active"})
+    fence = _AttachmentMaterializationPublishFence(
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        filename="report.txt",
+        storage_key="attachment-1/report.txt",
+        storage_locator="owner-1/attachment-1/report.txt",
+        max_bytes=4,
+        lease_id="lease-1",
+        lease_version=0,
+    )
+    with pytest.raises(RepositoryValidationError, match=message):
+        MaterializationRepository()._finalize_pending_materialization(
+            transaction,
+            fence=fence,
+            content_type=content_type,
+            size_bytes=4,
+            sha256=digest,
+        )
+
+
+def test_staged_publish_is_the_only_public_creation_path_and_finalizes_in_caller_tx(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    digest = hashlib.sha256(b"data").hexdigest()
+    transaction = FakeTransaction()
+    transaction.execute_results.extend(
+        (
+            Result(),
+            Result(),
+            Result(),
+            returned(attachment_row(size_bytes=4, sha256=digest)),
+        )
+    )
+    transaction.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            pending_row(materialization_max_bytes=4),
+            {"state": "active"},
+            pending_row(materialization_max_bytes=4),
+            {"state": "active"},
+        )
+    )
+    reservation = blobs.reserve_materialization_staging(owner_id="owner-1")
+    staging = repository.open_pending_materialization_staging(
+        transaction,
+        blobs=blobs,
+        reservation=reservation,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+    )
+    staged = staging.write_chunks((b"data",))
+
+    finalized = repository.publish_pending_materialization(
+        transaction,
+        blobs=blobs,
+        staged=staged,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+        content_type="text/plain",
+    )
+
+    assert finalized.size_bytes == 4
+    assert finalized.sha256 == digest
+    with blobs.open_reader(
+        owner_id="owner-1",
+        key="attachment-1/report.txt",
+        max_bytes=4,
+    ) as reader:
+        assert reader.read() == b"data"
+    assert "materialization_state = 'ready'" in transaction.calls[-1][1]
+    assert not hasattr(repository, "register")
+
+
+def test_invalid_final_metadata_never_publishes_staged_bytes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    opening = FakeTransaction()
+    opening.execute_results.append(Result())
+    opening.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    staging = repository.open_pending_materialization_staging(
+        opening,
+        blobs=blobs,
+        reservation=blobs.reserve_materialization_staging(owner_id="owner-1"),
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+    )
+    staged = staging.write_chunks((b"data",))
+    publish_calls: list[object] = []
+    monkeypatch.setattr(
+        blobs,
+        "_publish_staged_materialization",
+        lambda *args, **kwargs: publish_calls.append((args, kwargs)),
+    )
+    transaction = FakeTransaction()
+
+    with pytest.raises(RepositoryValidationError, match="content_type is reserved"):
+        repository.publish_pending_materialization(
+            transaction,
+            blobs=blobs,
+            staged=staged,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            content_type="application/x-astralplane-pending-materialization",
+        )
+
+    assert transaction.calls == []
+    assert publish_calls == []
+    staged.abort()
+    assert blobs.is_absent(owner_id="owner-1", key="attachment-1/report.txt")
+
+
+def test_materialization_publish_and_stage_open_reject_foreign_capabilities(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    with pytest.raises(RepositoryValidationError, match="configured Plane streaming"):
+        repository.publish_pending_materialization(
+            FakeTransaction(),
+            blobs=object(),  # type: ignore[arg-type]
+            staged=object(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            content_type="text/plain",
+        )
+    with pytest.raises(RepositoryValidationError, match="BlobStagedWrite"):
+        repository.publish_pending_materialization(
+            FakeTransaction(),
+            blobs=blobs,
+            staged=object(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            content_type="text/plain",
+        )
+    with pytest.raises(RepositoryValidationError, match="configured Plane streaming"):
+        repository.open_pending_materialization_staging(
+            FakeTransaction(),
+            blobs=object(),  # type: ignore[arg-type]
+            reservation=object(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+        )
+    with pytest.raises(RepositoryValidationError, match="reservation must be acquired"):
+        repository.open_pending_materialization_staging(
+            FakeTransaction(),
+            blobs=blobs,
+            reservation=object(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+        )
+    blobs.close()
+
+
+def test_stage_open_conflict_releases_the_preacquired_owner_reservation(tmp_path) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.extend(({"state": "active"}, None))
+    reservation = blobs.reserve_materialization_staging(owner_id="owner-1")
+
+    with pytest.raises(RepositoryNotFoundError):
+        repository.open_pending_materialization_staging(
+            transaction,
+            blobs=blobs,
+            reservation=reservation,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+        )
+
+    assert blobs._owner_locks._entries == {}
+    blobs.close()
+
+
+def test_publish_rejects_staged_bytes_above_the_durable_pending_limit(tmp_path) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    opening = FakeTransaction()
+    opening.execute_results.append(Result())
+    opening.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=8))
+    )
+    session = repository.open_pending_materialization_staging(
+        opening,
+        blobs=blobs,
+        reservation=blobs.reserve_materialization_staging(owner_id="owner-1"),
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+    )
+    staged = session.write_chunks((b"12345",))
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+
+    with pytest.raises(RepositoryValidationError, match="durable maximum"):
+        repository.publish_pending_materialization(
+            transaction,
+            blobs=blobs,
+            staged=staged,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            content_type="text/plain",
+        )
+
+    staged.abort()
+    assert blobs.is_absent(owner_id="owner-1", key="attachment-1/report.txt")
+    blobs.close()
+
+
+def test_corrupt_pending_physical_identity_never_publishes_staged_bytes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    opening = FakeTransaction()
+    opening.execute_results.append(Result())
+    opening.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    staging = repository.open_pending_materialization_staging(
+        opening,
+        blobs=blobs,
+        reservation=blobs.reserve_materialization_staging(owner_id="owner-1"),
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+    )
+    staged = staging.write_chunks((b"data",))
+    publish_calls: list[object] = []
+    monkeypatch.setattr(
+        blobs,
+        "_publish_staged_materialization",
+        lambda *args, **kwargs: publish_calls.append((args, kwargs)),
+    )
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.extend(
+        (
+            {"state": "active"},
+            pending_row(
+                storage_path="owner-1/attachment-1/other.txt",
+                materialization_storage_key="attachment-1/other.txt",
+            ),
+        )
+    )
+
+    with pytest.raises(RepositoryDataError, match="physical storage identity"):
+        repository.publish_pending_materialization(
+            transaction,
+            blobs=blobs,
+            staged=staged,
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+            content_type="text/plain",
+        )
+
+    assert publish_calls == []
+    staged.abort()
+    assert blobs.is_absent(owner_id="owner-1", key="attachment-1/report.txt")
+
+
+def test_staging_coordinator_aborts_hidden_bytes_when_stage_open_commit_fails(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    coordinator = AttachmentMaterializationCoordinator(
+        database=FakeDatabase(transaction, fail_commit=True),
+        repository=repository,
+        blobs=blobs,
+    )
+
+    with pytest.raises(RuntimeError, match="commit failure"):
+        coordinator.open_pending_materialization_staging(
+            owner_id="owner-1",
+            attachment_id="attachment-1",
+            lease_id="lease-1",
+            expected_lease_version=0,
+        )
+
+    assert blobs._owner_locks._entries == {}
+    assert blobs.is_prefix_absent(owner_id="owner-1", prefix="attachment-1")
+    coordinator.close()
+    blobs.close()
+
+
+def test_materialization_coordinator_rejects_foreign_dependencies_and_closed_async_use(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    database = FakeDatabase(FakeTransaction())
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    with pytest.raises(RepositoryValidationError, match="explicit Plane transactions"):
+        AttachmentMaterializationCoordinator(
+            database=object(),  # type: ignore[arg-type]
+            repository=repository,
+            blobs=blobs,
+        )
+    with pytest.raises(RepositoryValidationError, match="MaterializationRepository"):
+        AttachmentMaterializationCoordinator(
+            database=database,
+            repository=object(),  # type: ignore[arg-type]
+            blobs=blobs,
+        )
+    with pytest.raises(RepositoryValidationError, match="configured Plane streaming"):
+        AttachmentMaterializationCoordinator(
+            database=database,
+            repository=repository,
+            blobs=object(),  # type: ignore[arg-type]
+        )
+
+    coordinator = AttachmentMaterializationCoordinator(
+        database=database,
+        repository=repository,
+        blobs=blobs,
+    )
+    coordinator.close()
+    coordinator.close()
+    with pytest.raises(RepositoryValidationError, match="coordinator is closed"):
+        asyncio.run(
+            coordinator.abegin_pending_materialization(
+                attachment_id="attachment-1",
+                owner_id="owner-1",
+                filename="report.txt",
+                category="text",
+                extension="txt",
+                storage_locator="owner-1/attachment-1/report.txt",
+                storage_key="attachment-1/report.txt",
+                max_bytes=4,
+                created_at=10,
+                lease_id="lease-1",
+                lease_seconds=300,
+            )
+        )
+    blobs.close()
+
+
+def test_staging_coordinator_double_cancel_observes_commit_and_aborts_capability(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    transaction = FakeTransaction()
+    transaction.execute_results.append(Result())
+    transaction.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    commit_entered = threading.Event()
+    release_commit = threading.Event()
+    coordinator = AttachmentMaterializationCoordinator(
+        database=FakeDatabase(
+            transaction,
+            commit_entered=commit_entered,
+            release_commit=release_commit,
+        ),
+        repository=repository,
+        blobs=blobs,
+    )
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        default = ThreadPoolExecutor(max_workers=1, thread_name_prefix="blocked-default")
+        loop.set_default_executor(default)
+        default_started = threading.Event()
+        release_default = threading.Event()
+
+        def block_default() -> None:
+            default_started.set()
+            assert release_default.wait(timeout=5)
+
+        blocked = loop.run_in_executor(None, block_default)
+        deadline = loop.time() + 2
+        while not default_started.is_set():
+            assert loop.time() < deadline
+            await asyncio.sleep(0.01)
+
+        task = asyncio.create_task(
+            coordinator.aopen_pending_materialization_staging(
+                owner_id="owner-1",
+                attachment_id="attachment-1",
+                lease_id="lease-1",
+                expected_lease_version=0,
+            )
+        )
+        while not commit_entered.is_set():
+            assert loop.time() < deadline
+            await asyncio.sleep(0.01)
+        task.cancel()
+        task.cancel()
+        release_commit.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release_default.set()
+        await blocked
+
+    asyncio.run(scenario())
+    assert blobs._owner_locks._entries == {}
+    assert blobs.is_prefix_absent(owner_id="owner-1", prefix="attachment-1")
+    coordinator.close()
+    blobs.close()
+
+
+def test_stage_reservation_waits_before_any_db_lock_and_does_not_block_heartbeat(
+    tmp_path,
+) -> None:
+    repository = MaterializationRepository()
+    blobs = ExplicitRootStreamingBlobStore((tmp_path / "blobs").resolve(), create_root=True)
+    first_tx = FakeTransaction()
+    first_tx.execute_results.append(Result())
+    first_tx.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    first_reservation = blobs.reserve_materialization_staging(owner_id="owner-1")
+    first = repository.open_pending_materialization_staging(
+        first_tx,
+        blobs=blobs,
+        reservation=first_reservation,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+    )
+
+    second_tx = FakeTransaction()
+    second_tx.execute_results.append(Result())
+    second_tx.fetch_one_results.extend(
+        ({"state": "active"}, pending_row(materialization_max_bytes=4))
+    )
+    waiting = threading.Event()
+    reserved = threading.Event()
+    failures: list[BaseException] = []
+
+    def open_second() -> None:
+        waiting.set()
+        try:
+            reservation = blobs.reserve_materialization_staging(owner_id="owner-1")
+            reserved.set()
+            second = repository.open_pending_materialization_staging(
+                second_tx,
+                blobs=blobs,
+                reservation=reservation,
+                owner_id="owner-1",
+                attachment_id="attachment-1",
+                lease_id="lease-1",
+                expected_lease_version=0,
+            )
+            second.abort()
+        except BaseException as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=open_second, daemon=True)
+    thread.start()
+    assert waiting.wait(timeout=1)
+    assert not reserved.wait(timeout=0.05)
+    assert second_tx.calls == []
+
+    heartbeat_tx = FakeTransaction()
+    heartbeat_tx.execute_results.extend(
+        (Result(), returned(pending_row(materialization_lease_version=1)))
+    )
+    heartbeat_tx.fetch_one_results.append({"state": "active"})
+    heartbeat = repository.renew_pending_materialization(
+        heartbeat_tx,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        lease_id="lease-1",
+        expected_lease_version=0,
+        lease_seconds=300,
+    )
+    assert heartbeat.lease_version == 1
+
+    first.abort()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert reserved.is_set()
+    assert failures == []
+    assert blobs._owner_locks._entries == {}
+
+
+def test_pending_and_abandoned_rows_are_hidden_from_every_ordinary_read() -> None:
+    query = FakeTransaction()
+    query.fetch_one_results.extend((None, None))
+    query.fetch_all_results.append(())
+
+    assert AttachmentRepository().get(
+        query,
+        owner_id="owner-1",
+        attachment_id="attachment-1",
+        include_deleted=True,
+    ) is None
+    assert BlobMetadataRepository().get(
+        query,
+        owner_id="owner-1",
+        object_id="attachment-1",
+        include_deleted=True,
+    ) is None
+    assert AttachmentRepository().list_live(query, owner_id="owner-1") == ()
+    read_sql = tuple(statement for operation, statement, _ in query.calls if operation != "execute")
+    assert all("materialization_state = 'ready'" in statement for statement in read_sql)
 
 
 def test_attachment_reads_are_owner_scoped_and_paginated() -> None:
@@ -246,40 +1137,14 @@ def test_attachment_list_rejects_invalid_cursor_or_bounds(kwargs: dict[str, Any]
         AttachmentRepository().list_live(FakeTransaction(), owner_id="owner-1", **kwargs)
 
 
-def test_attachment_soft_delete_and_bulk_count_are_visible() -> None:
-    repository = AttachmentRepository()
-    transaction = FakeTransaction()
-    transaction.execute_results.extend(
-        (
-            returned(attachment_row(deleted_at=30)),
-            Result(rowcount=0),
-            Result(rowcount=3),
-            Result(rowcount=-1),
-        )
-    )
-    assert (
-        repository.soft_delete(
-            transaction,
-            owner_id="owner-1",
-            attachment_id="attachment-1",
-            deleted_at=30,
-        ).deleted_at
-        == 30
-    )  # type: ignore[union-attr]
-    assert (
-        repository.soft_delete(
-            transaction,
-            owner_id="owner-1",
-            attachment_id="attachment-1",
-            deleted_at=31,
-        )
-        is None
-    )
-    assert repository.soft_delete_all(transaction, owner_id="owner-1", deleted_at=32) == 3
-    assert repository.soft_delete_all(transaction, owner_id="owner-1", deleted_at=33) == 0
+def test_attachment_repository_exposes_no_metadata_only_delete_surface() -> None:
+    assert not hasattr(AttachmentRepository, "soft_delete")
+    assert not hasattr(AttachmentRepository, "soft_delete_all")
+    assert not hasattr(AttachmentRepository, "_soft_delete_for_purge")
+    assert not hasattr(AttachmentRepository, "_soft_delete_all_for_purge")
 
 
-def test_blob_metadata_get_and_cas_relocation() -> None:
+def test_blob_metadata_get_is_owner_scoped_and_ready_only() -> None:
     repository = BlobMetadataRepository()
     query = FakeTransaction()
     query.fetch_one_results.extend((blob_row(), blob_row(deleted_at=40), None))
@@ -297,68 +1162,8 @@ def test_blob_metadata_get_and_cas_relocation() -> None:
         == 40
     )  # type: ignore[union-attr]
     assert repository.get(query, owner_id="owner-1", object_id="missing") is None
-
-    transaction = FakeTransaction()
-    transaction.execute_results.append(
-        returned(blob_row(storage_path="new/location", sha256=DIGEST_B, size_bytes=13))
-    )
-    relocated = repository.relocate(
-        transaction,
-        owner_id="owner-1",
-        object_id="attachment-1",
-        expected_storage_locator="owner-1/attachment-1.txt",
-        expected_sha256=DIGEST_A,
-        storage_locator="new/location",
-        sha256=DIGEST_B,
-        size_bytes=13,
-    )
-    assert relocated.storage_locator == "new/location"
-    assert "user_id = %s" in transaction.calls[0][1]
-
-
-def test_blob_relocation_distinguishes_missing_and_conflict() -> None:
-    repository = BlobMetadataRepository()
-    missing = FakeTransaction()
-    missing.execute_results.append(Result(rowcount=0))
-    missing.fetch_one_results.append(None)
-    with pytest.raises(RepositoryNotFoundError):
-        repository.relocate(
-            missing,
-            owner_id="owner-1",
-            object_id="attachment-1",
-            expected_storage_locator="old",
-            expected_sha256=DIGEST_A,
-            storage_locator="new",
-            sha256=DIGEST_B,
-            size_bytes=1,
-        )
-
-    conflict = FakeTransaction()
-    conflict.execute_results.append(Result(rowcount=0))
-    conflict.fetch_one_results.append(blob_row())
-    with pytest.raises(RepositoryConflictError):
-        repository.relocate(
-            conflict,
-            owner_id="owner-1",
-            object_id="attachment-1",
-            expected_storage_locator="old",
-            expected_sha256=DIGEST_A,
-            storage_locator="new",
-            sha256=DIGEST_B,
-            size_bytes=1,
-        )
-
-    with pytest.raises(RepositoryValidationError, match="lowercase SHA"):
-        repository.relocate(
-            FakeTransaction(),
-            owner_id="owner-1",
-            object_id="attachment-1",
-            expected_storage_locator="old",
-            expected_sha256="bad",
-            storage_locator="new",
-            sha256=DIGEST_B,
-            size_bytes=1,
-        )
+    assert all("materialization_state = 'ready'" in call[1] for call in query.calls)
+    assert not hasattr(BlobMetadataRepository, "relocate")
 
 
 def test_message_attachment_link_is_owner_validated_and_replay_safe() -> None:
@@ -437,6 +1242,10 @@ def test_message_attachment_queries_return_detached_records() -> None:
         == 1
     )
     assert len(repository.list_for_message(query, owner_id="owner-1", message_id=7)) == 1
+    for _, statement, _ in query.calls:
+        assert "JOIN user_attachments AS attachment" in statement
+        assert "attachment.materialization_state = 'ready'" in statement
+        assert "attachment.deleted_at IS NULL" in statement
     assert query.calls[-1][2] == ("7", "owner-1")
 
 
@@ -564,6 +1373,24 @@ def test_artifact_version_queries_delete_and_corruption_visibility() -> None:
         )
         == 0
     )
+    query.execute_results.append(Result(rowcount=6))
+    assert (
+        repository.delete_for_conversation(
+            query,
+            owner_id="owner-1",
+            conversation_id="chat-1",
+        )
+        == 6
+    )
+    assert query.calls[-1][2] == ("chat-1", "owner-1")
+    invalid_delete = FakeTransaction()
+    invalid_delete.execute_results.append(Result(rowcount=-1))
+    with pytest.raises(RepositoryDataError):
+        repository.delete_for_conversation(
+            invalid_delete,
+            owner_id="owner-1",
+            conversation_id="chat-1",
+        )
 
     corrupt = FakeTransaction()
     corrupt.fetch_one_results.append(version_row(created_at="not-time"))

@@ -7,15 +7,20 @@ composition host.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Final, Literal, Self
 
 from astralplane.domain import require_identifier, require_utc
 from astralplane.errors import DomainValidationError
 
 _LETS_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_PENDING_ID_DOMAIN: Final = b"astralplane.authority.pending/v1\0"
+_PENDING_ID_PREFIX: Final = "pending:"
+PendingAuthorityField = Literal["warden", "lease", "lineage", "subject"]
 
 
 class AuthorityPopulation(StrEnum):
@@ -77,6 +82,27 @@ def _canonical_capabilities(value: object) -> tuple[str, ...]:
     return value
 
 
+def pending_authority_identity(
+    binding_id: str,
+    *,
+    field: PendingAuthorityField,
+) -> str:
+    """Return the reserved deterministic identity for an unissued root binding."""
+
+    canonical_binding_id = require_identifier(binding_id, field="binding id")
+    if not isinstance(field, str) or field not in (
+        "warden",
+        "lease",
+        "lineage",
+        "subject",
+    ):
+        raise DomainValidationError("pending authority field is not supported")
+    digest = hashlib.sha256(
+        _PENDING_ID_DOMAIN + canonical_binding_id.encode("ascii")
+    ).hexdigest()[:32]
+    return f"{_PENDING_ID_PREFIX}{field}:{digest}"
+
+
 @dataclass(frozen=True, slots=True)
 class AgentAuthorityBinding:
     """Owner- and runtime-generation-fenced external authority binding."""
@@ -103,6 +129,51 @@ class AgentAuthorityBinding:
     created_at: datetime
     updated_at: datetime
     version: int
+
+    @classmethod
+    def provisioning_intent(
+        cls,
+        *,
+        binding_id: str,
+        owner_id: str,
+        agent_id: str,
+        runtime_id: str,
+        runtime_generation: int,
+        population: AuthorityPopulation,
+        tenant_id: str,
+        envelope_id: str,
+        policy_digest: str,
+        machine_digest: str,
+        config_epoch: int,
+        capabilities: tuple[str, ...],
+        created_at: datetime,
+    ) -> Self:
+        """Create a durable local intent before an external root exists."""
+
+        return cls(
+            binding_id=binding_id,
+            owner_id=owner_id,
+            agent_id=agent_id,
+            runtime_id=runtime_id,
+            runtime_generation=runtime_generation,
+            population=population,
+            tenant_id=tenant_id,
+            envelope_id=envelope_id,
+            warden_id=pending_authority_identity(binding_id, field="warden"),
+            lease_id=pending_authority_identity(binding_id, field="lease"),
+            lineage_id=pending_authority_identity(binding_id, field="lineage"),
+            subject_id=pending_authority_identity(binding_id, field="subject"),
+            policy_digest=policy_digest,
+            machine_digest=machine_digest,
+            config_epoch=config_epoch,
+            capabilities=capabilities,
+            lease_sequence=0,
+            lease_expires_at_ns=0,
+            state=AuthorityBindingState.PROVISIONING,
+            created_at=created_at,
+            updated_at=created_at,
+            version=0,
+        )
 
     def __post_init__(self) -> None:
         for field, value in (
@@ -133,8 +204,50 @@ class AgentAuthorityBinding:
             _canonical_capabilities(self.capabilities),
         )
         _non_negative_integer(self.lease_sequence, field="lease sequence")
-        _positive_integer(self.lease_expires_at_ns, field="lease expiry")
+        _non_negative_integer(self.lease_expires_at_ns, field="lease expiry")
         _non_negative_integer(self.version, field="version")
+
+        remote_identities = {
+            "warden": self.warden_id,
+            "lease": self.lease_id,
+            "lineage": self.lineage_id,
+            "subject": self.subject_id,
+        }
+        expected_pending = {
+            "warden": pending_authority_identity(self.binding_id, field="warden"),
+            "lease": pending_authority_identity(self.binding_id, field="lease"),
+            "lineage": pending_authority_identity(self.binding_id, field="lineage"),
+            "subject": pending_authority_identity(self.binding_id, field="subject"),
+        }
+        has_pending_identity = any(
+            value.startswith(_PENDING_ID_PREFIX) for value in remote_identities.values()
+        )
+        retains_pending_intent = self.state in {
+            AuthorityBindingState.PROVISIONING,
+            AuthorityBindingState.CLOSED,
+        }
+        if retains_pending_intent and has_pending_identity:
+            if remote_identities != expected_pending:
+                raise DomainValidationError(
+                    "pending binding requires deterministic pending remote identities"
+                )
+            if self.lease_sequence != 0 or self.lease_expires_at_ns != 0:
+                raise DomainValidationError(
+                    "pending binding cannot carry issued lease metadata"
+                )
+        elif self.state is AuthorityBindingState.PROVISIONING:
+            raise DomainValidationError(
+                "pending binding requires deterministic pending remote identities"
+            )
+        else:
+            if has_pending_identity:
+                raise DomainValidationError(
+                    "issued binding cannot carry a pending remote identity"
+                )
+            if self.lease_expires_at_ns == 0:
+                raise DomainValidationError(
+                    "issued binding lease expiry must be positive"
+                )
 
         created_at = require_utc(self.created_at, field="created at")
         updated_at = require_utc(self.updated_at, field="updated at")
@@ -165,4 +278,6 @@ __all__ = (
     "AgentAuthorityBinding",
     "AuthorityBindingState",
     "AuthorityPopulation",
+    "PendingAuthorityField",
+    "pending_authority_identity",
 )

@@ -15,6 +15,7 @@ from astralplane.contracts import QueryExecutor, Transaction
 from astralplane.repositories import (
     RepositoryDataError,
     RepositoryNotFoundError,
+    RepositoryValidationError,
     _bounded_text,
     _required_id,
     _row_value,
@@ -147,6 +148,54 @@ class EncryptedLLMConfigRepository:
             (owner, *values),
         )
         return _user_record(_single_returned(result, "upsert user LLM configuration"))
+
+    def upsert_user_before_deadline(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        provider: str,
+        base_url: str,
+        model: str,
+        api_key_ciphertext: str | None,
+        deadline_at: datetime,
+    ) -> EncryptedLLMConfigRecord | None:
+        """Perform one deadline-fenced write inside a caller-owned work transaction."""
+
+        owner = _required_id(owner_id, "owner id")
+        values = _config_values(
+            provider=provider,
+            base_url=base_url,
+            model=model,
+            api_key_ciphertext=api_key_ciphertext,
+        )
+        if (
+            not isinstance(deadline_at, datetime)
+            or deadline_at.tzinfo is None
+            or deadline_at.utcoffset() is None
+        ):
+            raise RepositoryValidationError("deadline_at must be a timezone-aware datetime")
+        result = transaction.execute(
+            f"""
+            INSERT INTO user_llm_config (
+                user_id, provider, base_url, model, api_key_enc, created_at, updated_at
+            )
+            SELECT %s, %s, %s, %s, %s, clock_timestamp(), clock_timestamp()
+            WHERE clock_timestamp() < %s
+            ON CONFLICT (user_id) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                base_url = EXCLUDED.base_url,
+                model = EXCLUDED.model,
+                api_key_enc = EXCLUDED.api_key_enc,
+                updated_at = clock_timestamp()
+            RETURNING {self._USER_FIELDS}
+            """,
+            (owner, *values, deadline_at),
+        )
+        rows = getattr(result, "returned_records", ())
+        if not rows:
+            return None
+        return _user_record(_single_returned(result, "deadline-fenced user LLM configuration"))
 
     def delete_user(self, transaction: Transaction, *, owner_id: str) -> None:
         owner = _required_id(owner_id, "owner id")

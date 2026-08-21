@@ -63,6 +63,25 @@ def test_pending_queue_is_owner_scoped_and_ordered() -> None:
     assert transaction.calls[0][2] == ("owner-1", 2)
 
 
+def test_pending_administrative_queue_is_explicitly_cross_owner_and_ordered() -> None:
+    transaction = ScriptedTransaction(
+        all_rows=[(_row(), _row(id=8, user_id="owner-2", attempts=1))]
+    )
+
+    records = RevocationQueueRepository().pending_for_administration(
+        transaction,  # type: ignore[arg-type]
+        limit=2,
+    )
+
+    assert [(record.queue_id, record.owner_id) for record in records] == [
+        (7, "owner-1"),
+        (8, "owner-2"),
+    ]
+    assert "WHERE user_id" not in transaction.fetch_sql()
+    assert "ORDER BY enqueued_at, id" in transaction.fetch_sql()
+    assert transaction.calls[0][2] == (2,)
+
+
 def test_resolve_is_owner_scoped_and_visible() -> None:
     transaction = ScriptedTransaction(execute=[Result(rowcount=1), Result(rowcount=0)])
     repository = RevocationQueueRepository()
@@ -133,6 +152,11 @@ def test_attempt_increment_reports_fence_or_owner_miss() -> None:
             "pending_for_owner",
             {"owner_id": "owner-1", "limit": 0},
             id="invalid-limit",
+        ),
+        pytest.param(
+            "pending_for_administration",
+            {"limit": 201},
+            id="invalid-administration-limit",
         ),
     ],
 )

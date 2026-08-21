@@ -9,6 +9,7 @@ Every method operates on a caller-owned transaction and never commits it.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, Final, TypeVar
 
 from astralplane.authority.claims import (
@@ -30,8 +31,10 @@ from astralplane.authority.models import (
     AgentAuthorityBinding,
     AuthorityBindingState,
     AuthorityPopulation,
+    pending_authority_identity,
 )
 from astralplane.contracts import OutboxEntry, OutboxStore, Record, Transaction
+from astralplane.domain import require_identifier, require_utc
 from astralplane.errors import DomainValidationError
 from astralplane.outbox import PostgresOutboxStore
 from astralplane.repositories import (
@@ -148,6 +151,22 @@ SELECT * FROM astralplane_authority_binding
 WHERE owner_id = %s AND binding_id = %s
 """.strip()
 
+_GET_ACTIVE_BINDING: Final = """
+SELECT * FROM astralplane_authority_binding
+WHERE owner_id = %s
+  AND agent_id = %s
+  AND runtime_id = %s
+  AND runtime_generation = %s
+  AND state = 'active'
+""".strip()
+
+_GET_LATEST_BINDING: Final = """
+SELECT * FROM astralplane_authority_binding
+WHERE owner_id = %s AND agent_id = %s AND population = %s
+ORDER BY created_at DESC, binding_id DESC
+LIMIT 1
+""".strip()
+
 _LOCK_BINDING: Final = f"{_GET_BINDING}\nFOR UPDATE"
 
 _TRANSITION_BINDING: Final = """
@@ -160,6 +179,22 @@ WHERE owner_id = %s AND binding_id = %s
   AND warden_id = %s AND lease_id = %s AND lineage_id = %s AND subject_id = %s
   AND policy_digest = %s AND machine_digest = %s AND config_epoch = %s
   AND capabilities = %s AND state = %s AND version = %s
+RETURNING *
+""".strip()
+
+_ACTIVATE_BINDING: Final = """
+UPDATE astralplane_authority_binding
+SET warden_id = %s, lease_id = %s, lineage_id = %s, subject_id = %s,
+    lease_sequence = %s, lease_expires_at_ns = %s, state = %s,
+    updated_at = %s, version = %s
+WHERE owner_id = %s AND binding_id = %s
+  AND agent_id = %s AND runtime_id = %s AND runtime_generation = %s
+  AND population = %s AND tenant_id = %s AND envelope_id = %s
+  AND policy_digest = %s AND machine_digest = %s AND config_epoch = %s
+  AND capabilities = %s AND created_at = %s
+  AND warden_id = %s AND lease_id = %s AND lineage_id = %s AND subject_id = %s
+  AND lease_sequence = 0 AND lease_expires_at_ns = 0
+  AND state = 'provisioning' AND version = %s
 RETURNING *
 """.strip()
 
@@ -183,6 +218,17 @@ WHERE owner_id = %s AND operation_id = %s
 """.strip()
 
 _LOCK_LIFECYCLE: Final = f"{_GET_LIFECYCLE}\nFOR UPDATE"
+
+_LIST_RECOVERABLE_LIFECYCLE: Final = """
+SELECT * FROM astralplane_authority_lifecycle_operation
+WHERE owner_id = %s
+  AND status IN ('pending', 'in_flight', 'uncertain')
+  AND next_attempt_at IS NOT NULL
+  AND next_attempt_at <= %s
+ORDER BY next_attempt_at, operation_id
+FOR UPDATE SKIP LOCKED
+LIMIT %s
+""".strip()
 
 _TRANSITION_LIFECYCLE: Final = """
 UPDATE astralplane_authority_lifecycle_operation
@@ -227,6 +273,53 @@ WHERE owner_id = %s AND operation_id = %s
 """.strip()
 
 _LOCK_EFFECT: Final = f"{_GET_EFFECT}\nFOR UPDATE"
+
+_RECOVERABLE_EFFECT_STATUSES: Final = frozenset(
+    {
+        ProtectedEffectStatus.CREATED,
+        ProtectedEffectStatus.ASTRAL_AUTHORIZED,
+        ProtectedEffectStatus.LETS_PENDING,
+        ProtectedEffectStatus.RECEIPT_RECEIVED,
+        ProtectedEffectStatus.RECEIPT_CLAIMED,
+        ProtectedEffectStatus.EXECUTING,
+        ProtectedEffectStatus.OUTCOME_UNCERTAIN,
+    }
+)
+
+_LIST_RECOVERABLE_EFFECTS: Final = """
+SELECT * FROM astralplane_protected_effect_operation
+WHERE owner_id = %s
+  AND status IN (
+      'created', 'astral_authorized', 'lets_pending', 'receipt_received',
+      'receipt_claimed', 'executing', 'outcome_uncertain'
+  )
+  AND updated_at < %s
+ORDER BY updated_at, operation_id
+FOR UPDATE SKIP LOCKED
+LIMIT %s
+""".strip()
+
+_LIST_RECOVERY_OWNERS: Final = """
+SELECT owner_id, MIN(recovery_at) AS recovery_at
+FROM (
+    SELECT owner_id, next_attempt_at AS recovery_at
+    FROM astralplane_authority_lifecycle_operation
+    WHERE status IN ('pending', 'in_flight', 'uncertain')
+      AND next_attempt_at IS NOT NULL
+      AND next_attempt_at <= %s
+    UNION ALL
+    SELECT owner_id, updated_at AS recovery_at
+    FROM astralplane_protected_effect_operation
+    WHERE status IN (
+        'created', 'astral_authorized', 'lets_pending', 'receipt_received',
+        'receipt_claimed', 'executing', 'outcome_uncertain'
+    )
+      AND updated_at < %s
+) AS recoverable
+GROUP BY owner_id
+ORDER BY MIN(recovery_at), owner_id
+LIMIT %s
+""".strip()
 
 _TRANSITION_EFFECT: Final = """
 UPDATE astralplane_protected_effect_operation
@@ -617,10 +710,21 @@ def _same_effect_intent(
 
 
 def _require_next_version(replacement_version: int, expected_version: int) -> None:
-    if expected_version < 0 or replacement_version != expected_version + 1:
+    if (
+        type(expected_version) is not int
+        or expected_version < 0
+        or replacement_version != expected_version + 1
+    ):
         raise RepositoryValidationError(
             "replacement version must advance the expected version exactly once"
         )
+
+
+def _require_query_identifier(value: object, *, field: str) -> str:
+    try:
+        return require_identifier(value, field=field)  # type: ignore[arg-type]
+    except DomainValidationError as exc:
+        raise RepositoryValidationError(f"{field} is invalid") from exc
 
 
 class AuthorityRepository:
@@ -666,6 +770,76 @@ class AuthorityRepository:
     ) -> AgentAuthorityBinding | None:
         row = transaction.fetch_one(_GET_BINDING, (owner_id, binding_id))
         return None if row is None else _binding_from_row(row)
+
+    def get_active_binding(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        agent_id: str,
+        runtime_id: str,
+        runtime_generation: int,
+    ) -> AgentAuthorityBinding | None:
+        """Return the active binding for one exact owner-scoped runtime generation."""
+
+        owner = _require_query_identifier(owner_id, field="owner id")
+        agent = _require_query_identifier(agent_id, field="agent id")
+        runtime = _require_query_identifier(runtime_id, field="runtime id")
+        if type(runtime_generation) is not int or runtime_generation <= 0:
+            raise RepositoryValidationError("runtime generation must be a positive integer")
+        row = transaction.fetch_one(
+            _GET_ACTIVE_BINDING,
+            (owner, agent, runtime, runtime_generation),
+        )
+        if row is None:
+            return None
+        binding = _binding_from_row(row)
+        if (
+            binding.owner_id,
+            binding.agent_id,
+            binding.runtime_id,
+            binding.runtime_generation,
+            binding.state,
+        ) != (
+            owner,
+            agent,
+            runtime,
+            runtime_generation,
+            AuthorityBindingState.ACTIVE,
+        ):
+            raise RepositoryDataError("active binding query returned a row outside its exact scope")
+        return binding
+
+    def get_latest_binding(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        agent_id: str,
+        population: AuthorityPopulation,
+    ) -> AgentAuthorityBinding | None:
+        """Return the deterministically latest binding for one governed population."""
+
+        owner = _require_query_identifier(owner_id, field="owner id")
+        agent = _require_query_identifier(agent_id, field="agent id")
+        if not isinstance(population, AuthorityPopulation):
+            raise RepositoryValidationError("population must be an authority population")
+        row = transaction.fetch_one(
+            _GET_LATEST_BINDING,
+            (owner, agent, population.value),
+        )
+        if row is None:
+            return None
+        binding = _binding_from_row(row)
+        if (binding.owner_id, binding.agent_id, binding.population) != (
+            owner,
+            agent,
+            population,
+        ):
+            raise RepositoryDataError(
+                "latest binding query returned a row outside its population scope"
+            )
+        return binding
 
     def transition_binding(
         self,
@@ -714,6 +888,104 @@ class AuthorityRepository:
             raise RepositoryDataError("binding transition returned different data")
         return persisted
 
+    def activate_binding(
+        self,
+        transaction: Transaction,
+        replacement: AgentAuthorityBinding,
+        *,
+        expected_version: int,
+    ) -> AgentAuthorityBinding:
+        """Bind one provisioning intent to its issued remote authority exactly once."""
+
+        exact = _require_model(replacement, AgentAuthorityBinding, "binding")
+        _require_next_version(exact.version, expected_version)
+        if exact.state is not AuthorityBindingState.ACTIVE:
+            raise RepositoryValidationError("activated binding must enter the active state")
+        pending = (
+            pending_authority_identity(exact.binding_id, field="warden"),
+            pending_authority_identity(exact.binding_id, field="lease"),
+            pending_authority_identity(exact.binding_id, field="lineage"),
+            pending_authority_identity(exact.binding_id, field="subject"),
+        )
+        row = transaction.fetch_one(
+            _ACTIVATE_BINDING,
+            (
+                exact.warden_id,
+                exact.lease_id,
+                exact.lineage_id,
+                exact.subject_id,
+                exact.lease_sequence,
+                exact.lease_expires_at_ns,
+                exact.state.value,
+                exact.updated_at,
+                exact.version,
+                exact.owner_id,
+                exact.binding_id,
+                exact.agent_id,
+                exact.runtime_id,
+                exact.runtime_generation,
+                exact.population.value,
+                exact.tenant_id,
+                exact.envelope_id,
+                exact.policy_digest,
+                exact.machine_digest,
+                exact.config_epoch,
+                list(exact.capabilities),
+                exact.created_at,
+                *pending,
+                expected_version,
+            ),
+        )
+        if row is None:
+            raise AuthorityCompareAndSetConflictError(
+                "binding activation compare-and-set fence is stale"
+            )
+        persisted = _binding_from_row(row)
+        if persisted != exact:
+            raise RepositoryDataError("binding activation returned different data")
+        return persisted
+
+    def abandon_provisioning_binding(
+        self,
+        transaction: Transaction,
+        replacement: AgentAuthorityBinding,
+        *,
+        expected_version: int,
+    ) -> AgentAuthorityBinding:
+        """Close one never-issued intent while retaining its durable evidence."""
+
+        exact = _require_model(replacement, AgentAuthorityBinding, "binding")
+        pending = (
+            pending_authority_identity(exact.binding_id, field="warden"),
+            pending_authority_identity(exact.binding_id, field="lease"),
+            pending_authority_identity(exact.binding_id, field="lineage"),
+            pending_authority_identity(exact.binding_id, field="subject"),
+        )
+        if exact.state is not AuthorityBindingState.CLOSED:
+            raise RepositoryValidationError(
+                "abandoned provisioning binding must enter the closed state"
+            )
+        if (
+            (
+                exact.warden_id,
+                exact.lease_id,
+                exact.lineage_id,
+                exact.subject_id,
+            )
+            != pending
+            or exact.lease_sequence != 0
+            or exact.lease_expires_at_ns != 0
+        ):
+            raise RepositoryValidationError(
+                "abandoned provisioning binding must retain its pending authority fence"
+            )
+        return self.transition_binding(
+            transaction,
+            exact,
+            expected_state=AuthorityBindingState.PROVISIONING,
+            expected_version=expected_version,
+        )
+
     def create_lifecycle_operation(
         self,
         transaction: Transaction,
@@ -747,6 +1019,38 @@ class AuthorityRepository:
     ) -> AuthorityLifecycleOperation | None:
         row = transaction.fetch_one(_GET_LIFECYCLE, (owner_id, operation_id))
         return None if row is None else _lifecycle_from_row(row)
+
+    def list_recoverable_lifecycle_operations(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        due_at: datetime,
+        limit: int = 50,
+    ) -> tuple[AuthorityLifecycleOperation, ...]:
+        """Lock one bounded owner partition of due recovery work.
+
+        The caller must transition selected rows in this same transaction;
+        ``SKIP LOCKED`` prevents another reconciler from selecting them before
+        that compare-and-set transition commits.
+        """
+
+        try:
+            owner = require_identifier(owner_id, field="owner id")
+            due = require_utc(due_at, field="due at")
+        except DomainValidationError as exc:
+            raise RepositoryValidationError(
+                "lifecycle recovery scope is invalid"
+            ) from exc
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise RepositoryValidationError(
+                "lifecycle recovery limit must be between 1 and 200"
+            )
+        rows = transaction.fetch_all(
+            _LIST_RECOVERABLE_LIFECYCLE,
+            (owner, due, limit),
+        )
+        return tuple(_lifecycle_from_row(row) for row in rows)
 
     def transition_lifecycle_operation(
         self,
@@ -835,6 +1139,111 @@ class AuthorityRepository:
     ) -> ProtectedEffectOperation | None:
         row = transaction.fetch_one(_GET_EFFECT, (owner_id, operation_id))
         return None if row is None else _effect_from_row(row)
+
+    def list_recoverable_protected_effects(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        updated_before: datetime,
+        limit: int = 50,
+    ) -> tuple[ProtectedEffectOperation, ...]:
+        """Lock a bounded owner partition of stale nonterminal effect work.
+
+        Every selected operation must be transitioned with its compare-and-set
+        fence in this same caller-owned transaction. Committing without that
+        transition merely releases the locks and permits the row to be selected
+        again; ``SKIP LOCKED`` prevents concurrent reconcilers from selecting it
+        while this transaction remains open.
+        """
+
+        owner = _require_query_identifier(owner_id, field="owner id")
+        try:
+            cutoff = require_utc(updated_before, field="updated before")
+        except DomainValidationError as exc:
+            raise RepositoryValidationError("effect recovery cutoff must be UTC-aware") from exc
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise RepositoryValidationError("effect recovery limit must be between 1 and 200")
+        rows = transaction.fetch_all(
+            _LIST_RECOVERABLE_EFFECTS,
+            (owner, cutoff, limit),
+        )
+        effects = tuple(_effect_from_row(row) for row in rows)
+        if len(effects) > limit:
+            raise RepositoryDataError("effect recovery query exceeded its limit")
+        keys: list[tuple[datetime, str]] = []
+        for effect in effects:
+            if (
+                effect.owner_id != owner
+                or effect.status not in _RECOVERABLE_EFFECT_STATUSES
+                or effect.updated_at >= cutoff
+            ):
+                raise RepositoryDataError(
+                    "effect recovery query returned a row outside its stale owner scope"
+                )
+            keys.append((effect.updated_at, effect.operation_id))
+        if keys != sorted(keys):
+            raise RepositoryDataError(
+                "effect recovery query returned nondeterministically ordered rows"
+            )
+        return effects
+
+    def list_recovery_owners(
+        self,
+        transaction: Transaction,
+        *,
+        lifecycle_due_at: datetime,
+        effect_updated_before: datetime,
+        limit: int = 200,
+    ) -> tuple[str, ...]:
+        """List bounded owner partitions containing due lifecycle/effect work.
+
+        This scheduling query takes no row locks and performs no transition.
+        Callers must pass each returned owner into the corresponding bounded
+        recovery method, whose ``FOR UPDATE SKIP LOCKED`` query owns claims.
+        """
+
+        try:
+            due = require_utc(lifecycle_due_at, field="lifecycle due at")
+            cutoff = require_utc(
+                effect_updated_before,
+                field="effect updated before",
+            )
+        except DomainValidationError as exc:
+            raise RepositoryValidationError("recovery owner cutoff must be UTC-aware") from exc
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise RepositoryValidationError(
+                "recovery owner limit must be between 1 and 1000"
+            )
+        rows = transaction.fetch_all(
+            _LIST_RECOVERY_OWNERS,
+            (due, cutoff, limit),
+        )
+        if len(rows) > limit:
+            raise RepositoryDataError("recovery owner query exceeded its limit")
+        owners: list[str] = []
+        keys: list[tuple[datetime, str]] = []
+        for row in rows:
+            try:
+                owner = require_identifier(
+                    _row_value(row, "owner_id"),
+                    field="owner id",
+                )
+                recovery_at = require_utc(
+                    _row_value(row, "recovery_at"),
+                    field="recovery at",
+                )
+            except DomainValidationError as exc:
+                raise RepositoryDataError(
+                    "recovery owner query returned invalid data"
+                ) from exc
+            owners.append(owner)
+            keys.append((recovery_at, owner))
+        if len(owners) != len(set(owners)) or keys != sorted(keys):
+            raise RepositoryDataError(
+                "recovery owner query returned nondeterministic partitions"
+            )
+        return tuple(owners)
 
     def transition_protected_effect(
         self,

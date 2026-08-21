@@ -16,6 +16,7 @@ from astralplane.repositories import (
     _bounded_limit,
     _bounded_text,
     _canonical_json,
+    _content_value,
     _non_negative_int,
     _positive_int,
     _required_id,
@@ -30,13 +31,13 @@ class CanvasComponentRecord:
     row_id: str
     conversation_id: str
     owner_id: str
-    component_id: str
+    component_id: str | None
     payload: Any
     component_type: str
     title: str | None
-    position: int
+    position: int | None
     created_at: int
-    updated_at: int
+    updated_at: int | None
     publication_id: str | None = None
     committed_render_revision: int | None = None
 
@@ -78,9 +79,71 @@ class PublicationRecord:
     base_render_revision: int
     committed_render_revision: int | None
     state: str
+    publication_role: str
+    parent_publication_id: str | None
+    execution_base_publication_id: str | None
+    execution_base_render_revision: int | None
+    execution_base_components_sha256: str | None
+    execution_base_layouts_sha256: str | None
+    publication_rebase_count: int
     started_at: datetime
     committed_at: datetime | None
     aborted_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationStageMessageFence:
+    position: int
+    committed_render_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationStageEntityFence:
+    identity: str
+    position: int
+    committed_render_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationStageSummary:
+    publication: PublicationRecord
+    messages: tuple[PublicationStageMessageFence, ...]
+    components: tuple[PublicationStageEntityFence, ...]
+    layouts: tuple[PublicationStageEntityFence, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationRebaseComponent:
+    """One complete canvas row for an assistant-result stage rebase."""
+
+    row_id: str
+    component_id: str
+    payload: Any
+    component_type: str
+    title: str | None
+    position: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationRebaseLayout:
+    """One complete layout row for an assistant-result stage rebase."""
+
+    layout_key: str
+    position: int
+    tree: Any
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationAssistantContentRecord:
+    """The final committed assistant message for one owner publication."""
+
+    message_id: int
+    conversation_id: str
+    owner_id: str
+    publication_id: str
+    position: int
+    committed_render_revision: int
+    content: Any
 
 
 def _optional_returned(result: object, operation: str) -> Any:
@@ -92,6 +155,16 @@ def _optional_returned(result: object, operation: str) -> Any:
 def _aware_time(value: object, field: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise RepositoryValidationError(f"{field} must be a timezone-aware datetime")
+    return value
+
+
+def _sha256(value: object, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise RepositoryValidationError(f"{field} must be a lowercase SHA-256 digest")
     return value
 
 
@@ -119,18 +192,66 @@ def _scope(
     )
 
 
+def _optional_publication_state(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in {"staged", "committed", "aborted"}:
+        raise RepositoryValidationError("require_state is invalid")
+    return value
+
+
+def _publication_conflict_notice() -> dict[str, str]:
+    return {
+        "type": "alert",
+        "variant": "warning",
+        "message": (
+            "Some canvas changes from this result conflicted with newer work. "
+            "The newer canvas version was preserved."
+        ),
+    }
+
+
+def _contains_publication_conflict_notice(content: object) -> bool:
+    if not isinstance(content, Sequence) or isinstance(
+        content, (str, bytes, bytearray, memoryview)
+    ):
+        return False
+    if not content:
+        return False
+    return _canonical_json(content[-1], "content") == _canonical_json(
+        _publication_conflict_notice(), "content"
+    )
+
+
+def _with_publication_conflict_notice(content: object) -> list[object]:
+    notice: object = _publication_conflict_notice()
+    if isinstance(content, Sequence) and not isinstance(
+        content, (str, bytes, bytearray, memoryview)
+    ):
+        return [*content, notice]
+    if isinstance(content, Mapping):
+        return [dict(content), notice]
+    if isinstance(content, str) and content:
+        return [{"type": "text", "content": content}, notice]
+    return [notice]
+
+
 def _component(row: Mapping[str, Any]) -> CanvasComponentRecord:
     return CanvasComponentRecord(
         row_id=str(_row_value(row, "id")),
         conversation_id=str(_row_value(row, "chat_id")),
         owner_id=str(_row_value(row, "user_id")),
-        component_id=str(_row_value(row, "component_id")),
+        component_id=(
+            None if row.get("component_id") is None else str(row["component_id"])
+        ),
         payload=_structured_json(_row_value(row, "component_data"), "component_data"),
         component_type=str(_row_value(row, "component_type")),
         title=None if row.get("title") is None else str(row["title"]),
-        position=int(_row_value(row, "position")),
+        position=None if row.get("position") is None else int(row["position"]),
         created_at=int(_row_value(row, "created_at")),
-        updated_at=int(_row_value(row, "updated_at")),
+        updated_at=(
+            None if row.get("updated_at") is None else int(row["updated_at"])
+        ),
         publication_id=(
             None
             if row.get("conversation_commit_id") is None
@@ -207,6 +328,31 @@ def _publication(row: Mapping[str, Any]) -> PublicationRecord:
             else int(row["committed_render_revision"])
         ),
         state=str(_row_value(row, "state")),
+        publication_role=str(_row_value(row, "publication_role")),
+        parent_publication_id=(
+            None if row.get("parent_commit_id") is None else str(row["parent_commit_id"])
+        ),
+        execution_base_publication_id=(
+            None
+            if row.get("execution_base_commit_id") is None
+            else str(row["execution_base_commit_id"])
+        ),
+        execution_base_render_revision=(
+            None
+            if row.get("execution_base_render_revision") is None
+            else int(row["execution_base_render_revision"])
+        ),
+        execution_base_components_sha256=(
+            None
+            if row.get("execution_base_components_sha256") is None
+            else str(row["execution_base_components_sha256"])
+        ),
+        execution_base_layouts_sha256=(
+            None
+            if row.get("execution_base_layouts_sha256") is None
+            else str(row["execution_base_layouts_sha256"])
+        ),
+        publication_rebase_count=int(_row_value(row, "publication_rebase_count")),
         started_at=_persisted_time(_row_value(row, "started_at"), "started_at"),
         committed_at=(
             None
@@ -226,6 +372,14 @@ class CanvasRepository:
         id, chat_id, user_id, component_id, component_data, component_type,
         title, position, created_at, updated_at, conversation_commit_id,
         committed_render_revision
+    """
+    _COMPONENT_FIELDS = """
+        component.id, component.chat_id, component.user_id,
+        component.component_id, component.component_data,
+        component.component_type, component.title, component.position,
+        component.created_at, component.updated_at,
+        component.conversation_commit_id,
+        component.committed_render_revision
     """
 
     def create(
@@ -367,6 +521,141 @@ class CanvasRepository:
         )
         return None if row is None else _component(row)
 
+    def get_current_by_row_id(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        row_id: str,
+        for_update: bool = False,
+    ) -> CanvasComponentRecord | None:
+        """Resolve one owner row only when it belongs to the visible chat head."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        row_id = _required_id(row_id, "row_id")
+        if not isinstance(for_update, bool):
+            raise RepositoryValidationError("for_update must be boolean")
+        lock = " FOR UPDATE OF component" if for_update else ""
+        row = query.fetch_one(
+            f"""
+            SELECT {self._COMPONENT_FIELDS}
+            FROM saved_components AS component
+            JOIN chats AS chat
+              ON chat.id = component.chat_id AND chat.user_id = component.user_id
+            WHERE component.id = %s AND component.user_id = %s
+              AND (
+                (COALESCE(chat.render_revision, 0) = 0
+                 AND component.conversation_commit_id IS NULL
+                 AND component.committed_render_revision IS NULL)
+                OR (
+                    chat.render_revision > 0
+                    AND component.conversation_commit_id = chat.conversation_commit_id
+                    AND component.committed_render_revision = chat.render_revision
+                )
+              )
+            """
+            + lock,
+            (row_id, owner_id),
+        )
+        return None if row is None else _component(row)
+
+    def list_scoped(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        committed_render_revision: int,
+        expected_base_render_revision: int,
+    ) -> tuple[CanvasComponentRecord, ...]:
+        """List one still-staged complete canvas under its exact publication fence."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id, revision = _scope(
+            publication_id,
+            committed_render_revision,
+        )
+        base_revision = _non_negative_int(
+            expected_base_render_revision,
+            "expected_base_render_revision",
+        )
+        if revision != base_revision + 1:
+            raise RepositoryValidationError(
+                "committed_render_revision must follow expected_base_render_revision"
+            )
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._COMPONENT_FIELDS}
+            FROM saved_components AS component
+            JOIN conversation_commit AS publication
+              ON publication.commit_id = component.conversation_commit_id
+             AND publication.chat_id = component.chat_id
+             AND publication.owner_user_id = component.user_id
+            WHERE component.chat_id = %s AND component.user_id = %s
+              AND component.conversation_commit_id = %s
+              AND component.committed_render_revision = %s
+              AND publication.state = 'staged'
+              AND publication.base_render_revision = %s
+            ORDER BY COALESCE(component.position, 2147483647),
+                     component.created_at, component.id
+            """,
+            (
+                conversation_id,
+                owner_id,
+                publication_id,
+                revision,
+                base_revision,
+            ),
+        )
+        return tuple(_component(row) for row in rows)
+
+    def list_for_publication(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        committed_render_revision: int,
+        require_state: str | None = None,
+    ) -> tuple[CanvasComponentRecord, ...]:
+        """Read an exact owner publication view even after the chat head advances."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id, revision = _scope(
+            publication_id,
+            committed_render_revision,
+        )
+        required_state = _optional_publication_state(require_state)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._COMPONENT_FIELDS}
+            FROM saved_components AS component
+            JOIN conversation_commit AS publication
+              ON publication.commit_id = component.conversation_commit_id
+             AND publication.chat_id = component.chat_id
+             AND publication.owner_user_id = component.user_id
+            WHERE component.chat_id = %s AND component.user_id = %s
+              AND component.conversation_commit_id = %s
+              AND component.committed_render_revision = %s
+              AND (%s IS NULL OR publication.state = %s)
+            ORDER BY COALESCE(component.position, 2147483647),
+                     component.created_at, component.id
+            """,
+            (
+                conversation_id,
+                owner_id,
+                publication_id,
+                revision,
+                required_state,
+                required_state,
+            ),
+        )
+        return tuple(_component(row) for row in rows)
+
     def list_current(
         self,
         query: QueryExecutor,
@@ -404,6 +693,72 @@ class CanvasRepository:
             (conversation_id, owner_id),
         )
         return tuple(_component(row) for row in rows)
+
+    def list_current_for_owner(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str | None = None,
+        limit: int = 1000,
+    ) -> tuple[CanvasComponentRecord, ...]:
+        """List visible head components for one owner with an optional chat filter."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        if conversation_id is not None:
+            conversation_id = _required_id(conversation_id, "conversation_id")
+        limit = _bounded_limit(limit, maximum=1000)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._COMPONENT_FIELDS}
+            FROM saved_components AS component
+            JOIN chats AS chat
+              ON chat.id = component.chat_id AND chat.user_id = component.user_id
+            WHERE component.user_id = %s
+              AND (%s IS NULL OR component.chat_id = %s)
+              AND (
+                (COALESCE(chat.render_revision, 0) = 0
+                 AND component.conversation_commit_id IS NULL
+                 AND component.committed_render_revision IS NULL)
+                OR (
+                    chat.render_revision > 0
+                    AND component.conversation_commit_id = chat.conversation_commit_id
+                    AND component.committed_render_revision = chat.render_revision
+                )
+              )
+            ORDER BY component.created_at DESC, component.id DESC
+            LIMIT %s
+            """,
+            (owner_id, conversation_id, conversation_id, limit),
+        )
+        return tuple(_component(row) for row in rows)
+
+    def remove_current_by_row_id(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        row_id: str,
+    ) -> CanvasComponentRecord | None:
+        """Delete one revision-zero current row and return its typed identity."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        row_id = _required_id(row_id, "row_id")
+        result = transaction.execute(
+            f"""
+            DELETE FROM saved_components AS component
+            USING chats AS chat
+            WHERE component.id = %s AND component.user_id = %s
+              AND chat.id = component.chat_id AND chat.user_id = component.user_id
+              AND COALESCE(chat.render_revision, 0) = 0
+              AND component.conversation_commit_id IS NULL
+              AND component.committed_render_revision IS NULL
+            RETURNING {self._COMPONENT_FIELDS}
+            """,
+            (row_id, owner_id),
+        )
+        row = _optional_returned(result, "canvas.remove_current_by_row_id")
+        return None if row is None else _component(row)
 
     def replace(
         self,
@@ -500,11 +855,61 @@ class CanvasRepository:
         )
         return result.rowcount == 1
 
+    def sync_legacy_presence(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+    ) -> bool:
+        """Recompute the revision-zero canvas-presence bit under owner authority."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        result = transaction.execute(
+            """
+            UPDATE chats AS chat
+            SET has_saved_components = EXISTS (
+                SELECT 1
+                FROM saved_components AS component
+                WHERE component.chat_id = chat.id
+                  AND component.user_id = chat.user_id
+                  AND component.conversation_commit_id IS NULL
+                  AND component.committed_render_revision IS NULL
+            )
+            WHERE chat.id = %s AND chat.user_id = %s
+              AND COALESCE(chat.render_revision, 0) = 0
+            RETURNING COALESCE(has_saved_components, FALSE) AS has_saved_components
+            """,
+            (conversation_id, owner_id),
+        )
+        row = _optional_returned(result, "canvas.sync_legacy_presence")
+        if row is not None:
+            return bool(_row_value(row, "has_saved_components"))
+        conversation = transaction.fetch_one(
+            "SELECT render_revision FROM chats WHERE id = %s AND user_id = %s",
+            (conversation_id, owner_id),
+        )
+        if conversation is None:
+            raise RepositoryNotFoundError(
+                "workspace conversation was not found",
+                metadata={"operation": "canvas.sync_legacy_presence"},
+            )
+        raise RepositoryConflictError(
+            "revisioned workspace presence requires atomic publication",
+            metadata={"operation": "canvas.sync_legacy_presence"},
+        )
+
 
 class LayoutRepository:
     _FIELDS = """
         id, chat_id, user_id, layout_key, position, layout, created_at,
         updated_at, conversation_commit_id, committed_render_revision
+    """
+    _LAYOUT_FIELDS = """
+        layout.id, layout.chat_id, layout.user_id, layout.layout_key,
+        layout.position, layout.layout, layout.created_at, layout.updated_at,
+        layout.conversation_commit_id, layout.committed_render_revision
     """
 
     def create(self, transaction: Transaction, record: LayoutRecord) -> LayoutRecord:
@@ -613,6 +1018,101 @@ class LayoutRepository:
             (conversation_id, owner_id, layout_key, publication_id, revision),
         )
         return None if row is None else _layout(row)
+
+    def list_scoped(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        committed_render_revision: int,
+        expected_base_render_revision: int,
+    ) -> tuple[LayoutRecord, ...]:
+        """List one still-staged layout view under its exact publication fence."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id, revision = _scope(
+            publication_id,
+            committed_render_revision,
+        )
+        base_revision = _non_negative_int(
+            expected_base_render_revision,
+            "expected_base_render_revision",
+        )
+        if revision != base_revision + 1:
+            raise RepositoryValidationError(
+                "committed_render_revision must follow expected_base_render_revision"
+            )
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._LAYOUT_FIELDS}
+            FROM workspace_layout AS layout
+            JOIN conversation_commit AS publication
+              ON publication.commit_id = layout.conversation_commit_id
+             AND publication.chat_id = layout.chat_id
+             AND publication.owner_user_id = layout.user_id
+            WHERE layout.chat_id = %s AND layout.user_id = %s
+              AND layout.conversation_commit_id = %s
+              AND layout.committed_render_revision = %s
+              AND publication.state = 'staged'
+              AND publication.base_render_revision = %s
+            ORDER BY layout.position, layout.id
+            """,
+            (
+                conversation_id,
+                owner_id,
+                publication_id,
+                revision,
+                base_revision,
+            ),
+        )
+        return tuple(_layout(row) for row in rows)
+
+    def list_for_publication(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        committed_render_revision: int,
+        require_state: str | None = None,
+    ) -> tuple[LayoutRecord, ...]:
+        """Read an exact owner publication layout after the head advances."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id, revision = _scope(
+            publication_id,
+            committed_render_revision,
+        )
+        required_state = _optional_publication_state(require_state)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._LAYOUT_FIELDS}
+            FROM workspace_layout AS layout
+            JOIN conversation_commit AS publication
+              ON publication.commit_id = layout.conversation_commit_id
+             AND publication.chat_id = layout.chat_id
+             AND publication.owner_user_id = layout.user_id
+            WHERE layout.chat_id = %s AND layout.user_id = %s
+              AND layout.conversation_commit_id = %s
+              AND layout.committed_render_revision = %s
+              AND (%s IS NULL OR publication.state = %s)
+            ORDER BY layout.position, layout.id
+            """,
+            (
+                conversation_id,
+                owner_id,
+                publication_id,
+                revision,
+                required_state,
+                required_state,
+            ),
+        )
+        return tuple(_layout(row) for row in rows)
 
     def list_current(
         self,
@@ -815,10 +1315,12 @@ class WorkspaceSnapshotRepository:
         owner_id: str,
         conversation_id: str,
         limit: int = 50,
+        offset: int = 0,
     ) -> tuple[WorkspaceSnapshotRecord, ...]:
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         limit = _bounded_limit(limit)
+        offset = _non_negative_int(offset, "offset")
         rows = query.fetch_all(
             """
             SELECT id, chat_id, user_id, turn_message_id, cause,
@@ -826,18 +1328,45 @@ class WorkspaceSnapshotRepository:
             FROM workspace_snapshot
             WHERE chat_id = %s AND user_id = %s
             ORDER BY created_at DESC, id DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (conversation_id, owner_id, limit),
+            (conversation_id, owner_id, limit, offset),
         )
         return tuple(_snapshot(row) for row in rows)
+
+    def count_for_conversation(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+    ) -> int:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        row = query.fetch_one(
+            """
+            SELECT COUNT(*) AS snapshot_count
+            FROM workspace_snapshot
+            WHERE chat_id = %s AND user_id = %s
+            """,
+            (conversation_id, owner_id),
+        )
+        if row is None:  # pragma: no cover - aggregate SELECT always returns one row
+            raise RepositoryDataError("workspace snapshot count returned no row")
+        count = int(_row_value(row, "snapshot_count"))
+        if count < 0:  # pragma: no cover - PostgreSQL COUNT invariant
+            raise RepositoryDataError("workspace snapshot count is negative")
+        return count
 
 
 class PublicationRepository:
     _FIELDS = """
         commit_id, chat_id, owner_user_id, request_generation, operation_id,
         operation_execution_generation, base_render_revision,
-        committed_render_revision, state, started_at, committed_at, aborted_at
+        committed_render_revision, state, publication_role, parent_commit_id,
+        execution_base_commit_id, execution_base_render_revision,
+        execution_base_components_sha256, execution_base_layouts_sha256,
+        publication_rebase_count, started_at, committed_at, aborted_at
     """
 
     def stage(
@@ -852,6 +1381,12 @@ class PublicationRepository:
         started_at: datetime,
         operation_id: str | None = None,
         operation_execution_generation: int | None = None,
+        publication_role: str = "atomic",
+        parent_publication_id: str | None = None,
+        execution_base_publication_id: str | None = None,
+        execution_base_render_revision: int | None = None,
+        execution_base_components_sha256: str | None = None,
+        execution_base_layouts_sha256: str | None = None,
     ) -> PublicationRecord:
         publication_id = _required_id(publication_id, "publication_id")
         owner_id = _required_id(owner_id, "owner_id")
@@ -865,15 +1400,86 @@ class PublicationRepository:
             operation_execution_generation = _positive_int(
                 operation_execution_generation, "operation_execution_generation"
             )
+        if (operation_id is None) != (operation_execution_generation is None):
+            raise RepositoryValidationError(
+                "operation_id and operation_execution_generation must be supplied together"
+            )
+        if not isinstance(publication_role, str) or publication_role not in {
+            "atomic",
+            "user_acceptance",
+            "assistant_result",
+        }:
+            raise RepositoryValidationError("publication_role is invalid")
+        if publication_role == "atomic":
+            if any(
+                value is not None
+                for value in (
+                    parent_publication_id,
+                    execution_base_publication_id,
+                    execution_base_render_revision,
+                    execution_base_components_sha256,
+                    execution_base_layouts_sha256,
+                )
+            ):
+                raise RepositoryValidationError(
+                    "atomic publications cannot carry voice execution metadata"
+                )
+        else:
+            if publication_role == "user_acceptance":
+                if parent_publication_id is not None:
+                    raise RepositoryValidationError(
+                        "user acceptance publications cannot have a parent"
+                    )
+                execution_base_render_revision = _non_negative_int(
+                    execution_base_render_revision,
+                    "execution_base_render_revision",
+                )
+            else:
+                parent_publication_id = _required_id(
+                    parent_publication_id, "parent_publication_id"
+                )
+                execution_base_render_revision = _positive_int(
+                    execution_base_render_revision,
+                    "execution_base_render_revision",
+                )
+            if execution_base_render_revision == 0:
+                if execution_base_publication_id is not None:
+                    raise RepositoryValidationError(
+                        "revision-zero execution bases cannot name a publication"
+                    )
+            else:
+                execution_base_publication_id = _required_id(
+                    execution_base_publication_id,
+                    "execution_base_publication_id",
+                )
+            execution_base_components_sha256 = _sha256(
+                execution_base_components_sha256,
+                "execution_base_components_sha256",
+            )
+            execution_base_layouts_sha256 = _sha256(
+                execution_base_layouts_sha256,
+                "execution_base_layouts_sha256",
+            )
+        if parent_publication_id == publication_id:
+            raise RepositoryValidationError("a publication cannot be its own parent")
+        if execution_base_publication_id == publication_id:
+            raise RepositoryValidationError(
+                "a publication cannot be its own execution base"
+            )
         result = transaction.execute(
             f"""
             INSERT INTO conversation_commit (
                 commit_id, chat_id, owner_user_id, request_generation,
                 operation_id, operation_execution_generation,
                 base_render_revision, committed_render_revision, state,
+                publication_role, parent_commit_id, execution_base_commit_id,
+                execution_base_render_revision,
+                execution_base_components_sha256,
+                execution_base_layouts_sha256, publication_rebase_count,
                 started_at, committed_at, aborted_at
             )
-            SELECT %s, %s, %s, %s, %s, %s, %s, NULL, 'staged', %s, NULL, NULL
+            SELECT %s, %s, %s, %s, %s, %s, %s, NULL, 'staged',
+                   %s, %s, %s, %s, %s, %s, 0, %s, NULL, NULL
             FROM chats
             WHERE id = %s AND user_id = %s
               AND COALESCE(render_revision, 0) = %s
@@ -888,6 +1494,12 @@ class PublicationRepository:
                 operation_id,
                 operation_execution_generation,
                 base_render_revision,
+                publication_role,
+                parent_publication_id,
+                execution_base_publication_id,
+                execution_base_render_revision,
+                execution_base_components_sha256,
+                execution_base_layouts_sha256,
                 started_at,
                 conversation_id,
                 owner_id,
@@ -922,12 +1534,24 @@ class PublicationRepository:
             operation_id,
             operation_execution_generation,
             base_render_revision,
+            publication_role,
+            parent_publication_id,
+            execution_base_publication_id,
+            execution_base_render_revision,
+            execution_base_components_sha256,
+            execution_base_layouts_sha256,
         )
         observed = (
             existing.publication_id,
             existing.operation_id,
             existing.operation_execution_generation,
             existing.base_render_revision,
+            existing.publication_role,
+            existing.parent_publication_id,
+            existing.execution_base_publication_id,
+            existing.execution_base_render_revision,
+            existing.execution_base_components_sha256,
+            existing.execution_base_layouts_sha256,
         )
         if expected != observed:
             raise RepositoryConflictError(
@@ -943,19 +1567,100 @@ class PublicationRepository:
         owner_id: str,
         conversation_id: str,
         publication_id: str,
+        for_update: bool = False,
     ) -> PublicationRecord | None:
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id = _required_id(publication_id, "publication_id")
+        if not isinstance(for_update, bool):
+            raise RepositoryValidationError("for_update must be a boolean")
+        lock_clause = " FOR UPDATE" if for_update else ""
         row = query.fetch_one(
             f"""
             SELECT {self._FIELDS}
             FROM conversation_commit
             WHERE commit_id = %s AND chat_id = %s AND owner_user_id = %s
+            {lock_clause}
             """,
             (publication_id, conversation_id, owner_id),
         )
         return None if row is None else _publication(row)
+
+    def get_for_owner(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        publication_id: str,
+        for_update: bool = False,
+    ) -> PublicationRecord | None:
+        """Resolve a publication when the trusted caller does not yet know its chat."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        publication_id = _required_id(publication_id, "publication_id")
+        if not isinstance(for_update, bool):
+            raise RepositoryValidationError("for_update must be a boolean")
+        lock_clause = " FOR UPDATE" if for_update else ""
+        row = query.fetch_one(
+            f"""
+            SELECT {self._FIELDS}
+            FROM conversation_commit
+            WHERE commit_id = %s AND owner_user_id = %s
+            {lock_clause}
+            """,
+            (publication_id, owner_id),
+        )
+        return None if row is None else _publication(row)
+
+    def get_latest_committed_assistant_content(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        publication_id: str,
+    ) -> PublicationAssistantContentRecord | None:
+        """Return the final assistant content authenticated by a committed publication."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        publication_id = _required_id(publication_id, "publication_id")
+        row = query.fetch_one(
+            """
+            SELECT message.id AS message_id, message.chat_id,
+                   message.user_id, message.conversation_commit_id,
+                   message.commit_position, message.committed_render_revision,
+                   message.content
+            FROM conversation_commit AS publication
+            JOIN messages AS message
+              ON message.conversation_commit_id = publication.commit_id
+             AND message.chat_id = publication.chat_id
+             AND message.user_id = publication.owner_user_id
+             AND message.committed_render_revision =
+                 publication.committed_render_revision
+            WHERE publication.commit_id = %s
+              AND publication.owner_user_id = %s
+              AND publication.state = 'committed'
+              AND message.role = 'assistant'
+            ORDER BY message.commit_position DESC, message.id DESC
+            LIMIT 1
+            """,
+            (publication_id, owner_id),
+        )
+        if row is None:
+            return None
+        return PublicationAssistantContentRecord(
+            message_id=_positive_int(_row_value(row, "message_id"), "message_id"),
+            conversation_id=str(_row_value(row, "chat_id")),
+            owner_id=str(_row_value(row, "user_id")),
+            publication_id=str(_row_value(row, "conversation_commit_id")),
+            position=_non_negative_int(
+                _row_value(row, "commit_position"), "commit_position"
+            ),
+            committed_render_revision=_positive_int(
+                _row_value(row, "committed_render_revision"),
+                "committed_render_revision",
+            ),
+            content=_content_value(_row_value(row, "content")),
+        )
 
     def get_by_request(
         self,
@@ -964,19 +1669,922 @@ class PublicationRepository:
         owner_id: str,
         conversation_id: str,
         request_generation: str,
+        for_update: bool = False,
     ) -> PublicationRecord | None:
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         request_generation = _required_id(request_generation, "request_generation")
+        if not isinstance(for_update, bool):
+            raise RepositoryValidationError("for_update must be a boolean")
+        lock_clause = " FOR UPDATE" if for_update else ""
         row = query.fetch_one(
             f"""
             SELECT {self._FIELDS}
             FROM conversation_commit
             WHERE chat_id = %s AND owner_user_id = %s AND request_generation = %s
+            {lock_clause}
             """,
             (conversation_id, owner_id, request_generation),
         )
         return None if row is None else _publication(row)
+
+    def validate_stage(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+    ) -> PublicationStageSummary:
+        """Lock and summarize every row belonging to one staged publication."""
+
+        publication = self.get(
+            transaction,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            publication_id=publication_id,
+            for_update=True,
+        )
+        if publication is None:
+            raise RepositoryNotFoundError(
+                "publication was not found",
+                metadata={"operation": "publication.validate_stage"},
+            )
+        if publication.state != "staged":
+            raise RepositoryConflictError(
+                "publication is not staged",
+                metadata={"operation": "publication.validate_stage"},
+            )
+        maximum = 10_000
+        message_rows = transaction.fetch_all(
+            """
+            SELECT commit_position, committed_render_revision
+            FROM messages
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY commit_position, id
+            LIMIT %s
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        component_rows = transaction.fetch_all(
+            """
+            SELECT component_id, position, committed_render_revision
+            FROM saved_components
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY COALESCE(position, 2147483647), created_at, id
+            LIMIT %s
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        layout_rows = transaction.fetch_all(
+            """
+            SELECT layout_key, position, committed_render_revision
+            FROM workspace_layout
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY position, id
+            LIMIT %s
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        if any(
+            len(rows) > maximum
+            for rows in (message_rows, component_rows, layout_rows)
+        ):
+            raise RepositoryDataError(
+                "staged publication exceeds the integrity-summary bound",
+                metadata={"operation": "publication.validate_stage"},
+            )
+
+        def persisted_integer(row: Mapping[str, Any], field: str) -> int:
+            value = _row_value(row, field)
+            if isinstance(value, bool):
+                raise RepositoryDataError(
+                    "staged publication contains an invalid integer",
+                    metadata={"field": field},
+                )
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError) as exc:
+                raise RepositoryDataError(
+                    "staged publication contains an invalid integer",
+                    metadata={"field": field},
+                ) from exc
+            if parsed < 0:
+                raise RepositoryDataError(
+                    "staged publication contains a negative integer",
+                    metadata={"field": field},
+                )
+            return parsed
+
+        messages = tuple(
+            PublicationStageMessageFence(
+                position=persisted_integer(row, "commit_position"),
+                committed_render_revision=persisted_integer(
+                    row, "committed_render_revision"
+                ),
+            )
+            for row in message_rows
+        )
+        components = tuple(
+            PublicationStageEntityFence(
+                identity=str(_row_value(row, "component_id")),
+                position=persisted_integer(row, "position"),
+                committed_render_revision=persisted_integer(
+                    row, "committed_render_revision"
+                ),
+            )
+            for row in component_rows
+        )
+        layouts = tuple(
+            PublicationStageEntityFence(
+                identity=str(_row_value(row, "layout_key")),
+                position=persisted_integer(row, "position"),
+                committed_render_revision=persisted_integer(
+                    row, "committed_render_revision"
+                ),
+            )
+            for row in layout_rows
+        )
+        if any(not fence.identity for fence in (*components, *layouts)):
+            raise RepositoryDataError(
+                "staged publication contains an empty identity",
+                metadata={"operation": "publication.validate_stage"},
+            )
+        return PublicationStageSummary(
+            publication=publication,
+            messages=messages,
+            components=components,
+            layouts=layouts,
+        )
+
+    def rebase_assistant_stage(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        expected_staged_base_render_revision: int,
+        expected_head_render_revision: int,
+        expected_head_publication_id: str | None,
+        components: Sequence[PublicationRebaseComponent],
+        layouts: Sequence[PublicationRebaseLayout],
+        append_conflict_notice: bool,
+    ) -> PublicationStageSummary:
+        """Atomically replace and advance one assistant-result stage.
+
+        The caller retains merge policy and commits the returned stage with
+        :meth:`commit_at_head` in the same transaction.  This method owns the
+        row locks, deterministic completeness checks, and exact replay fence.
+        """
+
+        operation = "publication.rebase_assistant_stage"
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id = _required_id(publication_id, "publication_id")
+        staged_base = _non_negative_int(
+            expected_staged_base_render_revision,
+            "expected_staged_base_render_revision",
+        )
+        head_revision = _non_negative_int(
+            expected_head_render_revision,
+            "expected_head_render_revision",
+        )
+        if head_revision < staged_base:
+            raise RepositoryValidationError(
+                "expected_head_render_revision cannot precede the staged base"
+            )
+        if head_revision == 0:
+            if expected_head_publication_id is not None:
+                raise RepositoryValidationError(
+                    "revision-zero heads cannot name a publication"
+                )
+        else:
+            expected_head_publication_id = _required_id(
+                expected_head_publication_id,
+                "expected_head_publication_id",
+            )
+        if not isinstance(append_conflict_notice, bool):
+            raise RepositoryValidationError("append_conflict_notice must be boolean")
+        if not isinstance(components, Sequence) or isinstance(
+            components, (str, bytes, bytearray, memoryview)
+        ):
+            raise RepositoryValidationError("components must be a bounded sequence")
+        if not isinstance(layouts, Sequence) or isinstance(
+            layouts, (str, bytes, bytearray, memoryview)
+        ):
+            raise RepositoryValidationError("layouts must be a bounded sequence")
+        maximum = 10_000
+        if len(components) > maximum or len(layouts) > maximum:
+            raise RepositoryValidationError(
+                "publication rebase exceeds the supported row bound",
+                metadata={"maximum": maximum},
+            )
+
+        normalized_components: list[
+            tuple[str, str, str, str, str | None, int]
+        ] = []
+        for item in components:
+            if not isinstance(item, PublicationRebaseComponent):
+                raise RepositoryValidationError(
+                    "components must contain PublicationRebaseComponent records"
+                )
+            title = item.title
+            if title is not None:
+                title = _bounded_text(
+                    title,
+                    "component.title",
+                    maximum=512,
+                    allow_empty=True,
+                )
+            normalized_components.append(
+                (
+                    _required_id(item.row_id, "component.row_id"),
+                    _required_id(item.component_id, "component.component_id"),
+                    _canonical_json(item.payload, "component.payload"),
+                    _bounded_text(
+                        item.component_type,
+                        "component.component_type",
+                        maximum=128,
+                    ),
+                    title,
+                    _non_negative_int(item.position, "component.position"),
+                )
+            )
+        if [item[5] for item in normalized_components] != list(
+            range(len(normalized_components))
+        ):
+            raise RepositoryValidationError(
+                "component positions must be contiguous and input ordered"
+            )
+        if len({item[0] for item in normalized_components}) != len(
+            normalized_components
+        ) or len({item[1] for item in normalized_components}) != len(
+            normalized_components
+        ):
+            raise RepositoryValidationError(
+                "component row and semantic identities must be unique"
+            )
+
+        normalized_layouts: list[tuple[str, int, str]] = []
+        for item in layouts:
+            if not isinstance(item, PublicationRebaseLayout):
+                raise RepositoryValidationError(
+                    "layouts must contain PublicationRebaseLayout records"
+                )
+            normalized_layouts.append(
+                (
+                    _required_id(item.layout_key, "layout.layout_key"),
+                    _non_negative_int(item.position, "layout.position"),
+                    _canonical_json(item.tree, "layout.tree"),
+                )
+            )
+        if len({item[0] for item in normalized_layouts}) != len(normalized_layouts):
+            raise RepositoryValidationError("layout identities must be unique")
+        normalized_layouts.sort(key=lambda item: item[1])
+
+        publication = self.get(
+            transaction,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            publication_id=publication_id,
+            for_update=True,
+        )
+        if publication is None:
+            raise RepositoryNotFoundError(
+                "publication was not found", metadata={"operation": operation}
+            )
+        if (
+            publication.state != "staged"
+            or publication.publication_role != "assistant_result"
+            or publication.base_render_revision != staged_base
+        ):
+            raise RepositoryConflictError(
+                "publication is not the expected assistant-result stage",
+                metadata={"operation": operation},
+            )
+        chat = transaction.fetch_one(
+            """
+            SELECT render_revision, conversation_commit_id
+            FROM chats
+            WHERE id = %s AND user_id = %s
+            FOR UPDATE
+            """,
+            (conversation_id, owner_id),
+        )
+        if chat is None:
+            raise RepositoryNotFoundError(
+                "publication conversation was not found",
+                metadata={"operation": operation},
+            )
+        observed_head = (
+            int(_row_value(chat, "render_revision")),
+            None
+            if chat.get("conversation_commit_id") is None
+            else str(chat["conversation_commit_id"]),
+        )
+        if observed_head != (head_revision, expected_head_publication_id):
+            raise RepositoryConflictError(
+                "conversation head changed before stage rebase",
+                metadata={"operation": operation},
+            )
+
+        message_rows = transaction.fetch_all(
+            """
+            SELECT id, role, content, commit_position,
+                   committed_render_revision
+            FROM messages
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY commit_position, id
+            LIMIT %s
+            FOR UPDATE
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        component_rows = transaction.fetch_all(
+            """
+            SELECT id, component_id, component_data, component_type, title,
+                   position, committed_render_revision
+            FROM saved_components
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY position, id
+            LIMIT %s
+            FOR UPDATE
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        layout_rows = transaction.fetch_all(
+            """
+            SELECT id, layout_key, position, layout, committed_render_revision
+            FROM workspace_layout
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            ORDER BY position, id
+            LIMIT %s
+            FOR UPDATE
+            """,
+            (publication_id, conversation_id, owner_id, maximum + 1),
+        )
+        if any(
+            len(rows) > maximum
+            for rows in (message_rows, component_rows, layout_rows)
+        ):
+            raise RepositoryDataError(
+                "staged publication exceeds the rebase integrity bound",
+                metadata={"operation": operation},
+            )
+
+        def persisted_non_negative(row: Mapping[str, Any], field: str) -> int:
+            value = _row_value(row, field)
+            if isinstance(value, bool):
+                raise RepositoryDataError(
+                    "staged publication contains an invalid integer",
+                    metadata={"field": field},
+                )
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError) as exc:
+                raise RepositoryDataError(
+                    "staged publication contains an invalid integer",
+                    metadata={"field": field},
+                ) from exc
+            if parsed < 0:
+                raise RepositoryDataError(
+                    "staged publication contains a negative integer",
+                    metadata={"field": field},
+                )
+            return parsed
+
+        message_positions = [
+            persisted_non_negative(row, "commit_position") for row in message_rows
+        ]
+        if message_positions != list(range(len(message_positions))):
+            raise RepositoryDataError(
+                "assistant-result messages are incomplete",
+                metadata={"operation": operation},
+            )
+        next_revision = head_revision + 1
+        current_components = tuple(
+            (
+                str(_row_value(row, "id")),
+                str(_row_value(row, "component_id")),
+                _canonical_json(
+                    _structured_json(
+                        _row_value(row, "component_data"), "component_data"
+                    ),
+                    "component_data",
+                ),
+                str(_row_value(row, "component_type")),
+                None if row.get("title") is None else str(row["title"]),
+                persisted_non_negative(row, "position"),
+            )
+            for row in component_rows
+        )
+        current_layouts = tuple(
+            (
+                str(_row_value(row, "layout_key")),
+                persisted_non_negative(row, "position"),
+                _canonical_json(
+                    _structured_json(_row_value(row, "layout"), "layout"),
+                    "layout",
+                ),
+            )
+            for row in layout_rows
+        )
+        message_revisions = [
+            persisted_non_negative(row, "committed_render_revision")
+            for row in message_rows
+        ]
+        component_revisions = [
+            persisted_non_negative(row, "committed_render_revision")
+            for row in component_rows
+        ]
+        layout_revisions = [
+            persisted_non_negative(row, "committed_render_revision")
+            for row in layout_rows
+        ]
+        assistant_row = next(
+            (
+                row
+                for row in reversed(message_rows)
+                if str(_row_value(row, "role")) == "assistant"
+            ),
+            None,
+        )
+        # Component row UUIDs are storage identities, not rebase-generation
+        # semantics.  A caller may deterministically rebuild the same merged
+        # canvas with fresh row UUIDs after a retry (or when an overlapping
+        # stage's original numeric revision already equals ``next_revision``).
+        # Fence replay by the stable component identity and complete payload
+        # instead; retaining the already-locked rows is the write-free replay.
+        current_component_semantics = tuple(
+            component[1:] for component in current_components
+        )
+        normalized_component_semantics = tuple(
+            component[1:] for component in normalized_components
+        )
+        rows_match = (
+            current_component_semantics == normalized_component_semantics
+            and current_layouts == tuple(normalized_layouts)
+            and all(revision == next_revision for revision in message_revisions)
+            and all(revision == next_revision for revision in component_revisions)
+            and all(revision == next_revision for revision in layout_revisions)
+        )
+        if rows_match:
+            if append_conflict_notice:
+                if assistant_row is None:
+                    raise RepositoryDataError(
+                        "conflicted assistant-result stage has no assistant message",
+                        metadata={"operation": operation},
+                    )
+                content = _content_value(_row_value(assistant_row, "content"))
+                if not _contains_publication_conflict_notice(content):
+                    self._append_conflict_notice(
+                        transaction,
+                        owner_id=owner_id,
+                        conversation_id=conversation_id,
+                        publication_id=publication_id,
+                        next_revision=next_revision,
+                        assistant_row=assistant_row,
+                    )
+            return self._rebase_summary(
+                publication,
+                message_positions,
+                normalized_components,
+                normalized_layouts,
+                next_revision,
+            )
+        # ``publication_rebase_count`` is the durable application marker.  A
+        # freshly staged result can legitimately already use ``next_revision``
+        # when its acceptance commit is still the current head; the numeric
+        # revision alone therefore cannot distinguish first application from
+        # a changed replay.  Once this method replaces the stage it advances
+        # the marker below, and only exact semantic replay remains legal.
+        if publication.publication_rebase_count > 0:
+            raise RepositoryConflictError(
+                "assistant-result rebase generation was reused with different semantics",
+                metadata={"operation": operation},
+            )
+
+        time_row = transaction.fetch_one(
+            "SELECT clock_timestamp() AS observed_at"
+        )
+        if time_row is None:
+            raise RepositoryDataError(
+                "database time was unavailable", metadata={"operation": operation}
+            )
+        observed_at = _persisted_time(_row_value(time_row, "observed_at"), "observed_at")
+        observed_at_ms = int(observed_at.timestamp() * 1000)
+        if observed_at_ms < 0:
+            raise RepositoryDataError(
+                "database time precedes the supported epoch",
+                metadata={"operation": operation},
+            )
+        marked = transaction.execute(
+            f"""
+            UPDATE conversation_commit
+            SET publication_rebase_count = publication_rebase_count + 1
+            WHERE commit_id = %s AND chat_id = %s AND owner_user_id = %s
+              AND state = 'staged' AND publication_role = 'assistant_result'
+              AND base_render_revision = %s
+              AND publication_rebase_count = %s
+            RETURNING {self._FIELDS}
+            """,
+            (
+                publication_id,
+                conversation_id,
+                owner_id,
+                staged_base,
+                publication.publication_rebase_count,
+            ),
+        )
+        marked_row = _optional_returned(marked, operation)
+        if marked_row is None:
+            raise RepositoryConflictError(
+                "assistant-result rebase generation marker changed",
+                metadata={"operation": operation},
+            )
+        publication = _publication(marked_row)
+        component_delete = transaction.execute(
+            """
+            DELETE FROM saved_components
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            """,
+            (publication_id, conversation_id, owner_id),
+        )
+        layout_delete = transaction.execute(
+            """
+            DELETE FROM workspace_layout
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            """,
+            (publication_id, conversation_id, owner_id),
+        )
+        if component_delete.rowcount != len(component_rows) or layout_delete.rowcount != len(
+            layout_rows
+        ):
+            raise RepositoryConflictError(
+                "assistant-result stage changed while it was being replaced",
+                metadata={"operation": operation},
+            )
+        for row_id, component_id, payload, component_type, title, position in (
+            normalized_components
+        ):
+            inserted = transaction.execute(
+                """
+                INSERT INTO saved_components (
+                    id, chat_id, user_id, component_id, component_data,
+                    component_type, title, position, created_at, updated_at,
+                    conversation_commit_id, committed_render_revision
+                )
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                FROM conversation_commit AS publication
+                WHERE publication.commit_id = %s
+                  AND publication.chat_id = %s
+                  AND publication.owner_user_id = %s
+                  AND publication.state = 'staged'
+                  AND publication.publication_role = 'assistant_result'
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (
+                    row_id,
+                    conversation_id,
+                    owner_id,
+                    component_id,
+                    payload,
+                    component_type,
+                    title,
+                    position,
+                    observed_at_ms,
+                    observed_at_ms,
+                    publication_id,
+                    next_revision,
+                    publication_id,
+                    conversation_id,
+                    owner_id,
+                ),
+            )
+            if len(inserted.returned_records) != 1:
+                raise RepositoryConflictError(
+                    "assistant-result component identity is unavailable",
+                    metadata={"operation": operation},
+                )
+        for layout_key, position, tree in normalized_layouts:
+            inserted = transaction.execute(
+                """
+                INSERT INTO workspace_layout (
+                    chat_id, user_id, layout_key, position, layout, created_at,
+                    updated_at, conversation_commit_id, committed_render_revision
+                )
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s
+                FROM conversation_commit AS publication
+                WHERE publication.commit_id = %s
+                  AND publication.chat_id = %s
+                  AND publication.owner_user_id = %s
+                  AND publication.state = 'staged'
+                  AND publication.publication_role = 'assistant_result'
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (
+                    conversation_id,
+                    owner_id,
+                    layout_key,
+                    position,
+                    tree,
+                    observed_at_ms,
+                    observed_at_ms,
+                    publication_id,
+                    next_revision,
+                    publication_id,
+                    conversation_id,
+                    owner_id,
+                ),
+            )
+            if len(inserted.returned_records) != 1:
+                raise RepositoryConflictError(
+                    "assistant-result layout identity is unavailable",
+                    metadata={"operation": operation},
+                )
+        message_update = transaction.execute(
+            """
+            UPDATE messages
+            SET committed_render_revision = %s
+            WHERE conversation_commit_id = %s AND chat_id = %s AND user_id = %s
+            """,
+            (next_revision, publication_id, conversation_id, owner_id),
+        )
+        if message_update.rowcount != len(message_rows):
+            raise RepositoryConflictError(
+                "assistant-result messages changed during stage rebase",
+                metadata={"operation": operation},
+            )
+        if append_conflict_notice:
+            if assistant_row is None:
+                raise RepositoryDataError(
+                    "conflicted assistant-result stage has no assistant message",
+                    metadata={"operation": operation},
+                )
+            self._append_conflict_notice(
+                transaction,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                publication_id=publication_id,
+                next_revision=next_revision,
+                assistant_row=assistant_row,
+            )
+        return self._rebase_summary(
+            publication,
+            message_positions,
+            normalized_components,
+            normalized_layouts,
+            next_revision,
+        )
+
+    @staticmethod
+    def _append_conflict_notice(
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        next_revision: int,
+        assistant_row: Mapping[str, Any],
+    ) -> None:
+        content = _content_value(_row_value(assistant_row, "content"))
+        if _contains_publication_conflict_notice(content):
+            return
+        result = transaction.execute(
+            """
+            UPDATE messages
+            SET content = %s, committed_render_revision = %s
+            WHERE id = %s AND conversation_commit_id = %s
+              AND chat_id = %s AND user_id = %s AND role = 'assistant'
+              AND content IS NOT DISTINCT FROM %s
+            """,
+            (
+                _canonical_json(
+                    _with_publication_conflict_notice(content),
+                    "assistant_content",
+                ),
+                next_revision,
+                _row_value(assistant_row, "id"),
+                publication_id,
+                conversation_id,
+                owner_id,
+                _row_value(assistant_row, "content"),
+            ),
+        )
+        if result.rowcount != 1:
+            raise RepositoryConflictError(
+                "assistant-result conflict notice update was lost",
+                metadata={"operation": "publication.rebase_assistant_stage"},
+            )
+
+    @staticmethod
+    def _rebase_summary(
+        publication: PublicationRecord,
+        message_positions: Sequence[int],
+        components: Sequence[tuple[str, str, str, str, str | None, int]],
+        layouts: Sequence[tuple[str, int, str]],
+        next_revision: int,
+    ) -> PublicationStageSummary:
+        return PublicationStageSummary(
+            publication=publication,
+            messages=tuple(
+                PublicationStageMessageFence(
+                    position=position,
+                    committed_render_revision=next_revision,
+                )
+                for position in message_positions
+            ),
+            components=tuple(
+                PublicationStageEntityFence(
+                    identity=component_id,
+                    position=position,
+                    committed_render_revision=next_revision,
+                )
+                for _, component_id, _, _, _, position in components
+            ),
+            layouts=tuple(
+                PublicationStageEntityFence(
+                    identity=layout_key,
+                    position=position,
+                    committed_render_revision=next_revision,
+                )
+                for layout_key, position, _ in layouts
+            ),
+        )
+
+    def commit_at_head(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        publication_id: str,
+        expected_staged_base_render_revision: int,
+        expected_head_render_revision: int,
+        expected_head_publication_id: str | None,
+        committed_at: datetime,
+        updated_at: int,
+    ) -> PublicationRecord:
+        """Publish one locked stage against an exact conversation-head fence."""
+
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        publication_id = _required_id(publication_id, "publication_id")
+        staged_base = _non_negative_int(
+            expected_staged_base_render_revision,
+            "expected_staged_base_render_revision",
+        )
+        head_revision = _non_negative_int(
+            expected_head_render_revision, "expected_head_render_revision"
+        )
+        if head_revision == 0:
+            if expected_head_publication_id is not None:
+                raise RepositoryValidationError(
+                    "revision-zero heads cannot name a publication"
+                )
+        else:
+            expected_head_publication_id = _required_id(
+                expected_head_publication_id, "expected_head_publication_id"
+            )
+        committed_at = _aware_time(committed_at, "committed_at")
+        updated_at = _non_negative_int(updated_at, "updated_at")
+        publication = self.get(
+            transaction,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            publication_id=publication_id,
+            for_update=True,
+        )
+        if publication is None:
+            raise RepositoryNotFoundError(
+                "publication was not found",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        next_revision = head_revision + 1
+        if publication.state == "committed":
+            original_base = (
+                publication.base_render_revision
+                if publication.publication_role == "atomic"
+                else publication.execution_base_render_revision
+            )
+            if (
+                original_base == staged_base
+                and publication.base_render_revision == head_revision
+                and publication.committed_render_revision == next_revision
+                and self._chat_authority_matches(transaction, publication)
+            ):
+                return publication
+            raise RepositoryConflictError(
+                "publication replay does not match the committed authority",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        if publication.state != "staged" or publication.base_render_revision != staged_base:
+            raise RepositoryConflictError(
+                "publication is not in the expected staged generation",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        if publication.publication_role != "assistant_result" and staged_base != head_revision:
+            raise RepositoryConflictError(
+                "only assistant-result publications may rebase at commit",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        chat = transaction.fetch_one(
+            """
+            SELECT render_revision, conversation_commit_id
+            FROM chats
+            WHERE id = %s AND user_id = %s
+            FOR UPDATE
+            """,
+            (conversation_id, owner_id),
+        )
+        if chat is None:
+            raise RepositoryNotFoundError(
+                "publication conversation was not found",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        observed_head = (
+            int(_row_value(chat, "render_revision")),
+            None
+            if chat.get("conversation_commit_id") is None
+            else str(chat["conversation_commit_id"]),
+        )
+        if observed_head != (head_revision, expected_head_publication_id):
+            raise RepositoryConflictError(
+                "conversation head changed before publication",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        result = transaction.execute(
+            f"""
+            UPDATE conversation_commit
+            SET state = 'committed', base_render_revision = %s,
+                committed_render_revision = %s, committed_at = %s,
+                execution_base_commit_id = NULL,
+                publication_rebase_count = publication_rebase_count + CASE
+                    WHEN execution_base_render_revision IS NOT NULL
+                     AND publication_rebase_count = 0
+                     AND execution_base_render_revision <> %s THEN 1
+                    ELSE 0
+                END
+            WHERE commit_id = %s AND chat_id = %s AND owner_user_id = %s
+              AND state = 'staged' AND base_render_revision = %s
+            RETURNING {self._FIELDS}
+            """,
+            (
+                head_revision,
+                next_revision,
+                committed_at,
+                head_revision,
+                publication_id,
+                conversation_id,
+                owner_id,
+                staged_base,
+            ),
+        )
+        row = _optional_returned(result, "publication.commit_at_head")
+        if row is None:
+            raise RepositoryConflictError(
+                "publication lost its staged compare-and-set fence",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        committed = _publication(row)
+        chat_result = transaction.execute(
+            """
+            UPDATE chats
+            SET render_revision = %s, conversation_commit_id = %s,
+                snapshot_committed_at = %s, updated_at = %s,
+                has_saved_components = EXISTS (
+                    SELECT 1 FROM saved_components
+                    WHERE chat_id = %s AND user_id = %s
+                      AND conversation_commit_id = %s
+                      AND committed_render_revision = %s
+                )
+            WHERE id = %s AND user_id = %s AND render_revision = %s
+              AND conversation_commit_id IS NOT DISTINCT FROM %s
+            """,
+            (
+                next_revision,
+                publication_id,
+                committed_at,
+                updated_at,
+                conversation_id,
+                owner_id,
+                publication_id,
+                next_revision,
+                conversation_id,
+                owner_id,
+                head_revision,
+                expected_head_publication_id,
+            ),
+        )
+        if chat_result.rowcount != 1:
+            raise RepositoryConflictError(
+                "conversation authority changed during atomic publication",
+                metadata={"operation": "publication.commit_at_head"},
+            )
+        return committed
 
     def _chat_authority_matches(
         self,
@@ -999,102 +2607,6 @@ class PublicationRepository:
         )
         return row is not None
 
-    def commit(
-        self,
-        transaction: Transaction,
-        *,
-        owner_id: str,
-        conversation_id: str,
-        publication_id: str,
-        expected_base_render_revision: int,
-        committed_at: datetime,
-        updated_at: int,
-    ) -> PublicationRecord:
-        owner_id = _required_id(owner_id, "owner_id")
-        conversation_id = _required_id(conversation_id, "conversation_id")
-        publication_id = _required_id(publication_id, "publication_id")
-        expected_base_render_revision = _non_negative_int(
-            expected_base_render_revision, "expected_base_render_revision"
-        )
-        committed_at = _aware_time(committed_at, "committed_at")
-        updated_at = _non_negative_int(updated_at, "updated_at")
-        next_revision = expected_base_render_revision + 1
-        result = transaction.execute(
-            f"""
-            UPDATE conversation_commit
-            SET state = 'committed', committed_render_revision = %s,
-                committed_at = %s
-            WHERE commit_id = %s AND chat_id = %s AND owner_user_id = %s
-              AND state = 'staged' AND base_render_revision = %s
-            RETURNING {self._FIELDS}
-            """,
-            (
-                next_revision,
-                committed_at,
-                publication_id,
-                conversation_id,
-                owner_id,
-                expected_base_render_revision,
-            ),
-        )
-        row = _optional_returned(result, "publication.commit")
-        if row is None:
-            existing = self.get(
-                transaction,
-                owner_id=owner_id,
-                conversation_id=conversation_id,
-                publication_id=publication_id,
-            )
-            if existing is None:
-                raise RepositoryNotFoundError(
-                    "publication was not found",
-                    metadata={"operation": "publication.commit"},
-                )
-            if (
-                existing.state == "committed"
-                and existing.committed_render_revision == next_revision
-                and self._chat_authority_matches(transaction, existing)
-            ):
-                return existing
-            raise RepositoryConflictError(
-                "publication is not in the expected staged generation",
-                metadata={"operation": "publication.commit"},
-            )
-        publication = _publication(row)
-        chat_result = transaction.execute(
-            """
-            UPDATE chats
-            SET render_revision = %s, conversation_commit_id = %s,
-                snapshot_committed_at = %s, updated_at = %s,
-                has_saved_components = EXISTS (
-                    SELECT 1 FROM saved_components
-                    WHERE chat_id = %s AND user_id = %s
-                      AND conversation_commit_id = %s
-                      AND committed_render_revision = %s
-                )
-            WHERE id = %s AND user_id = %s AND render_revision = %s
-            """,
-            (
-                next_revision,
-                publication_id,
-                committed_at,
-                updated_at,
-                conversation_id,
-                owner_id,
-                publication_id,
-                next_revision,
-                conversation_id,
-                owner_id,
-                expected_base_render_revision,
-            ),
-        )
-        if chat_result.rowcount != 1:
-            raise RepositoryConflictError(
-                "conversation authority changed during atomic publication",
-                metadata={"operation": "publication.commit"},
-            )
-        return publication
-
     def abort(
         self,
         transaction: Transaction,
@@ -1111,7 +2623,8 @@ class PublicationRepository:
         result = transaction.execute(
             f"""
             UPDATE conversation_commit
-            SET state = 'aborted', aborted_at = %s
+            SET state = 'aborted', aborted_at = %s,
+                execution_base_commit_id = NULL
             WHERE commit_id = %s AND chat_id = %s AND owner_user_id = %s
               AND state = 'staged'
             RETURNING {self._FIELDS}
@@ -1161,8 +2674,14 @@ __all__ = (
     "CanvasRepository",
     "LayoutRecord",
     "LayoutRepository",
+    "PublicationAssistantContentRecord",
+    "PublicationRebaseComponent",
+    "PublicationRebaseLayout",
     "PublicationRecord",
     "PublicationRepository",
+    "PublicationStageEntityFence",
+    "PublicationStageMessageFence",
+    "PublicationStageSummary",
     "WorkspaceRepository",
     "WorkspaceSnapshotRecord",
     "WorkspaceSnapshotRepository",

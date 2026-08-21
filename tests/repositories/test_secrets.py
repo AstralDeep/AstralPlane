@@ -91,6 +91,50 @@ def test_user_upsert_uses_native_parameters_and_returns_detached_record() -> Non
     )
 
 
+def test_user_upsert_before_deadline_is_one_fenced_statement() -> None:
+    transaction = ScriptedTransaction(
+        execute=[Result(returned_records=(_user_row(provider="local"),))]
+    )
+    repository = EncryptedLLMConfigRepository()
+    written = repository.upsert_user_before_deadline(
+        transaction,
+        owner_id="owner-1",
+        provider="local",
+        base_url="http://runtime.invalid/v1",
+        model="model-1",
+        api_key_ciphertext=None,
+        deadline_at=NOW,
+    )
+    assert written is not None and written.provider == "local"
+    assert len(transaction.calls) == 1
+    assert "SELECT %s" in transaction.calls[0][1]
+    assert "WHERE clock_timestamp() < %s" in transaction.calls[0][1]
+    assert transaction.calls[0][2][-1] == NOW
+
+    assert (
+        repository.upsert_user_before_deadline(
+            ScriptedTransaction(execute=[Result(rowcount=0)]),
+            owner_id="owner-1",
+            provider="local",
+            base_url="http://runtime.invalid/v1",
+            model="model-1",
+            api_key_ciphertext=None,
+            deadline_at=NOW,
+        )
+        is None
+    )
+    with pytest.raises(RepositoryValidationError):
+        repository.upsert_user_before_deadline(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            provider="local",
+            base_url="http://runtime.invalid/v1",
+            model="model-1",
+            api_key_ciphertext=None,
+            deadline_at=NOW.replace(tzinfo=None),
+        )
+
+
 def test_system_namespace_is_fixed_and_attributed() -> None:
     transaction = ScriptedTransaction(
         one=[_system_row()],

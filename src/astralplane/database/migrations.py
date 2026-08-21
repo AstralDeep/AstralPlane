@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -285,7 +286,7 @@ CREATE TABLE IF NOT EXISTS astralplane_authority_binding (
         runtime_generation > 0
         AND config_epoch > 0
         AND lease_sequence >= 0
-        AND lease_expires_at_ns > 0
+        AND lease_expires_at_ns >= 0
         AND version >= 0
     ),
     CONSTRAINT astralplane_authority_binding_state_check CHECK (
@@ -295,8 +296,73 @@ CREATE TABLE IF NOT EXISTS astralplane_authority_binding (
         )
     ),
     CONSTRAINT astralplane_authority_binding_time_check
-        CHECK (updated_at >= created_at)
+        CHECK (updated_at >= created_at),
+    CONSTRAINT astralplane_authority_binding_remote_state_check CHECK (
+        (
+            state IN ('provisioning', 'closed')
+            AND warden_id ~ '^pending:warden:[0-9a-f]{32}$'
+            AND lease_id ~ '^pending:lease:[0-9a-f]{32}$'
+            AND lineage_id ~ '^pending:lineage:[0-9a-f]{32}$'
+            AND subject_id ~ '^pending:subject:[0-9a-f]{32}$'
+            AND lease_sequence = 0
+            AND lease_expires_at_ns = 0
+        )
+        OR
+        (
+            state <> 'provisioning'
+            AND warden_id !~ '^pending:'
+            AND lease_id !~ '^pending:'
+            AND lineage_id !~ '^pending:'
+            AND subject_id !~ '^pending:'
+            AND lease_expires_at_ns > 0
+        )
+    )
 )
+""".strip(),
+    """
+DO $astralplane_authority_binding_constraints$
+BEGIN
+    ALTER TABLE astralplane_authority_binding
+        DROP CONSTRAINT IF EXISTS astralplane_authority_binding_numeric_check;
+    ALTER TABLE astralplane_authority_binding
+        ADD CONSTRAINT astralplane_authority_binding_numeric_check CHECK (
+            runtime_generation > 0
+            AND config_epoch > 0
+            AND lease_sequence >= 0
+            AND lease_expires_at_ns >= 0
+            AND version >= 0
+        ) NOT VALID;
+
+    ALTER TABLE astralplane_authority_binding
+        DROP CONSTRAINT IF EXISTS astralplane_authority_binding_remote_state_check;
+    ALTER TABLE astralplane_authority_binding
+        ADD CONSTRAINT astralplane_authority_binding_remote_state_check CHECK (
+            (
+                state IN ('provisioning', 'closed')
+                AND warden_id ~ '^pending:warden:[0-9a-f]{32}$'
+                AND lease_id ~ '^pending:lease:[0-9a-f]{32}$'
+                AND lineage_id ~ '^pending:lineage:[0-9a-f]{32}$'
+                AND subject_id ~ '^pending:subject:[0-9a-f]{32}$'
+                AND lease_sequence = 0
+                AND lease_expires_at_ns = 0
+            )
+            OR
+            (
+                state <> 'provisioning'
+                AND warden_id !~ '^pending:'
+                AND lease_id !~ '^pending:'
+                AND lineage_id !~ '^pending:'
+                AND subject_id !~ '^pending:'
+                AND lease_expires_at_ns > 0
+            )
+        ) NOT VALID;
+
+    ALTER TABLE astralplane_authority_binding
+        VALIDATE CONSTRAINT astralplane_authority_binding_numeric_check;
+    ALTER TABLE astralplane_authority_binding
+        VALIDATE CONSTRAINT astralplane_authority_binding_remote_state_check;
+END
+$astralplane_authority_binding_constraints$
 """.strip(),
     """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_astralplane_authority_binding_nonterminal
@@ -728,6 +794,12 @@ BEGIN
             ('astralplane_authority_binding', 'astralplane_authority_binding_owner_key', 'u'),
             ('astralplane_authority_binding', 'astralplane_authority_binding_runtime_key', 'u'),
             ('astralplane_authority_binding', 'astralplane_authority_binding_identity_check', 'c'),
+            ('astralplane_authority_binding', 'astralplane_authority_binding_numeric_check', 'c'),
+            (
+                'astralplane_authority_binding',
+                'astralplane_authority_binding_remote_state_check',
+                'c'
+            ),
             (
                 'astralplane_authority_binding',
                 'astralplane_authority_binding_capabilities_check',
@@ -1067,6 +1139,1582 @@ PLANE_SCHEMA_067_STATEMENTS: Final = (
     *_PLANE_SCHEMA_067_REMAINDER,
 )
 
+PLANE_SCHEMA_074_002_STATEMENTS: Final = (
+    """
+CREATE TABLE IF NOT EXISTS test_runs (
+    owner_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    system_state TEXT NOT NULL,
+    categories TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running'
+)
+""".strip(),
+    """
+CREATE TABLE IF NOT EXISTS test_case_results (
+    owner_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    suite TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    duration_ms DOUBLE PRECISION DEFAULT 0.0,
+    metrics TEXT,
+    qualitative TEXT DEFAULT '',
+    evidence_hash TEXT DEFAULT '',
+    verification_status TEXT NOT NULL DEFAULT 'pending'
+)
+""".strip(),
+    """
+CREATE TABLE IF NOT EXISTS test_evidence (
+    owner_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    data TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    captured_at TEXT NOT NULL
+)
+""".strip(),
+    """
+CREATE TABLE IF NOT EXISTS audit_entries (
+    owner_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    rationale TEXT DEFAULT '',
+    timestamp TEXT NOT NULL,
+    previous_hash TEXT NOT NULL,
+    hash_version SMALLINT NOT NULL DEFAULT 2
+)
+""".strip(),
+    """
+CREATE TABLE IF NOT EXISTS latex_artifacts (
+    owner_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    generated_from TEXT NOT NULL,
+    verification_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    generated_at TEXT NOT NULL
+)
+""".strip(),
+    "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "ALTER TABLE test_case_results ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "ALTER TABLE test_evidence ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "ALTER TABLE audit_entries ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "ALTER TABLE audit_entries ADD COLUMN IF NOT EXISTS hash_version SMALLINT",
+    "ALTER TABLE latex_artifacts ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    """
+UPDATE test_runs
+SET owner_id = 'system:quality-audit'
+WHERE owner_id IS NULL
+""".strip(),
+    """
+UPDATE test_case_results AS child
+SET owner_id = parent.owner_id
+FROM test_runs AS parent
+WHERE child.owner_id IS NULL AND child.run_id = parent.id
+""".strip(),
+    """
+UPDATE test_evidence AS child
+SET owner_id = parent.owner_id
+FROM test_case_results AS parent
+WHERE child.owner_id IS NULL AND child.case_id = parent.id
+""".strip(),
+    """
+UPDATE audit_entries AS child
+SET owner_id = parent.owner_id
+FROM test_case_results AS parent
+WHERE child.owner_id IS NULL AND child.case_id = parent.id
+""".strip(),
+    "UPDATE audit_entries SET hash_version = 1 WHERE hash_version IS NULL",
+    """
+UPDATE latex_artifacts AS child
+SET owner_id = parent.owner_id
+FROM test_runs AS parent
+WHERE child.owner_id IS NULL AND child.run_id = parent.id
+""".strip(),
+    "ALTER TABLE test_runs ALTER COLUMN owner_id SET NOT NULL",
+    "ALTER TABLE test_case_results ALTER COLUMN owner_id SET NOT NULL",
+    "ALTER TABLE test_evidence ALTER COLUMN owner_id SET NOT NULL",
+    "ALTER TABLE audit_entries ALTER COLUMN owner_id SET NOT NULL",
+    "ALTER TABLE audit_entries ALTER COLUMN hash_version SET NOT NULL",
+    "ALTER TABLE audit_entries ALTER COLUMN hash_version SET DEFAULT 2",
+    "ALTER TABLE latex_artifacts ALTER COLUMN owner_id SET NOT NULL",
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_test_runs_owner_id
+ON test_runs (owner_id, id)
+""".strip(),
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_test_case_results_owner_id
+ON test_case_results (owner_id, id)
+""".strip(),
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_test_evidence_owner_id
+ON test_evidence (owner_id, id)
+""".strip(),
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_entries_owner_id
+ON audit_entries (owner_id, id)
+""".strip(),
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_latex_artifacts_owner_id
+ON latex_artifacts (owner_id, id)
+""".strip(),
+    """
+CREATE INDEX IF NOT EXISTS idx_test_cases_owner_run
+ON test_case_results (owner_id, run_id, suite, test_name, id)
+""".strip(),
+    """
+CREATE INDEX IF NOT EXISTS idx_test_evidence_owner_case
+ON test_evidence (owner_id, case_id, captured_at, id)
+""".strip(),
+    """
+CREATE INDEX IF NOT EXISTS idx_audit_entries_owner_case
+ON audit_entries (owner_id, case_id, timestamp, id)
+""".strip(),
+    """
+CREATE INDEX IF NOT EXISTS idx_latex_artifacts_owner_run
+ON latex_artifacts (owner_id, run_id, filename, id)
+""".strip(),
+    """
+DO $astralplane_quality_audit_constraints$
+DECLARE
+    table_name TEXT;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'test_runs',
+        'test_case_results',
+        'test_evidence',
+        'audit_entries',
+        'latex_artifacts'
+    ]
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = to_regclass(table_name)
+              AND conname = table_name || '_owner_id_check'
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE %I ADD CONSTRAINT %I CHECK '
+                || '(astralplane_identifier_is_canonical(owner_id)) NOT VALID',
+                table_name,
+                table_name || '_owner_id_check'
+            );
+        END IF;
+        EXECUTE format(
+            'ALTER TABLE %I VALIDATE CONSTRAINT %I',
+            table_name,
+            table_name || '_owner_id_check'
+        );
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'test_runs'::regclass
+          AND conname = 'test_runs_state_check'
+    ) THEN
+        ALTER TABLE test_runs
+        ADD CONSTRAINT test_runs_state_check CHECK (
+            (status = 'running' AND finished_at IS NULL)
+            OR (status IN ('completed', 'failed') AND finished_at IS NOT NULL)
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'test_case_results'::regclass
+          AND conname = 'test_case_results_values_check'
+    ) THEN
+        ALTER TABLE test_case_results
+        ADD CONSTRAINT test_case_results_values_check CHECK (
+            outcome IN ('passed', 'failed', 'error', 'skipped')
+            AND verification_status IN (
+                'pending', 'verified', 'disputed', 'needs_rerun'
+            )
+            AND duration_ms >= 0
+            AND duration_ms NOT IN (
+                'Infinity'::float8, '-Infinity'::float8, 'NaN'::float8
+            )
+            AND (
+                evidence_hash = ''
+                OR evidence_hash ~ '^[0-9a-f]{64}$'
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'test_evidence'::regclass
+          AND conname = 'test_evidence_digest_check'
+    ) THEN
+        ALTER TABLE test_evidence
+        ADD CONSTRAINT test_evidence_digest_check CHECK (
+            sha256 = '' OR sha256 ~ '^[0-9a-f]{64}$'
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'audit_entries'::regclass
+          AND conname = 'audit_entries_values_check'
+    ) THEN
+        ALTER TABLE audit_entries
+        ADD CONSTRAINT audit_entries_values_check CHECK (
+            action IN ('verified', 'disputed', 'needs_rerun')
+            AND (
+                previous_hash = ''
+                OR previous_hash ~ '^[0-9a-f]{64}$'
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'audit_entries'::regclass
+          AND conname = 'audit_entries_hash_version_check'
+    ) THEN
+        ALTER TABLE audit_entries
+        ADD CONSTRAINT audit_entries_hash_version_check CHECK (
+            hash_version IN (1, 2)
+        ) NOT VALID;
+    END IF;
+
+    ALTER TABLE test_runs VALIDATE CONSTRAINT test_runs_state_check;
+    ALTER TABLE test_case_results
+        VALIDATE CONSTRAINT test_case_results_values_check;
+    ALTER TABLE test_evidence VALIDATE CONSTRAINT test_evidence_digest_check;
+    ALTER TABLE audit_entries VALIDATE CONSTRAINT audit_entries_values_check;
+    ALTER TABLE audit_entries
+        VALIDATE CONSTRAINT audit_entries_hash_version_check;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'test_case_results'::regclass
+          AND conname = 'test_case_results_owner_run_fk'
+    ) THEN
+        ALTER TABLE test_case_results
+        ADD CONSTRAINT test_case_results_owner_run_fk
+        FOREIGN KEY (owner_id, run_id) REFERENCES test_runs(owner_id, id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'test_evidence'::regclass
+          AND conname = 'test_evidence_owner_case_fk'
+    ) THEN
+        ALTER TABLE test_evidence
+        ADD CONSTRAINT test_evidence_owner_case_fk
+        FOREIGN KEY (owner_id, case_id)
+        REFERENCES test_case_results(owner_id, id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'audit_entries'::regclass
+          AND conname = 'audit_entries_owner_case_fk'
+    ) THEN
+        ALTER TABLE audit_entries
+        ADD CONSTRAINT audit_entries_owner_case_fk
+        FOREIGN KEY (owner_id, case_id)
+        REFERENCES test_case_results(owner_id, id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'latex_artifacts'::regclass
+          AND conname = 'latex_artifacts_owner_run_fk'
+    ) THEN
+        ALTER TABLE latex_artifacts
+        ADD CONSTRAINT latex_artifacts_owner_run_fk
+        FOREIGN KEY (owner_id, run_id) REFERENCES test_runs(owner_id, id);
+    END IF;
+END
+$astralplane_quality_audit_constraints$
+""".strip(),
+    """
+DO $astralplane_quality_audit_postcondition$
+DECLARE
+    invalid_objects TEXT;
+BEGIN
+    SELECT string_agg(required.table_name || '.' || required.column_name, ', ')
+    INTO invalid_objects
+    FROM (
+        VALUES
+            ('test_runs', 'owner_id'),
+            ('test_case_results', 'owner_id'),
+            ('test_evidence', 'owner_id'),
+            ('audit_entries', 'owner_id'),
+            ('audit_entries', 'hash_version'),
+            ('latex_artifacts', 'owner_id')
+    ) AS required(table_name, column_name)
+    LEFT JOIN pg_attribute AS attribute
+      ON attribute.attrelid = to_regclass(required.table_name)
+     AND attribute.attname = required.column_name
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped
+    WHERE attribute.attname IS NULL OR NOT attribute.attnotnull;
+    IF invalid_objects IS NOT NULL THEN
+        RAISE EXCEPTION 'qualification audit owner columns are incompatible: %',
+            invalid_objects USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT string_agg(required.index_name, ', ')
+    INTO invalid_objects
+    FROM (
+        VALUES
+            ('uq_test_runs_owner_id'),
+            ('uq_test_case_results_owner_id'),
+            ('uq_test_evidence_owner_id'),
+            ('uq_audit_entries_owner_id'),
+            ('uq_latex_artifacts_owner_id'),
+            ('idx_test_cases_owner_run'),
+            ('idx_test_evidence_owner_case'),
+            ('idx_audit_entries_owner_case'),
+            ('idx_latex_artifacts_owner_run')
+    ) AS required(index_name)
+    LEFT JOIN pg_class AS index_record
+      ON index_record.oid = to_regclass(required.index_name)
+     AND index_record.relkind = 'i'
+    LEFT JOIN pg_index AS index_state
+      ON index_state.indexrelid = index_record.oid
+     AND index_state.indisvalid
+     AND index_state.indisready
+    WHERE index_state.indexrelid IS NULL;
+    IF invalid_objects IS NOT NULL THEN
+        RAISE EXCEPTION 'qualification audit indexes are missing or invalid: %',
+            invalid_objects USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT string_agg(required.constraint_name, ', ')
+    INTO invalid_objects
+    FROM (
+        VALUES
+            ('test_runs', 'test_runs_owner_id_check'),
+            ('test_runs', 'test_runs_state_check'),
+            ('test_case_results', 'test_case_results_owner_id_check'),
+            ('test_case_results', 'test_case_results_values_check'),
+            ('test_case_results', 'test_case_results_owner_run_fk'),
+            ('test_evidence', 'test_evidence_owner_id_check'),
+            ('test_evidence', 'test_evidence_digest_check'),
+            ('test_evidence', 'test_evidence_owner_case_fk'),
+            ('audit_entries', 'audit_entries_owner_id_check'),
+            ('audit_entries', 'audit_entries_values_check'),
+            ('audit_entries', 'audit_entries_hash_version_check'),
+            ('audit_entries', 'audit_entries_owner_case_fk'),
+            ('latex_artifacts', 'latex_artifacts_owner_id_check'),
+            ('latex_artifacts', 'latex_artifacts_owner_run_fk')
+    ) AS required(table_name, constraint_name)
+    LEFT JOIN pg_constraint AS constraint_record
+      ON constraint_record.conrelid = to_regclass(required.table_name)
+     AND constraint_record.conname = required.constraint_name
+     AND constraint_record.convalidated
+    WHERE constraint_record.oid IS NULL;
+    IF invalid_objects IS NOT NULL THEN
+        RAISE EXCEPTION 'qualification audit constraints are missing: %',
+            invalid_objects USING ERRCODE = '42P16';
+    END IF;
+END
+$astralplane_quality_audit_postcondition$
+""".strip(),
+)
+
+PLANE_SCHEMA_074_003_STATEMENTS: Final = (
+    """
+DO $astralplane_runtime_contract_migration$
+BEGIN
+    IF to_regclass('agent_host_session') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE agent_host_session
+        ADD COLUMN IF NOT EXISTS legacy_runtime_contract BOOLEAN;
+    ALTER TABLE agent_host_session
+        ALTER COLUMN legacy_runtime_contract SET DEFAULT FALSE;
+
+    UPDATE agent_host_session
+    SET legacy_runtime_contract = TRUE
+    WHERE runtime_contract_version = 2
+      AND legacy_runtime_contract IS DISTINCT FROM TRUE;
+
+    UPDATE agent_host_session
+    SET legacy_runtime_contract = FALSE
+    WHERE runtime_contract_version = 3
+      AND legacy_runtime_contract IS DISTINCT FROM FALSE;
+
+    IF EXISTS (
+        SELECT 1
+        FROM agent_host_session
+        WHERE runtime_contract_version NOT IN (2, 3)
+           OR legacy_runtime_contract IS NULL
+    ) THEN
+        RAISE EXCEPTION
+            'agent host sessions contain an unsupported runtime contract version'
+            USING ERRCODE = '23514';
+    END IF;
+
+    ALTER TABLE agent_host_session
+        ALTER COLUMN legacy_runtime_contract SET NOT NULL;
+    ALTER TABLE agent_host_session
+        DROP CONSTRAINT IF EXISTS agent_host_session_check;
+    ALTER TABLE agent_host_session
+        DROP CONSTRAINT IF EXISTS
+            agent_host_session_runtime_contract_version_check;
+    ALTER TABLE agent_host_session
+        ADD CONSTRAINT agent_host_session_runtime_contract_version_check CHECK (
+            runtime_contract_version = ANY(supported_runtime_contract_versions)
+            AND (
+                (legacy_runtime_contract AND runtime_contract_version = 2)
+                OR (
+                    NOT legacy_runtime_contract
+                    AND runtime_contract_version = 3
+                )
+            )
+        ) NOT VALID;
+    ALTER TABLE agent_host_session
+        VALIDATE CONSTRAINT
+            agent_host_session_runtime_contract_version_check;
+END
+$astralplane_runtime_contract_migration$
+""".strip(),
+    """
+DO $astralplane_runtime_contract_postcondition$
+DECLARE
+    column_default TEXT;
+    column_not_null BOOLEAN;
+    column_type OID;
+    constraint_definition TEXT;
+    constraint_validated BOOLEAN;
+BEGIN
+    IF to_regclass('agent_host_session') IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT
+        pg_get_expr(default_record.adbin, default_record.adrelid, TRUE),
+        attribute.attnotnull,
+        attribute.atttypid
+    INTO column_default, column_not_null, column_type
+    FROM pg_attribute AS attribute
+    LEFT JOIN pg_attrdef AS default_record
+      ON default_record.adrelid = attribute.attrelid
+     AND default_record.adnum = attribute.attnum
+    WHERE attribute.attrelid = 'agent_host_session'::regclass
+      AND attribute.attname = 'legacy_runtime_contract'
+      AND attribute.attnum > 0
+      AND NOT attribute.attisdropped;
+
+    IF column_default IS DISTINCT FROM 'false'
+       OR column_not_null IS DISTINCT FROM TRUE
+       OR column_type IS DISTINCT FROM 'boolean'::regtype::oid THEN
+        RAISE EXCEPTION
+            'agent host legacy runtime contract column is incompatible'
+            USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT
+        pg_get_expr(
+            constraint_record.conbin,
+            constraint_record.conrelid,
+            TRUE
+        ),
+        constraint_record.convalidated
+    INTO constraint_definition, constraint_validated
+    FROM pg_constraint AS constraint_record
+    WHERE constraint_record.conrelid = 'agent_host_session'::regclass
+      AND constraint_record.conname =
+          'agent_host_session_runtime_contract_version_check'
+      AND constraint_record.contype = 'c';
+
+    IF constraint_definition IS DISTINCT FROM
+            '(runtime_contract_version = ANY (supported_runtime_contract_versions)) '
+            'AND (legacy_runtime_contract AND runtime_contract_version = 2 '
+            'OR NOT legacy_runtime_contract '
+            'AND runtime_contract_version = 3)'
+       OR constraint_validated IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION
+            'agent host runtime contract constraint is incompatible'
+            USING ERRCODE = '42P16';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint AS constraint_record
+        WHERE constraint_record.conrelid = 'agent_host_session'::regclass
+          AND constraint_record.contype = 'c'
+          AND constraint_record.conname <>
+              'agent_host_session_runtime_contract_version_check'
+          AND pg_get_expr(
+              constraint_record.conbin,
+              constraint_record.conrelid,
+              TRUE
+          ) ~ '(^|[^A-Za-z0-9_])runtime_contract_version([^A-Za-z0-9_]|$)'
+    ) THEN
+        RAISE EXCEPTION
+            'agent host runtime contract carries a conflicting constraint'
+            USING ERRCODE = '42P16';
+    END IF;
+END
+$astralplane_runtime_contract_postcondition$
+""".strip(),
+)
+
+PLANE_SCHEMA_074_004_STATEMENTS: Final = (
+    """
+    DO $astralplane_074_004_clean_predecessor$
+    DECLARE
+        conflicting_object TEXT;
+    BEGIN
+        SELECT object_identity
+        INTO conflicting_object
+        FROM (
+            SELECT 'user_attachments.' || attribute.attname AS object_identity
+            FROM pg_attribute AS attribute
+            WHERE attribute.attrelid = 'user_attachments'::regclass
+              AND attribute.attname IN (
+                  'materialization_state',
+                  'materialization_lease_id',
+                  'materialization_lease_version',
+                  'materialization_lease_expires_at',
+                  'materialization_max_bytes',
+                  'materialization_storage_key'
+              )
+              AND attribute.attnum > 0
+              AND NOT attribute.attisdropped
+            UNION ALL
+            SELECT 'astralplane_purge_tombstone.' || attribute.attname
+            FROM pg_attribute AS attribute
+            WHERE attribute.attrelid = 'astralplane_purge_tombstone'::regclass
+              AND attribute.attname IN (
+                  'target_scope',
+                  'manual_resolution_evidence_sha256',
+                  'manual_resolved_at'
+              )
+              AND attribute.attnum > 0
+              AND NOT attribute.attisdropped
+            UNION ALL
+            SELECT 'astralplane_blob_owner_state'
+            WHERE to_regclass('astralplane_blob_owner_state') IS NOT NULL
+            UNION ALL
+            SELECT 'idx_user_attachments_pending_materialization_expiry'
+            WHERE to_regclass(
+                'idx_user_attachments_pending_materialization_expiry'
+            ) IS NOT NULL
+            UNION ALL
+            SELECT 'uq_astralplane_blob_owner_state_casefold'
+            WHERE to_regclass('uq_astralplane_blob_owner_state_casefold') IS NOT NULL
+            UNION ALL
+            SELECT 'uq_user_attachments_attachment_id_casefold'
+            WHERE to_regclass('uq_user_attachments_attachment_id_casefold') IS NOT NULL
+            UNION ALL
+            SELECT 'function-config:' || function_signature
+            FROM unnest(ARRAY[
+                'audit_events_protect()',
+                'audit_events_assign_chain_sequence()',
+                'astraldeep_positive_unique_int_array(integer[])',
+                'astralplane_identifier_is_canonical(text)',
+                'astralplane_capabilities_are_canonical(text[])',
+                'astralplane_receipt_watermark_require_advance()'
+            ]) AS predecessor_function(function_signature)
+            JOIN pg_proc AS function_record
+              ON function_record.oid = to_regprocedure(function_signature)
+            WHERE function_record.proconfig IS NOT NULL
+            UNION ALL
+            SELECT 'legacy-index:' || expected.index_name
+            FROM (
+                VALUES
+                    (
+                        'idx_user_attachments_user',
+                        'user_attachments',
+                        ARRAY['user_id', 'created_at']::text[],
+                        ARRAY[0, 3]::smallint[],
+                        ''::text
+                    ),
+                    (
+                        'idx_user_attachments_live',
+                        'user_attachments',
+                        ARRAY['user_id']::text[],
+                        ARRAY[0]::smallint[],
+                        'deleted_at IS NULL'::text
+                    ),
+                    (
+                        'idx_audit_user_recorded',
+                        'audit_events',
+                        ARRAY[
+                            'actor_user_id',
+                            'recorded_at',
+                            'event_id'
+                        ]::text[],
+                        ARRAY[0, 3, 3]::smallint[],
+                        ''::text
+                    ),
+                    (
+                        'idx_audit_correlation',
+                        'audit_events',
+                        ARRAY['correlation_id']::text[],
+                        ARRAY[0]::smallint[],
+                        ''::text
+                    ),
+                    (
+                        'idx_audit_user_class_recorded',
+                        'audit_events',
+                        ARRAY[
+                            'actor_user_id',
+                            'event_class',
+                            'recorded_at'
+                        ]::text[],
+                        ARRAY[0, 0, 3]::smallint[],
+                        ''::text
+                    ),
+                    (
+                        'idx_audit_user_failures',
+                        'audit_events',
+                        ARRAY['actor_user_id', 'recorded_at']::text[],
+                        ARRAY[0, 3]::smallint[],
+                        'outcome = ANY (ARRAY[''failure''::text, '
+                            '''interrupted''::text])'::text
+                    )
+            ) AS expected(index_name, table_name, keys, options, predicate)
+            LEFT JOIN pg_class AS index_record
+              ON index_record.oid = to_regclass(expected.index_name)
+             AND index_record.relnamespace = current_schema()::regnamespace
+             AND index_record.relkind = 'i'
+            LEFT JOIN pg_index AS index_state
+              ON index_state.indexrelid = index_record.oid
+            LEFT JOIN pg_class AS table_record
+              ON table_record.oid = index_state.indrelid
+             AND table_record.relnamespace = current_schema()::regnamespace
+            LEFT JOIN pg_am AS access_method
+              ON access_method.oid = index_record.relam
+            WHERE index_record.oid IS NULL
+               OR table_record.relname IS DISTINCT FROM expected.table_name
+               OR access_method.amname IS DISTINCT FROM 'btree'
+               OR index_state.indisunique IS DISTINCT FROM FALSE
+               OR index_state.indisprimary IS DISTINCT FROM FALSE
+               OR index_state.indisexclusion IS DISTINCT FROM FALSE
+               OR index_state.indisvalid IS DISTINCT FROM TRUE
+               OR index_state.indisready IS DISTINCT FROM TRUE
+               OR index_state.indnullsnotdistinct IS DISTINCT FROM FALSE
+               OR index_state.indnkeyatts IS DISTINCT FROM cardinality(expected.keys)
+               OR index_state.indnatts IS DISTINCT FROM cardinality(expected.keys)
+               OR ARRAY(
+                    SELECT pg_get_indexdef(index_state.indexrelid, position, TRUE)
+                    FROM generate_series(1, index_state.indnkeyatts) AS position
+                    ORDER BY position
+               ) IS DISTINCT FROM expected.keys
+               OR ARRAY(
+                    SELECT option
+                    FROM unnest(index_state.indoption::smallint[])
+                        WITH ORDINALITY AS index_option(option, position)
+                    ORDER BY index_option.position
+               ) IS DISTINCT FROM expected.options
+               OR COALESCE(
+                    pg_get_expr(index_state.indpred, index_state.indrelid, TRUE),
+                    ''
+               ) IS DISTINCT FROM expected.predicate
+            UNION ALL
+            SELECT function_name
+            FROM unnest(ARRAY[
+                'astralplane_blob_owner_is_canonical',
+                'astralplane_blob_storage_key_is_canonical',
+                'astralplane_attachment_id_is_canonical'
+            ]) AS function_record(function_name)
+            WHERE to_regprocedure(function_name || '(text)') IS NOT NULL
+        ) AS conflicts
+        ORDER BY object_identity
+        LIMIT 1;
+
+        IF conflicting_object IS NOT NULL THEN
+            RAISE EXCEPTION
+                '074.004 requires a clean 074.003 predecessor; found %',
+                conflicting_object
+                USING ERRCODE = '42P16';
+        END IF;
+    END
+    $astralplane_074_004_clean_predecessor$
+    """.strip(),
+    """
+    DO $astralplane_owned_schema_hardening$
+    DECLARE
+        schema_name TEXT := current_schema();
+    BEGIN
+        IF schema_name IS NULL THEN
+            RAISE EXCEPTION 'Plane migration has no current schema'
+                USING ERRCODE = '3F000';
+        END IF;
+        EXECUTE format(
+            'ALTER SCHEMA %I OWNER TO %I',
+            schema_name,
+            current_user
+        );
+        EXECUTE format(
+            'REVOKE ALL ON SCHEMA %I FROM PUBLIC',
+            schema_name
+        );
+    END
+    $astralplane_owned_schema_hardening$
+    """.strip(),
+    """
+    CREATE OR REPLACE FUNCTION astralplane_blob_owner_is_canonical(candidate TEXT)
+    RETURNS BOOLEAN AS $astralplane_blob_owner_identifier$
+        SELECT (
+            candidate ~ '^[A-Za-z0-9][A-Za-z0-9._@-]{0,254}$'
+            OR candidate ~ '^__verif__[A-Za-z0-9][A-Za-z0-9._-]{0,245}$'
+        )
+        AND candidate = rtrim(candidate, ' .')
+        AND split_part(lower(candidate), '.', 1) NOT IN (
+            'con', 'prn', 'aux', 'nul',
+            'com1', 'com2', 'com3', 'com4', 'com5',
+            'com6', 'com7', 'com8', 'com9',
+            'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5',
+            'lpt6', 'lpt7', 'lpt8', 'lpt9'
+        )
+    $astralplane_blob_owner_identifier$
+    LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+    CREATE OR REPLACE FUNCTION astralplane_blob_storage_key_is_canonical(candidate TEXT)
+    RETURNS BOOLEAN AS $astralplane_blob_storage_key$
+        SELECT char_length(candidate) BETWEEN 1 AND 4096
+           AND candidate NOT LIKE '/%'
+           AND position(E'\\\\' IN candidate) = 0
+           AND cardinality(string_to_array(candidate, '/')) BETWEEN 1 AND 32
+           AND NOT EXISTS (
+               SELECT 1
+               FROM unnest(string_to_array(candidate, '/')) AS component(value)
+               WHERE char_length(component.value) NOT BETWEEN 1 AND 255
+                  OR component.value IN ('.', '..')
+                  OR component.value LIKE '.astralplane-%'
+                  OR component.value <> rtrim(component.value, ' .')
+                  OR component.value ~ '[<>:"|?*]'
+                  OR component.value ~ '[[:cntrl:]]'
+                  OR split_part(lower(component.value), '.', 1) IN (
+                      'con', 'prn', 'aux', 'nul',
+                      'com1', 'com2', 'com3', 'com4', 'com5',
+                      'com6', 'com7', 'com8', 'com9',
+                      'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5',
+                      'lpt6', 'lpt7', 'lpt8', 'lpt9'
+                  )
+           )
+    $astralplane_blob_storage_key$
+    LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+    CREATE OR REPLACE FUNCTION astralplane_attachment_id_is_canonical(candidate TEXT)
+    RETURNS BOOLEAN AS $astralplane_attachment_identifier$
+        SELECT candidate ~ '^[A-Za-z0-9][A-Za-z0-9._@-]{0,254}$'
+           AND position('/' IN candidate) = 0
+           AND astralplane_blob_storage_key_is_canonical(candidate)
+    $astralplane_attachment_identifier$
+    LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+    """.strip(),
+    """
+    DO $astralplane_074_004_legacy_data_preflight$
+    DECLARE
+        invalid_attachment TEXT;
+        invalid_tombstone TEXT;
+        invalid_legacy_foreign_key TEXT;
+        colliding_owner TEXT;
+        colliding_attachment TEXT;
+        valid_audit_protection BOOLEAN;
+        valid_positive_array_function BOOLEAN;
+    BEGIN
+        IF to_regprocedure('astraldeep_positive_unique_int_array(integer[])')
+            IS NOT NULL THEN
+            SELECT count(*) = 1 AND COALESCE(
+                bool_and(
+                    encode(
+                        sha256(convert_to(function_record.prosrc, 'UTF8')),
+                        'hex'
+                    ) =
+                        'cfb4e8be9f6d99b1d6941256d9c873087ef0b413549457b84d9e60e6f0e99a57'
+                    AND language_record.lanname = 'sql'
+                    AND function_record.prorettype = 'boolean'::regtype
+                    AND function_record.proargtypes[0] =
+                        'integer[]'::regtype::oid
+                    AND NOT function_record.prosecdef
+                    AND function_record.proisstrict
+                    AND function_record.provolatile = 'i'
+                    AND function_record.proparallel = 'u'
+                    AND function_record.prokind = 'f'
+                    AND function_record.proconfig IS NULL
+                    AND NOT function_record.proleakproof
+                    AND pg_get_userbyid(function_record.proowner) = current_user
+                ),
+                FALSE
+            )
+            INTO valid_positive_array_function
+            FROM pg_proc AS function_record
+            JOIN pg_namespace AS function_namespace
+              ON function_namespace.oid = function_record.pronamespace
+             AND function_namespace.nspname = current_schema()
+            JOIN pg_language AS language_record
+              ON language_record.oid = function_record.prolang
+            WHERE function_record.proname =
+                'astraldeep_positive_unique_int_array'
+              AND function_record.pronargs = 1;
+
+            IF NOT valid_positive_array_function THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = '42P16',
+                    MESSAGE =
+                        '074.004 positive integer-array predecessor is incompatible; ' ||
+                        'remain on 074.003 and restore the exact function before retry';
+            END IF;
+        END IF;
+
+        -- 074.004 intentionally canonicalizes the two whitespace-distinct 074.003 function
+        -- bodies.  Prove the predecessor function and trigger are one of those exact known
+        -- shapes before replacing anything, so a hostile implementation is never normalized.
+        SELECT count(*) = 1 AND COALESCE(
+            bool_and(
+                encode(
+                    sha256(convert_to(function_record.prosrc, 'UTF8')),
+                    'hex'
+                ) IN (
+                    '03cc5de35d3cfc1fb0bcc4b9c1c703e40b27557a0d2b5b87d00dfd02ee680af7',
+                    '9034034a05d1e7fc9d9ed43d442a65c2a899224a4c7f297bfe0d4c77cda6cc07'
+                )
+                AND language_record.lanname = 'plpgsql'
+                AND function_record.prorettype = 'trigger'::regtype
+                AND NOT function_record.prosecdef
+                AND NOT function_record.proisstrict
+                AND function_record.provolatile = 'v'
+                AND function_record.proparallel = 'u'
+                AND function_record.prokind = 'f'
+                AND function_record.proconfig IS NULL
+                AND NOT function_record.proleakproof
+                AND pg_get_userbyid(function_record.proowner) = current_user
+                AND trigger_record.tgtype = 27
+                AND trigger_record.tgenabled = 'O'
+                AND NOT trigger_record.tgisinternal
+                AND trigger_record.tgqual IS NULL
+            ),
+            FALSE
+        )
+        INTO valid_audit_protection
+        FROM pg_proc AS function_record
+        JOIN pg_namespace AS function_namespace
+          ON function_namespace.oid = function_record.pronamespace
+         AND function_namespace.nspname = current_schema()
+        JOIN pg_language AS language_record
+          ON language_record.oid = function_record.prolang
+        JOIN pg_trigger AS trigger_record
+          ON trigger_record.tgfoid = function_record.oid
+         AND trigger_record.tgname = 'audit_events_no_update'
+        JOIN pg_class AS table_record
+          ON table_record.oid = trigger_record.tgrelid
+         AND table_record.relnamespace = current_schema()::regnamespace
+         AND table_record.relname = 'audit_events'
+        WHERE function_record.proname = 'audit_events_protect'
+          AND function_record.pronargs = 0;
+
+        IF NOT valid_audit_protection THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE =
+                    '074.004 audit protection predecessor is incompatible; ' ||
+                    'remain on 074.003 and restore the exact function and trigger before retry';
+        END IF;
+
+        -- Historical Deep stored root-relative locators as
+        -- owner/attachment/filename (or the same components with Windows separators).  Prove
+        -- every predecessor row can be mapped to the hardened owner/key contract before adding
+        -- lifecycle state.  Metadata is not silently rewritten because physical bytes are not
+        -- relocated by this database migration.
+        SELECT attachment.attachment_id
+        INTO invalid_attachment
+        FROM user_attachments AS attachment
+        WHERE NOT astralplane_blob_owner_is_canonical(attachment.user_id)
+           OR NOT astralplane_attachment_id_is_canonical(attachment.attachment_id)
+           OR NOT astralplane_blob_storage_key_is_canonical(
+               attachment.attachment_id || '/' || attachment.filename
+           )
+           OR replace(attachment.storage_path, E'\\\\', '/') <>
+               attachment.user_id || '/' || attachment.attachment_id || '/' ||
+               attachment.filename
+           OR attachment.size_bytes < 0
+           OR attachment.sha256 !~ '^[0-9a-f]{64}$'
+        ORDER BY attachment.attachment_id
+        LIMIT 1;
+
+        IF invalid_attachment IS NOT NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE = format(
+                    '074.004 cannot represent legacy attachment %s; ' ||
+                    'remain on 074.003 and repair or remove its metadata and physical bytes ' ||
+                    'before retry',
+                    invalid_attachment
+                );
+        END IF;
+
+        SELECT lower(attachment.user_id)
+        INTO colliding_owner
+        FROM user_attachments AS attachment
+        GROUP BY lower(attachment.user_id)
+        HAVING count(DISTINCT attachment.user_id) > 1
+        ORDER BY lower(attachment.user_id)
+        LIMIT 1;
+
+        IF colliding_owner IS NOT NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE = format(
+                    '074.004 legacy attachment owners collide under case-folding at %s; ' ||
+                    'remain on 074.003 and reconcile the namespaces before retry',
+                    colliding_owner
+                );
+        END IF;
+
+        SELECT lower(attachment.attachment_id)
+        INTO colliding_attachment
+        FROM user_attachments AS attachment
+        GROUP BY lower(attachment.attachment_id)
+        HAVING count(DISTINCT attachment.attachment_id) > 1
+        ORDER BY lower(attachment.attachment_id)
+        LIMIT 1;
+
+        IF colliding_attachment IS NOT NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE = format(
+                    '074.004 legacy attachment identifiers collide under case-folding at %s; ' ||
+                    'remain on 074.003 and reconcile the physical prefix before retry',
+                    colliding_attachment
+                );
+        END IF;
+
+        -- Migrated purge rows are never sent to the new blob store.  They still need to be
+        -- bounded enough for the administrative attestation path to deserialize them without
+        -- poisoning readiness after the revision marker is advanced.
+        SELECT tombstone.tombstone_id
+        INTO invalid_tombstone
+        FROM astralplane_purge_tombstone AS tombstone
+        WHERE tombstone.tombstone_id !~ '^[A-Za-z0-9][A-Za-z0-9._:@-]{0,254}$'
+           OR tombstone.owner_id !~ '^[A-Za-z0-9][A-Za-z0-9._:@-]{0,254}$'
+           OR tombstone.object_id !~ '^[A-Za-z0-9][A-Za-z0-9._:@-]{0,254}$'
+           OR tombstone.object_kind NOT IN (
+               'attachment', 'artifact', 'knowledge', 'generated_agent'
+           )
+           OR char_length(tombstone.storage_key) NOT BETWEEN 1 AND 4096
+           OR tombstone.storage_locator_sha256 !~ '^[0-9a-f]{64}$'
+        ORDER BY tombstone.tombstone_id
+        LIMIT 1;
+
+        IF invalid_tombstone IS NOT NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE = format(
+                    '074.004 cannot bound legacy purge tombstone %s; ' ||
+                    'remain on 074.003 and resolve or remove it with the predecessor operator ' ||
+                    'procedure before retry',
+                    invalid_tombstone
+                );
+        END IF;
+
+        -- The immutable pre-split fixture can retain redundant single-column foreign keys in
+        -- addition to the qualified composite owner keys.  Validate every namesake before the
+        -- canonicalizing DROP below; a hostile partial predecessor must never be normalized by
+        -- name alone.
+        WITH expected(
+            constraint_name,
+            table_name,
+            key_name,
+            reference_table_name,
+            reference_key_name
+        ) AS (
+            VALUES
+                (
+                    'test_case_results_run_id_fkey',
+                    'test_case_results',
+                    'run_id',
+                    'test_runs',
+                    'id'
+                ),
+                (
+                    'test_evidence_case_id_fkey',
+                    'test_evidence',
+                    'case_id',
+                    'test_case_results',
+                    'id'
+                ),
+                (
+                    'audit_entries_case_id_fkey',
+                    'audit_entries',
+                    'case_id',
+                    'test_case_results',
+                    'id'
+                ),
+                (
+                    'latex_artifacts_run_id_fkey',
+                    'latex_artifacts',
+                    'run_id',
+                    'test_runs',
+                    'id'
+                )
+        )
+        SELECT expected.constraint_name
+        INTO invalid_legacy_foreign_key
+        FROM expected
+        JOIN pg_constraint AS constraint_record
+          ON constraint_record.conrelid = to_regclass(expected.table_name)
+         AND constraint_record.conname = expected.constraint_name
+        LEFT JOIN pg_class AS reference_table
+          ON reference_table.oid = constraint_record.confrelid
+        WHERE constraint_record.contype <> 'f'
+           OR constraint_record.condeferrable
+           OR constraint_record.condeferred
+           OR NOT constraint_record.convalidated
+           OR constraint_record.confmatchtype <> 's'
+           OR constraint_record.confupdtype <> 'a'
+           OR constraint_record.confdeltype <> 'a'
+           OR reference_table.relname <> expected.reference_table_name
+           OR reference_table.relnamespace <> current_schema()::regnamespace
+           OR ARRAY(
+                SELECT attribute.attname::TEXT
+                FROM unnest(constraint_record.conkey)
+                    WITH ORDINALITY AS key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = constraint_record.conrelid
+                 AND attribute.attnum = key.attnum
+                ORDER BY key.position
+            ) <> ARRAY[expected.key_name]
+           OR ARRAY(
+                SELECT attribute.attname::TEXT
+                FROM unnest(constraint_record.confkey)
+                    WITH ORDINALITY AS key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = constraint_record.confrelid
+                 AND attribute.attnum = key.attnum
+                ORDER BY key.position
+            ) <> ARRAY[expected.reference_key_name]
+        ORDER BY expected.constraint_name
+        LIMIT 1;
+
+        IF invalid_legacy_foreign_key IS NOT NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '42P16',
+                MESSAGE = format(
+                    '074.004 legacy foreign key %s is incompatible; ' ||
+                    'remain on 074.003 and restore its exact predecessor shape before retry',
+                    invalid_legacy_foreign_key
+                );
+        END IF;
+    END
+    $astralplane_074_004_legacy_data_preflight$
+    """.strip(),
+    """
+    ALTER TABLE test_case_results
+        DROP CONSTRAINT IF EXISTS test_case_results_run_id_fkey;
+    ALTER TABLE test_evidence
+        DROP CONSTRAINT IF EXISTS test_evidence_case_id_fkey;
+    ALTER TABLE audit_entries
+        DROP CONSTRAINT IF EXISTS audit_entries_case_id_fkey;
+    ALTER TABLE latex_artifacts
+        DROP CONSTRAINT IF EXISTS latex_artifacts_run_id_fkey
+    """.strip(),
+    """
+    CREATE OR REPLACE FUNCTION astraldeep_positive_unique_int_array(
+        input_values INTEGER[]
+    ) RETURNS BOOLEAN
+    LANGUAGE SQL IMMUTABLE STRICT
+    AS $function$
+        SELECT cardinality(input_values) > 0
+           AND NOT EXISTS (
+               SELECT 1 FROM unnest(input_values) AS item(value)
+               WHERE value <= 0
+           )
+           AND cardinality(input_values) = (
+               SELECT count(DISTINCT value) FROM unnest(input_values) AS item(value)
+           )
+    $function$
+    """.strip(),
+    """
+    CREATE OR REPLACE FUNCTION audit_events_protect()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    VOLATILE
+    CALLED ON NULL INPUT
+    SECURITY INVOKER
+    PARALLEL UNSAFE
+    AS $astralplane_audit_protect$
+    BEGIN
+        IF current_setting('audit.allow_purge', true) IS DISTINCT FROM 'true' THEN
+            RAISE EXCEPTION 'audit_events is append-only (TG_OP=%)', TG_OP
+                USING ERRCODE = '42501';
+        END IF;
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END;
+    $astralplane_audit_protect$
+    """.strip(),
+    """
+    DO $astralplane_owned_function_search_path$
+    DECLARE
+        function_signature TEXT;
+    BEGIN
+        FOREACH function_signature IN ARRAY ARRAY[
+            'audit_events_protect()',
+            'audit_events_assign_chain_sequence()',
+            'astraldeep_positive_unique_int_array(integer[])',
+            'astralplane_identifier_is_canonical(text)',
+            'astralplane_capabilities_are_canonical(text[])',
+            'astralplane_blob_owner_is_canonical(text)',
+            'astralplane_blob_storage_key_is_canonical(text)',
+            'astralplane_attachment_id_is_canonical(text)',
+            'astralplane_receipt_watermark_require_advance()'
+        ] LOOP
+            EXECUTE format(
+                'ALTER FUNCTION %I.%s SET search_path TO pg_catalog, %I, pg_temp',
+                current_schema(),
+                function_signature,
+                current_schema()
+            );
+        END LOOP;
+    END
+    $astralplane_owned_function_search_path$
+    """.strip(),
+    """
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_state TEXT;
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_lease_id TEXT;
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_lease_version BIGINT;
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_lease_expires_at TIMESTAMPTZ;
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_max_bytes BIGINT;
+    ALTER TABLE user_attachments
+        ADD COLUMN IF NOT EXISTS materialization_storage_key TEXT;
+
+    -- 074.003 has no materialization lifecycle.  Normalize every predecessor row rather than
+    -- trusting namesake columns from a partial/hostile failed deployment.
+    UPDATE user_attachments
+    SET materialization_state = 'ready',
+        materialization_lease_id = NULL,
+        materialization_lease_version = NULL,
+        materialization_lease_expires_at = NULL,
+        materialization_max_bytes = NULL,
+        materialization_storage_key = NULL;
+
+    -- Existing predecessor rows are qualified above, but every post-cutover writer must select
+    -- the pending lifecycle explicitly.  A READY default would let a stale baseline-shaped
+    -- INSERT bypass durable staging and publication fences during a mixed rollout.
+    ALTER TABLE user_attachments
+        ALTER COLUMN materialization_state DROP DEFAULT;
+    ALTER TABLE user_attachments
+        ALTER COLUMN materialization_state SET NOT NULL;
+    ALTER TABLE user_attachments
+        DROP CONSTRAINT IF EXISTS user_attachments_materialization_state_check;
+    ALTER TABLE user_attachments
+        ADD CONSTRAINT user_attachments_materialization_state_check CHECK (
+            (
+                materialization_state = 'ready'
+                AND astralplane_blob_owner_is_canonical(user_id)
+                AND astralplane_attachment_id_is_canonical(attachment_id)
+                AND astralplane_blob_storage_key_is_canonical(
+                    attachment_id || '/' || filename
+                )
+                AND replace(storage_path, E'\\\\', '/') =
+                    user_id || '/' || attachment_id || '/' || filename
+                AND size_bytes >= 0
+                AND sha256 ~ '^[0-9a-f]{64}$'
+                AND (
+                    (
+                        materialization_lease_id IS NULL
+                        AND materialization_lease_version IS NULL
+                        AND materialization_lease_expires_at IS NULL
+                        AND materialization_max_bytes IS NULL
+                        AND materialization_storage_key IS NULL
+                    )
+                    OR (
+                        materialization_lease_id IS NOT NULL
+                        AND astralplane_identifier_is_canonical(
+                            materialization_lease_id
+                        )
+                        AND materialization_lease_version IS NOT NULL
+                        AND materialization_lease_version >= 1
+                        AND materialization_lease_expires_at IS NOT NULL
+                        AND materialization_max_bytes IS NOT NULL
+                        AND materialization_max_bytes > 0
+                        AND materialization_storage_key IS NOT NULL
+                        AND astralplane_blob_owner_is_canonical(user_id)
+                        AND astralplane_attachment_id_is_canonical(attachment_id)
+                        AND astralplane_blob_storage_key_is_canonical(
+                            materialization_storage_key
+                        )
+                        AND materialization_storage_key =
+                            attachment_id || '/' || filename
+                        AND replace(storage_path, E'\\\\', '/') =
+                            user_id || '/' || materialization_storage_key
+                    )
+                )
+            )
+            OR (
+                materialization_state = 'pending'
+                AND materialization_lease_id IS NOT NULL
+                AND astralplane_identifier_is_canonical(materialization_lease_id)
+                AND materialization_lease_version IS NOT NULL
+                AND materialization_lease_version >= 0
+                AND materialization_lease_expires_at IS NOT NULL
+                AND materialization_max_bytes IS NOT NULL
+                AND materialization_max_bytes > 0
+                AND materialization_storage_key IS NOT NULL
+                AND astralplane_blob_owner_is_canonical(user_id)
+                AND astralplane_attachment_id_is_canonical(attachment_id)
+                AND astralplane_blob_storage_key_is_canonical(
+                    materialization_storage_key
+                )
+                AND materialization_storage_key = attachment_id || '/' || filename
+                AND replace(storage_path, E'\\\\', '/') =
+                    user_id || '/' || materialization_storage_key
+            )
+        ) NOT VALID;
+    ALTER TABLE user_attachments
+        VALIDATE CONSTRAINT user_attachments_materialization_state_check;
+    """.strip(),
+    """
+    CREATE INDEX IF NOT EXISTS idx_user_attachments_pending_materialization_expiry
+    ON user_attachments (
+        materialization_lease_expires_at,
+        attachment_id
+    )
+    WHERE materialization_state = 'pending' AND deleted_at IS NULL
+    """.strip(),
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_user_attachments_attachment_id_casefold
+    ON user_attachments (lower(attachment_id))
+    """.strip(),
+    """
+    ALTER TABLE astralplane_purge_tombstone
+        ADD COLUMN IF NOT EXISTS target_scope TEXT;
+    ALTER TABLE astralplane_purge_tombstone
+        ADD COLUMN IF NOT EXISTS manual_resolution_evidence_sha256 CHAR(64);
+    ALTER TABLE astralplane_purge_tombstone
+        ADD COLUMN IF NOT EXISTS manual_resolved_at TIMESTAMPTZ;
+    -- No 074.003 tombstone carried publication-revocation authority.  Downgrade every predecessor
+    -- record, including a namesake typed/PURGED row from an interrupted partial rollout.
+    UPDATE astralplane_purge_tombstone
+    SET target_scope = 'exact_key',
+        status = 'manual_review',
+        version = version + 1,
+        verified_absent_at = NULL,
+        manual_resolution_evidence_sha256 = NULL,
+        manual_resolved_at = NULL,
+        last_error_code = 'legacy_scope_unqualified',
+        updated_at = clock_timestamp();
+
+    -- Every predecessor exact attachment tombstone lacks publication-revocation authority.
+    -- Preserve a colliding row for operator attestation under a deterministic private object
+    -- identity so it cannot permanently squat the typed attachment-prefix identity.  A later
+    -- logical delete of a currently-live attachment can then schedule the qualified typed scope;
+    -- already-deleted attachments are scheduled immediately below.
+    UPDATE astralplane_purge_tombstone AS tombstone
+    SET object_id = 'legacy-unqualified-' || encode(
+            sha256(convert_to(tombstone.tombstone_id, 'UTF8')),
+            'hex'
+        ),
+        updated_at = clock_timestamp()
+    WHERE tombstone.object_kind = 'attachment'
+      AND EXISTS (
+          SELECT 1
+          FROM user_attachments AS attachment
+          WHERE attachment.user_id = tombstone.owner_id
+            AND attachment.attachment_id = tombstone.object_id
+      );
+
+    -- A predecessor soft delete admitted that physical cleanup may have failed.  Enqueue an
+    -- independently executable attachment-prefix tombstone for every deleted attachment.  The
+    -- typed identity matches PostgresPurgeStore exactly.
+
+    INSERT INTO astralplane_purge_tombstone (
+        tombstone_id, owner_id, object_kind, object_id, storage_key,
+        target_scope, storage_locator_sha256, requested_at, status,
+        attempt_count, version, available_at, verified_absent_at,
+        manual_resolution_evidence_sha256, manual_resolved_at,
+        last_error_code
+    )
+    SELECT
+        'purge-attachment_prefix-' || encode(
+            sha256(
+                convert_to('attachment_prefix', 'UTF8') || decode('00', 'hex') ||
+                convert_to(attachment.user_id, 'UTF8') || decode('00', 'hex') ||
+                convert_to(attachment.attachment_id, 'UTF8')
+            ),
+            'hex'
+        ),
+        attachment.user_id,
+        'attachment',
+        attachment.attachment_id,
+        attachment.attachment_id,
+        'attachment_prefix',
+        encode(
+            sha256(
+                convert_to(attachment.user_id, 'UTF8') || decode('00', 'hex') ||
+                convert_to(attachment.attachment_id, 'UTF8')
+            ),
+            'hex'
+        ),
+        to_timestamp(attachment.deleted_at::DOUBLE PRECISION / 1000.0),
+        'pending',
+        0,
+        0,
+        to_timestamp(attachment.deleted_at::DOUBLE PRECISION / 1000.0),
+        NULL,
+        NULL,
+        NULL,
+        NULL
+    FROM user_attachments AS attachment
+    WHERE attachment.deleted_at IS NOT NULL;
+
+    DO $astralplane_legacy_deleted_attachment_postcondition$
+    BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM user_attachments AS attachment
+            LEFT JOIN astralplane_purge_tombstone AS tombstone
+              ON tombstone.owner_id = attachment.user_id
+             AND tombstone.object_kind = 'attachment'
+             AND tombstone.object_id = attachment.attachment_id
+             AND tombstone.target_scope = 'attachment_prefix'
+             AND tombstone.storage_key = attachment.attachment_id
+            WHERE attachment.deleted_at IS NOT NULL
+              AND tombstone.tombstone_id IS NULL
+        ) THEN
+            RAISE EXCEPTION
+                '074.004 could not schedule every legacy deleted attachment for bounded cleanup'
+                USING ERRCODE = '42P16';
+        END IF;
+    END
+    $astralplane_legacy_deleted_attachment_postcondition$;
+
+    ALTER TABLE astralplane_purge_tombstone
+        ALTER COLUMN target_scope SET DEFAULT 'exact_key';
+    ALTER TABLE astralplane_purge_tombstone
+        ALTER COLUMN target_scope SET NOT NULL;
+    ALTER TABLE astralplane_purge_tombstone
+        DROP CONSTRAINT IF EXISTS astralplane_purge_tombstone_target_scope_check;
+    ALTER TABLE astralplane_purge_tombstone
+        ADD CONSTRAINT astralplane_purge_tombstone_target_scope_check CHECK (
+            target_scope IN ('exact_key', 'attachment_prefix', 'owner_namespace')
+        ) NOT VALID;
+    ALTER TABLE astralplane_purge_tombstone
+        VALIDATE CONSTRAINT astralplane_purge_tombstone_target_scope_check;
+    ALTER TABLE astralplane_purge_tombstone
+        DROP CONSTRAINT IF EXISTS astralplane_purge_tombstone_target_shape_check;
+    ALTER TABLE astralplane_purge_tombstone
+        ADD CONSTRAINT astralplane_purge_tombstone_target_shape_check CHECK (
+            (
+                target_scope = 'exact_key'
+                AND status IN ('manual_review', 'purged')
+                AND (
+                    (
+                        status = 'manual_review'
+                        AND manual_resolution_evidence_sha256 IS NULL
+                        AND manual_resolved_at IS NULL
+                    )
+                    OR (
+                        status = 'purged'
+                        AND manual_resolution_evidence_sha256 IS NOT NULL
+                        AND manual_resolution_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND manual_resolved_at IS NOT NULL
+                    )
+                )
+            )
+            OR (
+                target_scope = 'attachment_prefix'
+                AND object_kind = 'attachment'
+                AND astralplane_attachment_id_is_canonical(object_id)
+                AND storage_key = object_id
+                AND tombstone_id ~ '^purge-attachment_prefix-[0-9a-f]{64}$'
+                AND manual_resolution_evidence_sha256 IS NULL
+                AND manual_resolved_at IS NULL
+            )
+            OR (
+                target_scope = 'owner_namespace'
+                AND object_kind = 'attachment'
+                AND object_id ~ '^owner-namespace:[0-9a-f]{64}$'
+                AND storage_key = 'owner-namespace'
+                AND tombstone_id ~ '^purge-owner_namespace-[0-9a-f]{64}$'
+                AND manual_resolution_evidence_sha256 IS NULL
+                AND manual_resolved_at IS NULL
+            )
+        ) NOT VALID;
+    ALTER TABLE astralplane_purge_tombstone
+        VALIDATE CONSTRAINT astralplane_purge_tombstone_target_shape_check;
+    """.strip(),
+    """
+    CREATE TABLE IF NOT EXISTS astralplane_blob_owner_state (
+        owner_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL DEFAULT 'active',
+        version BIGINT NOT NULL DEFAULT 0,
+        retired_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT astralplane_blob_owner_state_owner_id_check CHECK (
+            astralplane_blob_owner_is_canonical(owner_id)
+        ),
+        CONSTRAINT astralplane_blob_owner_state_state_check CHECK (
+            state IN ('active', 'retired')
+        ),
+        CONSTRAINT astralplane_blob_owner_state_version_check CHECK (version >= 0),
+        CONSTRAINT astralplane_blob_owner_state_retired_at_check CHECK (
+            (state = 'active' AND retired_at IS NULL)
+            OR (state = 'retired' AND retired_at IS NOT NULL)
+        )
+    )
+    """.strip(),
+    """
+    -- Seed the durable owner-admission fence from every qualified predecessor namespace
+    -- before enabling the case-fold uniqueness guard.  Otherwise a differently-cased new
+    -- owner could be admitted beside legacy READY metadata and alias the same physical tree
+    -- on a case-insensitive filesystem.
+    INSERT INTO astralplane_blob_owner_state (
+        owner_id,
+        state,
+        version,
+        retired_at,
+        updated_at
+    )
+    SELECT DISTINCT
+        attachment.user_id,
+        'active',
+        0,
+        NULL::TIMESTAMPTZ,
+        clock_timestamp()
+    FROM user_attachments AS attachment
+    """.strip(),
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_astralplane_blob_owner_state_casefold
+    ON astralplane_blob_owner_state (lower(owner_id))
+    """.strip(),
+    """
+    DO $astralplane_pending_materialization_postcondition$
+    DECLARE
+        invalid_columns TEXT;
+        invalid_constraints TEXT;
+        invalid_index BOOLEAN;
+        invalid_casefold_index BOOLEAN;
+    BEGIN
+        SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+        INTO invalid_columns
+        FROM (
+            VALUES
+                ('materialization_state', 'text'::regtype, TRUE),
+                ('materialization_lease_id', 'text'::regtype, FALSE),
+                ('materialization_lease_version', 'bigint'::regtype, FALSE),
+                ('materialization_lease_expires_at',
+                    'timestamp with time zone'::regtype, FALSE),
+                ('materialization_max_bytes', 'bigint'::regtype, FALSE),
+                ('materialization_storage_key', 'text'::regtype, FALSE)
+        ) AS required(column_name, type_oid, not_null)
+        LEFT JOIN pg_attribute AS attribute
+          ON attribute.attrelid = 'user_attachments'::regclass
+         AND attribute.attname = required.column_name
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped
+        WHERE attribute.attname IS NULL
+           OR attribute.atttypid <> required.type_oid
+           OR attribute.attnotnull <> required.not_null;
+        IF invalid_columns IS NOT NULL THEN
+            RAISE EXCEPTION 'attachment materialization columns are incompatible: %',
+                invalid_columns USING ERRCODE = '42P16';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM pg_attribute AS attribute
+            JOIN pg_attrdef AS default_record
+              ON default_record.adrelid = attribute.attrelid
+             AND default_record.adnum = attribute.attnum
+            WHERE attribute.attrelid = 'user_attachments'::regclass
+              AND attribute.attname = 'materialization_state'
+        ) THEN
+            RAISE EXCEPTION 'attachment materialization state must not have a default'
+                USING ERRCODE = '42P16';
+        END IF;
+
+        SELECT string_agg(required.constraint_name, ', '
+            ORDER BY required.constraint_name)
+        INTO invalid_constraints
+        FROM (
+            VALUES
+                ('user_attachments'::regclass,
+                    'user_attachments_materialization_state_check'),
+                ('astralplane_purge_tombstone'::regclass,
+                    'astralplane_purge_tombstone_target_scope_check'),
+                ('astralplane_purge_tombstone'::regclass,
+                    'astralplane_purge_tombstone_target_shape_check'),
+                ('astralplane_blob_owner_state'::regclass,
+                    'astralplane_blob_owner_state_owner_id_check'),
+                ('astralplane_blob_owner_state'::regclass,
+                    'astralplane_blob_owner_state_state_check'),
+                ('astralplane_blob_owner_state'::regclass,
+                    'astralplane_blob_owner_state_version_check'),
+                ('astralplane_blob_owner_state'::regclass,
+                    'astralplane_blob_owner_state_retired_at_check')
+        ) AS required(table_oid, constraint_name)
+        LEFT JOIN pg_constraint AS constraint_record
+          ON constraint_record.conrelid = required.table_oid
+         AND constraint_record.conname = required.constraint_name
+         AND constraint_record.contype = 'c'
+         AND constraint_record.convalidated
+        WHERE constraint_record.oid IS NULL;
+        IF invalid_constraints IS NOT NULL THEN
+            RAISE EXCEPTION 'blob lifecycle constraints are incompatible: %',
+                invalid_constraints USING ERRCODE = '42P16';
+        END IF;
+
+        SELECT NOT (
+            index_record.indisvalid
+            AND index_record.indisready
+            AND NOT index_record.indisunique
+            AND pg_get_expr(
+                index_record.indpred,
+                index_record.indrelid,
+                TRUE
+            ) = 'materialization_state = ''pending''::text AND deleted_at IS NULL'
+            AND ARRAY(
+                SELECT attribute.attname
+                FROM unnest(index_record.indkey::smallint[]) WITH ORDINALITY
+                    AS key(attnum, ordinal)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = index_record.indrelid
+                 AND attribute.attnum = key.attnum
+                ORDER BY key.ordinal
+            ) = ARRAY[
+                'materialization_lease_expires_at',
+                'attachment_id'
+            ]::name[]
+        )
+        INTO invalid_index
+        FROM pg_index AS index_record
+        WHERE index_record.indexrelid =
+            to_regclass('idx_user_attachments_pending_materialization_expiry');
+        IF invalid_index IS DISTINCT FROM FALSE THEN
+            RAISE EXCEPTION 'pending materialization recovery index is incompatible'
+                USING ERRCODE = '42P16';
+        END IF;
+
+        SELECT NOT (
+            index_record.indisvalid
+            AND index_record.indisready
+            AND index_record.indisunique
+            AND index_record.indnkeyatts = 1
+            AND pg_get_indexdef(index_record.indexrelid, 1, TRUE)
+                = 'lower(attachment_id)'
+            AND index_record.indpred IS NULL
+        )
+        INTO invalid_casefold_index
+        FROM pg_index AS index_record
+        WHERE index_record.indexrelid =
+            to_regclass('uq_user_attachments_attachment_id_casefold');
+        IF invalid_casefold_index IS DISTINCT FROM FALSE THEN
+            RAISE EXCEPTION 'attachment case-fold identity index is incompatible'
+                USING ERRCODE = '42P16';
+        END IF;
+    END
+    $astralplane_pending_materialization_postcondition$
+    """.strip(),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Migration:
@@ -1104,7 +2752,16 @@ class Migration:
 class MigrationRegistry:
     """Immutable, non-branching migration graph with a canonical digest."""
 
-    def __init__(self, migrations: tuple[Migration, ...]) -> None:
+    def __init__(
+        self,
+        migrations: tuple[Migration, ...],
+        *,
+        current_schema_verifier: MigrationCallable | None = None,
+        current_schema_verifier_checksum: str | None = None,
+        predecessor_schema_verifier: Callable[[Transaction, str | None], None]
+        | None = None,
+        predecessor_schema_verifier_checksum: str | None = None,
+    ) -> None:
         if not isinstance(migrations, tuple) or not migrations:
             raise MigrationDefinitionError("migration registry must not be empty")
         by_source: dict[str | None, Migration] = {}
@@ -1121,6 +2778,42 @@ class MigrationRegistry:
                 by_source[source] = migration
         self._migrations = tuple(migrations)
         self._by_source = by_source
+        if (current_schema_verifier is None) != (current_schema_verifier_checksum is None):
+            raise MigrationDefinitionError(
+                "current schema verifier and checksum must be declared together"
+            )
+        if current_schema_verifier is not None and not callable(current_schema_verifier):
+            raise MigrationDefinitionError("current schema verifier must be callable")
+        if (
+            current_schema_verifier_checksum is not None
+            and _SHA256_PATTERN.fullmatch(current_schema_verifier_checksum) is None
+        ):
+            raise MigrationDefinitionError(
+                "current schema verifier checksum must be lowercase SHA-256"
+            )
+        self._current_schema_verifier = current_schema_verifier
+        self._current_schema_verifier_checksum = current_schema_verifier_checksum
+        if (predecessor_schema_verifier is None) != (
+            predecessor_schema_verifier_checksum is None
+        ):
+            raise MigrationDefinitionError(
+                "predecessor schema verifier and checksum must be declared together"
+            )
+        if predecessor_schema_verifier is not None and not callable(
+            predecessor_schema_verifier
+        ):
+            raise MigrationDefinitionError("predecessor schema verifier must be callable")
+        if (
+            predecessor_schema_verifier_checksum is not None
+            and _SHA256_PATTERN.fullmatch(predecessor_schema_verifier_checksum) is None
+        ):
+            raise MigrationDefinitionError(
+                "predecessor schema verifier checksum must be lowercase SHA-256"
+            )
+        self._predecessor_schema_verifier = predecessor_schema_verifier
+        self._predecessor_schema_verifier_checksum = (
+            predecessor_schema_verifier_checksum
+        )
         manifest = [
             {
                 "checksum": migration.checksum,
@@ -1132,6 +2825,24 @@ class MigrationRegistry:
             }
             for migration in sorted(migrations, key=lambda item: item.name)
         ]
+        if current_schema_verifier_checksum is not None:
+            manifest.append(
+                {
+                    "checksum": current_schema_verifier_checksum,
+                    "name": "@current-schema-verifier",
+                    "source_revisions": [],
+                    "target_revision": "@current",
+                }
+            )
+        if predecessor_schema_verifier_checksum is not None:
+            manifest.append(
+                {
+                    "checksum": predecessor_schema_verifier_checksum,
+                    "name": "@predecessor-schema-verifier",
+                    "source_revisions": [],
+                    "target_revision": "@predecessor",
+                }
+            )
         canonical = json.dumps(
             manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
@@ -1141,8 +2852,35 @@ class MigrationRegistry:
     def migrations(self) -> tuple[Migration, ...]:
         return self._migrations
 
+    @property
+    def current_schema_verifier(self) -> MigrationCallable | None:
+        return self._current_schema_verifier
+
+    @property
+    def current_schema_verifier_checksum(self) -> str | None:
+        return self._current_schema_verifier_checksum
+
+    @property
+    def predecessor_schema_verifier_checksum(self) -> str | None:
+        return self._predecessor_schema_verifier_checksum
+
     def next_after(self, revision: str | None) -> Migration | None:
         return self._by_source.get(revision)
+
+    def verify_current(self, transaction: Transaction) -> None:
+        if self._current_schema_verifier is None:
+            raise MigrationDefinitionError(
+                "migration registry has no current schema structural verifier"
+            )
+        self._current_schema_verifier(transaction)
+
+    def verify_predecessor(
+        self,
+        transaction: Transaction,
+        revision: str | None,
+    ) -> None:
+        if self._predecessor_schema_verifier is not None:
+            self._predecessor_schema_verifier(transaction, revision)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1173,6 +2911,10 @@ class MigrationRunner:
                     "declared": revision.migration_digest,
                     "observed": registry.digest,
                 },
+            )
+        if registry.current_schema_verifier is None:
+            raise MigrationDefinitionError(
+                "migration registry has no current schema structural verifier"
             )
         self._database = database
         self.revision = revision
@@ -1224,6 +2966,7 @@ class MigrationRunner:
                         "current schema carries a different migration-set digest",
                         metadata={"revision": source_revision},
                     )
+                self.registry.verify_current(transaction)
                 return MigrationReport(
                     source_revision=source_revision,
                     target_revision=expected,
@@ -1250,6 +2993,8 @@ class MigrationRunner:
                     metadata={"revision": source_revision or "<empty>"},
                 )
 
+            self.registry.verify_predecessor(transaction, source_revision)
+
             applied: list[str] = []
             observed = source_revision
             visited: set[str | None] = set()
@@ -1268,6 +3013,7 @@ class MigrationRunner:
                 self._write_metadata(transaction, _SCHEMA_META_REVISION, observed)
                 applied.append(migration.name)
 
+            self.registry.verify_current(transaction)
             self._write_metadata(transaction, _SCHEMA_META_DIGEST, self.registry.digest)
             return MigrationReport(
                 source_revision=source_revision,
@@ -1288,6 +3034,1156 @@ def _apply_plane_schema_074(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_074_002(transaction: Transaction) -> None:
+    for statement in PLANE_SCHEMA_074_002_STATEMENTS:
+        transaction.execute(statement)
+
+
+def _apply_plane_schema_074_003(transaction: Transaction) -> None:
+    for statement in PLANE_SCHEMA_074_003_STATEMENTS:
+        transaction.execute(statement)
+
+
+def _apply_plane_schema_074_004(transaction: Transaction) -> None:
+    for statement in PLANE_SCHEMA_074_004_STATEMENTS:
+        transaction.execute(statement)
+
+
+CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
+    PLANE_SCHEMA_067_STATEMENTS[-1],
+    PLANE_SCHEMA_074_STATEMENTS[-1],
+    PLANE_SCHEMA_074_002_STATEMENTS[-1],
+    PLANE_SCHEMA_074_003_STATEMENTS[-1],
+    PLANE_SCHEMA_074_004_STATEMENTS[-1],
+)
+
+CURRENT_SCHEMA_STRUCTURE_QUERY: Final = """
+WITH owned_tables(table_name) AS (
+    VALUES
+        ('agent_host_session'),
+        ('agent_ownership'),
+        ('agent_runtime_instance'),
+        ('agent_runtime_request'),
+        ('agent_scopes'),
+        ('agent_trust'),
+        ('astralplane_authority_binding'),
+        ('astralplane_authority_lifecycle_operation'),
+        ('astralplane_blob_owner_state'),
+        ('astralplane_outbox'),
+        ('astralplane_protected_effect_operation'),
+        ('astralplane_purge_tombstone'),
+        ('astralplane_receipt_claim'),
+        ('astralplane_receipt_sequence_watermark'),
+        ('astralplane_reconciliation_marker'),
+        ('attachment_parser'),
+        ('audit_entries'),
+        ('audit_events'),
+        ('audit_retention_anchor'),
+        ('auth_revocation_queue'),
+        ('background_task'),
+        ('chat_files'),
+        ('chat_steps'),
+        ('chats'),
+        ('component_feedback'),
+        ('component_version'),
+        ('consolidation_sweep'),
+        ('conversation_commit'),
+        ('draft_agents'),
+        ('draft_artifact_publication'),
+        ('draft_transition'),
+        ('effect_ledger'),
+        ('interaction_log'),
+        ('job_run'),
+        ('knowledge_update_proposal'),
+        ('latex_artifacts'),
+        ('logs'),
+        ('machine_credential'),
+        ('maintenance_unit'),
+        ('maintenance_unit_input'),
+        ('memory_item'),
+        ('memory_link'),
+        ('message_attachment'),
+        ('messages'),
+        ('onboarding_state'),
+        ('operation_admission_class'),
+        ('operation_admission_slot'),
+        ('operation_record'),
+        ('operation_submission_result'),
+        ('quarantine_entry'),
+        ('remote_machine'),
+        ('remote_operation_proposal'),
+        ('saved_components'),
+        ('scheduled_job'),
+        ('scheduled_occurrence'),
+        ('schema_meta'),
+        ('share_grant'),
+        ('short_term_signal'),
+        ('system_llm_config'),
+        ('test_case_results'),
+        ('test_evidence'),
+        ('test_runs'),
+        ('tool_overrides'),
+        ('tool_permissions'),
+        ('tool_quality_signal'),
+        ('tracked_job'),
+        ('tutorial_step'),
+        ('tutorial_step_revision'),
+        ('user_agent'),
+        ('user_agent_revision'),
+        ('user_attachments'),
+        ('user_credentials'),
+        ('user_llm_config'),
+        ('user_offline_grant'),
+        ('user_persona'),
+        ('user_personalization'),
+        ('user_preferences'),
+        ('users'),
+        ('voice_session'),
+        ('voice_turn'),
+        ('web_session'),
+        ('workspace_layout'),
+        ('workspace_snapshot')
+),
+owned_relations AS (
+    SELECT
+        owned_tables.table_name,
+        table_record.oid AS relation_oid
+    FROM owned_tables
+    JOIN pg_namespace AS table_namespace
+      ON table_namespace.nspname = current_schema()
+    JOIN pg_class AS table_record
+      ON table_record.relnamespace = table_namespace.oid
+     AND table_record.relname = owned_tables.table_name
+),
+schema_shapes AS (
+    SELECT
+        'schema'::text AS object_kind,
+        '<current>'::text AS object_identity,
+        jsonb_build_object(
+            'acl', ARRAY(
+                SELECT jsonb_build_object(
+                    'grantable', privilege.is_grantable,
+                    'grantee', CASE
+                        WHEN privilege.grantee = 0 THEN '<public>'
+                        WHEN privilege.grantee = namespace_record.nspowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantee)
+                    END,
+                    'grantor', CASE
+                        WHEN privilege.grantor = namespace_record.nspowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantor)
+                    END,
+                    'privilege', privilege.privilege_type
+                )::text
+                FROM aclexplode(
+                    COALESCE(
+                        namespace_record.nspacl,
+                        acldefault('n', namespace_record.nspowner)
+                    )
+                ) AS privilege
+                ORDER BY 1
+            ),
+            'ownerIsCurrentUser',
+                pg_get_userbyid(namespace_record.nspowner) = current_user
+        )::text AS object_definition
+    FROM pg_namespace AS namespace_record
+    WHERE namespace_record.nspname = current_schema()
+),
+catalog_dependencies AS (
+    SELECT
+        dependency.classid AS object_class,
+        dependency.objid AS object_id,
+        dependency.refclassid AS reference_class,
+        dependency.refobjid AS reference_id,
+        CASE
+            WHEN dependency_function.oid IS NOT NULL THEN
+                'function:' || CASE
+                    WHEN function_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE function_namespace.nspname
+                END || '.' || dependency_function.proname || '('
+                || pg_get_function_identity_arguments(dependency_function.oid) || ')'
+            WHEN dependency_type.oid IS NOT NULL THEN
+                'type:' || CASE
+                    WHEN type_namespace.nspname = current_schema() THEN '<current>'
+                    ELSE type_namespace.nspname
+                END || '.' || dependency_type.typname
+            WHEN dependency_collation.oid IS NOT NULL THEN
+                'collation:' || CASE
+                    WHEN collation_namespace.nspname = current_schema() THEN '<current>'
+                    ELSE collation_namespace.nspname
+                END || '.' || dependency_collation.collname
+            WHEN dependency_operator.oid IS NOT NULL THEN
+                'operator:' || CASE
+                    WHEN operator_namespace.nspname = current_schema() THEN '<current>'
+                    ELSE operator_namespace.nspname
+                END || '.' || dependency_operator.oprname || '('
+                || COALESCE(
+                    CASE
+                        WHEN operator_left_namespace.nspname = current_schema()
+                        THEN '<current>'
+                        ELSE operator_left_namespace.nspname
+                    END || '.' || operator_left_type.typname,
+                    ''
+                ) || ',' || COALESCE(
+                    CASE
+                        WHEN operator_right_namespace.nspname = current_schema()
+                        THEN '<current>'
+                        ELSE operator_right_namespace.nspname
+                    END || '.' || operator_right_type.typname,
+                    ''
+                ) || ')'
+            WHEN dependency_opclass.oid IS NOT NULL THEN
+                'opclass:' || CASE
+                    WHEN opclass_namespace.nspname = current_schema() THEN '<current>'
+                    ELSE opclass_namespace.nspname
+                END || '.' || dependency_opclass.opcname || '@'
+                || opclass_access_method.amname
+            WHEN dependency_relation.oid IS NOT NULL THEN
+                'relation:' || CASE
+                    WHEN relation_namespace.nspname = current_schema() THEN '<current>'
+                    ELSE relation_namespace.nspname
+                END || '.' || dependency_relation.relname || COALESCE(
+                    '.' || dependency_attribute.attname,
+                    ''
+                )
+            ELSE NULL
+        END AS dependency_identity
+    FROM pg_depend AS dependency
+    LEFT JOIN pg_proc AS dependency_function
+      ON dependency.refclassid = 'pg_proc'::regclass
+     AND dependency_function.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS function_namespace
+      ON function_namespace.oid = dependency_function.pronamespace
+    LEFT JOIN pg_type AS dependency_type
+      ON dependency.refclassid = 'pg_type'::regclass
+     AND dependency_type.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS type_namespace
+      ON type_namespace.oid = dependency_type.typnamespace
+    LEFT JOIN pg_collation AS dependency_collation
+      ON dependency.refclassid = 'pg_collation'::regclass
+     AND dependency_collation.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS collation_namespace
+      ON collation_namespace.oid = dependency_collation.collnamespace
+    LEFT JOIN pg_operator AS dependency_operator
+      ON dependency.refclassid = 'pg_operator'::regclass
+     AND dependency_operator.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS operator_namespace
+      ON operator_namespace.oid = dependency_operator.oprnamespace
+    LEFT JOIN pg_type AS operator_left_type
+      ON operator_left_type.oid = dependency_operator.oprleft
+    LEFT JOIN pg_namespace AS operator_left_namespace
+      ON operator_left_namespace.oid = operator_left_type.typnamespace
+    LEFT JOIN pg_type AS operator_right_type
+      ON operator_right_type.oid = dependency_operator.oprright
+    LEFT JOIN pg_namespace AS operator_right_namespace
+      ON operator_right_namespace.oid = operator_right_type.typnamespace
+    LEFT JOIN pg_opclass AS dependency_opclass
+      ON dependency.refclassid = 'pg_opclass'::regclass
+     AND dependency_opclass.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS opclass_namespace
+      ON opclass_namespace.oid = dependency_opclass.opcnamespace
+    LEFT JOIN pg_am AS opclass_access_method
+      ON opclass_access_method.oid = dependency_opclass.opcmethod
+    LEFT JOIN pg_class AS dependency_relation
+      ON dependency.refclassid = 'pg_class'::regclass
+     AND dependency_relation.oid = dependency.refobjid
+    LEFT JOIN pg_namespace AS relation_namespace
+      ON relation_namespace.oid = dependency_relation.relnamespace
+    LEFT JOIN pg_attribute AS dependency_attribute
+      ON dependency_attribute.attrelid = dependency_relation.oid
+     AND dependency_attribute.attnum = dependency.refobjsubid
+    WHERE dependency.classid IN (
+        'pg_attrdef'::regclass,
+        'pg_constraint'::regclass,
+        'pg_class'::regclass,
+        'pg_policy'::regclass
+    )
+),
+table_shapes AS (
+    SELECT
+        'table'::text AS object_kind,
+        table_record.relname::text AS object_identity,
+        jsonb_build_object(
+            'accessMethod', COALESCE(access_method.amname, ''),
+            'acl', ARRAY(
+                SELECT jsonb_build_object(
+                    'grantable', privilege.is_grantable,
+                    'grantee', CASE
+                        WHEN privilege.grantee = 0 THEN '<public>'
+                        WHEN privilege.grantee = table_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantee)
+                    END,
+                    'grantor', CASE
+                        WHEN privilege.grantor = table_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantor)
+                    END,
+                    'privilege', privilege.privilege_type
+                )::text
+                FROM aclexplode(
+                    COALESCE(
+                        table_record.relacl,
+                        acldefault('r', table_record.relowner)
+                    )
+                ) AS privilege
+                ORDER BY 1
+            ),
+            'forceRowSecurity', table_record.relforcerowsecurity,
+            'isPartition', table_record.relispartition,
+            'kind', table_record.relkind,
+            'ownerIsCurrentUser',
+                pg_get_userbyid(table_record.relowner) = current_user,
+            'partitionBound', COALESCE(
+                pg_get_expr(
+                    table_record.relpartbound,
+                    table_record.oid,
+                    TRUE
+                ),
+                ''
+            ),
+            'partitionKey', COALESCE(pg_get_partkeydef(table_record.oid), ''),
+            'persistence', table_record.relpersistence,
+            'replicaIdentity', table_record.relreplident,
+            'rowSecurity', table_record.relrowsecurity
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    LEFT JOIN pg_am AS access_method
+      ON access_method.oid = table_record.relam
+),
+sequence_shapes AS (
+    SELECT
+        'sequence'::text AS object_kind,
+        sequence_record.relname::text AS object_identity,
+        jsonb_build_object(
+            'acl', ARRAY(
+                SELECT jsonb_build_object(
+                    'grantable', privilege.is_grantable,
+                    'grantee', CASE
+                        WHEN privilege.grantee = 0 THEN '<public>'
+                        WHEN privilege.grantee = sequence_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantee)
+                    END,
+                    'grantor', CASE
+                        WHEN privilege.grantor = sequence_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantor)
+                    END,
+                    'privilege', privilege.privilege_type
+                )::text
+                FROM aclexplode(
+                    COALESCE(
+                        sequence_record.relacl,
+                        acldefault('S', sequence_record.relowner)
+                    )
+                ) AS privilege
+                ORDER BY 1
+            ),
+            'cache', sequence_state.seqcache,
+            'cycle', sequence_state.seqcycle,
+            'dependencyType', ownership_dependency.deptype,
+            'increment', sequence_state.seqincrement,
+            'maximum', sequence_state.seqmax,
+            'minimum', sequence_state.seqmin,
+            'ownerColumn', owner_column.attname,
+            'ownerIsCurrentUser',
+                pg_get_userbyid(sequence_record.relowner) = current_user,
+            'ownerTable', owner_table.relname,
+            'persistence', sequence_record.relpersistence,
+            'start', sequence_state.seqstart,
+            'type', sequence_type.typname,
+            'typeNamespace', CASE
+                WHEN sequence_type_namespace.nspname = current_schema()
+                THEN '<current>'
+                ELSE sequence_type_namespace.nspname
+            END
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS owner_table
+      ON owner_table.oid = owned_relations.relation_oid
+     AND owner_table.relkind IN ('r', 'p')
+    JOIN pg_depend AS ownership_dependency
+      ON ownership_dependency.refclassid = 'pg_class'::regclass
+     AND ownership_dependency.refobjid = owner_table.oid
+     AND ownership_dependency.refobjsubid > 0
+     AND ownership_dependency.classid = 'pg_class'::regclass
+     AND ownership_dependency.objsubid = 0
+     AND ownership_dependency.deptype IN ('a', 'i')
+    JOIN pg_class AS sequence_record
+      ON sequence_record.oid = ownership_dependency.objid
+     AND sequence_record.relkind = 'S'
+     AND sequence_record.relnamespace = owner_table.relnamespace
+    JOIN pg_sequence AS sequence_state
+      ON sequence_state.seqrelid = sequence_record.oid
+    JOIN pg_type AS sequence_type
+      ON sequence_type.oid = sequence_state.seqtypid
+    JOIN pg_namespace AS sequence_type_namespace
+      ON sequence_type_namespace.oid = sequence_type.typnamespace
+    JOIN pg_attribute AS owner_column
+      ON owner_column.attrelid = owner_table.oid
+     AND owner_column.attnum = ownership_dependency.refobjsubid
+),
+column_shapes AS (
+    SELECT
+        'column'::text AS object_kind,
+        table_record.relname || '.' || attribute.attname AS object_identity,
+        jsonb_build_object(
+            'acl', ARRAY(
+                SELECT jsonb_build_object(
+                    'grantable', privilege.is_grantable,
+                    'grantee', CASE
+                        WHEN privilege.grantee = 0 THEN '<public>'
+                        WHEN privilege.grantee = table_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantee)
+                    END,
+                    'grantor', CASE
+                        WHEN privilege.grantor = table_record.relowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantor)
+                    END,
+                    'privilege', privilege.privilege_type
+                )::text
+                FROM aclexplode(attribute.attacl) AS privilege
+                ORDER BY 1
+            ),
+            'collation', COALESCE(collation_record.collname, ''),
+            'collationNamespace', COALESCE(
+                CASE
+                    WHEN collation_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE collation_namespace.nspname
+                END,
+                ''
+            ),
+            'default', COALESCE(
+                pg_get_expr(default_record.adbin, default_record.adrelid, TRUE),
+                ''
+            ),
+            'expressionDependencies', ARRAY(
+                SELECT DISTINCT dependency_identity
+                FROM catalog_dependencies
+                WHERE object_class = 'pg_attrdef'::regclass
+                  AND object_id = default_record.oid
+                  AND dependency_identity IS NOT NULL
+                ORDER BY dependency_identity
+            ),
+            'generated', attribute.attgenerated,
+            'identity', attribute.attidentity,
+            'notNull', attribute.attnotnull,
+            'type', format_type(attribute.atttypid, attribute.atttypmod),
+            'typeBase', COALESCE(
+                CASE
+                    WHEN base_type_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE base_type_namespace.nspname
+                END || '.' || base_type.typname,
+                ''
+            ),
+            'typeKind', type_record.typtype,
+            'typeName', type_record.typname,
+            'typeNamespace', CASE
+                WHEN type_namespace.nspname = current_schema() THEN '<current>'
+                ELSE type_namespace.nspname
+            END
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_attribute AS attribute
+      ON attribute.attrelid = table_record.oid
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped
+    LEFT JOIN pg_attrdef AS default_record
+      ON default_record.adrelid = table_record.oid
+     AND default_record.adnum = attribute.attnum
+    LEFT JOIN pg_collation AS collation_record
+      ON collation_record.oid = attribute.attcollation
+    LEFT JOIN pg_namespace AS collation_namespace
+      ON collation_namespace.oid = collation_record.collnamespace
+    JOIN pg_type AS type_record
+      ON type_record.oid = attribute.atttypid
+    JOIN pg_namespace AS type_namespace
+      ON type_namespace.oid = type_record.typnamespace
+    LEFT JOIN pg_type AS base_type
+      ON base_type.oid = type_record.typbasetype
+    LEFT JOIN pg_namespace AS base_type_namespace
+      ON base_type_namespace.oid = base_type.typnamespace
+),
+constraint_shapes AS (
+    SELECT
+        'constraint'::text AS object_kind,
+        table_record.relname || '.' || constraint_record.conname AS object_identity,
+        jsonb_build_object(
+            'check', COALESCE(
+                pg_get_expr(
+                    constraint_record.conbin,
+                    constraint_record.conrelid,
+                    TRUE
+                ),
+                ''
+            ),
+            'definition', pg_get_constraintdef(constraint_record.oid, TRUE),
+            'deferrable', constraint_record.condeferrable,
+            'deleteAction', constraint_record.confdeltype,
+            'deleteSetColumns', ARRAY(
+                SELECT attribute.attname
+                FROM unnest(constraint_record.confdelsetcols)
+                    WITH ORDINALITY AS delete_column(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = constraint_record.conrelid
+                 AND attribute.attnum = delete_column.attnum
+                ORDER BY delete_column.position
+            ),
+            'deferred', constraint_record.condeferred,
+            'dependencies', ARRAY(
+                SELECT DISTINCT dependency_identity
+                FROM catalog_dependencies
+                WHERE object_class = 'pg_constraint'::regclass
+                  AND object_id = constraint_record.oid
+                  AND dependency_identity IS NOT NULL
+                ORDER BY dependency_identity
+            ),
+            'exclusionOperators', ARRAY(
+                SELECT dependency_identity
+                FROM unnest(constraint_record.conexclop)
+                    WITH ORDINALITY AS exclusion_operator(operator_oid, position)
+                JOIN catalog_dependencies
+                  ON object_class = 'pg_constraint'::regclass
+                 AND object_id = constraint_record.oid
+                 AND reference_class = 'pg_operator'::regclass
+                 AND reference_id = exclusion_operator.operator_oid
+                ORDER BY exclusion_operator.position
+            ),
+            'inheritanceCount', constraint_record.coninhcount,
+            'isLocal', constraint_record.conislocal,
+            'keys', ARRAY(
+                SELECT attribute.attname
+                FROM unnest(constraint_record.conkey) WITH ORDINALITY AS key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = constraint_record.conrelid
+                 AND attribute.attnum = key.attnum
+                ORDER BY key.position
+            ),
+            'matchType', constraint_record.confmatchtype,
+            'noInherit', constraint_record.connoinherit,
+            'parentConstraint', constraint_record.conparentid <> 0,
+            'referenceKeys', ARRAY(
+                SELECT attribute.attname
+                FROM unnest(constraint_record.confkey) WITH ORDINALITY AS key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = constraint_record.confrelid
+                 AND attribute.attnum = key.attnum
+                ORDER BY key.position
+            ),
+            'referenceNamespace', CASE
+                WHEN reference_namespace.nspname = current_schema() THEN '<current>'
+                ELSE COALESCE(reference_namespace.nspname, '')
+            END,
+            'referenceTable', COALESCE(reference_table.relname, ''),
+            'type', constraint_record.contype,
+            'updateAction', constraint_record.confupdtype,
+            'validated', constraint_record.convalidated
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+    JOIN pg_constraint AS constraint_record
+      ON constraint_record.conrelid = table_record.oid
+    LEFT JOIN pg_class AS reference_table
+      ON reference_table.oid = constraint_record.confrelid
+    LEFT JOIN pg_namespace AS reference_namespace
+      ON reference_namespace.oid = reference_table.relnamespace
+),
+index_shapes AS (
+    SELECT
+        'index'::text AS object_kind,
+        index_record.relname::text AS object_identity,
+        jsonb_build_object(
+            'accessMethod', access_method.amname,
+            'clustered', index_state.indisclustered,
+            'collations', ARRAY(
+                SELECT COALESCE(
+                    CASE
+                        WHEN collation_namespace.nspname = current_schema()
+                        THEN '<current>'
+                        ELSE collation_namespace.nspname
+                    END || '.' || collation_record.collname,
+                    ''
+                )
+                FROM unnest(index_state.indcollation::oid[])
+                    WITH ORDINALITY AS index_collation(collation_oid, position)
+                LEFT JOIN pg_collation AS collation_record
+                  ON collation_record.oid = index_collation.collation_oid
+                LEFT JOIN pg_namespace AS collation_namespace
+                  ON collation_namespace.oid = collation_record.collnamespace
+                ORDER BY index_collation.position
+            ),
+            'columns', ARRAY(
+                SELECT pg_get_indexdef(index_state.indexrelid, position, TRUE)
+                FROM generate_series(1, index_state.indnatts) AS position
+                ORDER BY position
+            ),
+            'dependencies', ARRAY(
+                SELECT DISTINCT dependency_identity
+                FROM catalog_dependencies
+                WHERE object_class = 'pg_class'::regclass
+                  AND object_id = index_state.indexrelid
+                  AND dependency_identity IS NOT NULL
+                ORDER BY dependency_identity
+            ),
+            'exclusion', index_state.indisexclusion,
+            'immediate', index_state.indimmediate,
+            'keyCount', index_state.indnkeyatts,
+            'nullsNotDistinct', index_state.indnullsnotdistinct,
+            'opclasses', ARRAY(
+                SELECT CASE
+                    WHEN opclass_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE opclass_namespace.nspname
+                END || '.' || opclass_record.opcname || '@'
+                    || opclass_access_method.amname
+                FROM unnest(index_state.indclass::oid[])
+                    WITH ORDINALITY AS index_opclass(opclass_oid, position)
+                JOIN pg_opclass AS opclass_record
+                  ON opclass_record.oid = index_opclass.opclass_oid
+                JOIN pg_namespace AS opclass_namespace
+                  ON opclass_namespace.oid = opclass_record.opcnamespace
+                JOIN pg_am AS opclass_access_method
+                  ON opclass_access_method.oid = opclass_record.opcmethod
+                ORDER BY index_opclass.position
+            ),
+            'options', index_state.indoption::smallint[],
+            'predicate', COALESCE(
+                pg_get_expr(index_state.indpred, index_state.indrelid, TRUE),
+                ''
+            ),
+            'primary', index_state.indisprimary,
+            'ready', index_state.indisready,
+            'replicaIdentity', index_state.indisreplident,
+            'table', table_record.relname,
+            'unique', index_state.indisunique,
+            'valid', index_state.indisvalid
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_index AS index_state ON index_state.indrelid = table_record.oid
+    JOIN pg_class AS index_record
+      ON index_record.oid = index_state.indexrelid
+     AND index_record.relkind = 'i'
+    JOIN pg_am AS access_method ON access_method.oid = index_record.relam
+),
+trigger_shapes AS (
+    SELECT
+        'trigger'::text AS object_kind,
+        table_record.relname || '.' || trigger_record.tgname AS object_identity,
+        jsonb_build_object(
+            'enabled', trigger_record.tgenabled,
+            'function', function_record.proname,
+            'functionArguments', pg_get_function_identity_arguments(
+                function_record.oid
+            ),
+            'functionBody', function_record.prosrc,
+            'functionConfiguration', ARRAY(
+                SELECT replace(setting, current_schema(), '<current>')
+                FROM unnest(
+                    COALESCE(function_record.proconfig, ARRAY[]::text[])
+                ) AS setting
+                ORDER BY setting
+            ),
+            'functionLanguage', language_record.lanname,
+            'functionLeakproof', function_record.proleakproof,
+            'functionNamespace', CASE
+                WHEN function_namespace.nspname = current_schema() THEN '<current>'
+                ELSE function_namespace.nspname
+            END,
+            'functionParallel', function_record.proparallel,
+            'functionResult', pg_get_function_result(function_record.oid),
+            'functionSecurityDefiner', function_record.prosecdef,
+            'functionStrict', function_record.proisstrict,
+            'functionVolatility', function_record.provolatile,
+            'functionOwnerIsCurrentUser',
+                pg_get_userbyid(function_record.proowner) = current_user,
+            'definition', pg_get_triggerdef(trigger_record.oid, TRUE),
+            'argumentsHex', encode(trigger_record.tgargs, 'hex'),
+            'columns', ARRAY(
+                SELECT attribute.attname
+                FROM unnest(trigger_record.tgattr::smallint[])
+                    WITH ORDINALITY AS trigger_column(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = trigger_record.tgrelid
+                 AND attribute.attnum = trigger_column.attnum
+                ORDER BY trigger_column.position
+            ),
+            'constraintDeferrable', trigger_record.tgdeferrable,
+            'constraintInitiallyDeferred', trigger_record.tginitdeferred,
+            'newTransitionTable', COALESCE(trigger_record.tgnewtable, ''),
+            'oldTransitionTable', COALESCE(trigger_record.tgoldtable, ''),
+            'type', trigger_record.tgtype,
+            'when', COALESCE(
+                pg_get_expr(trigger_record.tgqual, trigger_record.tgrelid, TRUE),
+                ''
+            )
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_trigger AS trigger_record
+      ON trigger_record.tgrelid = table_record.oid
+     AND NOT trigger_record.tgisinternal
+    JOIN pg_proc AS function_record ON function_record.oid = trigger_record.tgfoid
+    JOIN pg_namespace AS function_namespace
+      ON function_namespace.oid = function_record.pronamespace
+    JOIN pg_language AS language_record
+      ON language_record.oid = function_record.prolang
+),
+internal_trigger_records AS (
+    SELECT
+        table_record.relname::text AS table_name,
+        jsonb_build_object(
+            'argumentsHex', encode(trigger_record.tgargs, 'hex'),
+            'columns', ARRAY(
+                SELECT attribute.attname
+                FROM unnest(trigger_record.tgattr::smallint[])
+                    WITH ORDINALITY AS trigger_column(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = trigger_record.tgrelid
+                 AND attribute.attnum = trigger_column.attnum
+                ORDER BY trigger_column.position
+            ),
+            'constraint', COALESCE(constraint_record.conname, ''),
+            'constraintDeferrable', trigger_record.tgdeferrable,
+            'constraintInitiallyDeferred', trigger_record.tginitdeferred,
+            'enabled', trigger_record.tgenabled,
+            'function', function_record.proname,
+            'functionNamespace', CASE
+                WHEN function_namespace.nspname = current_schema() THEN '<current>'
+                ELSE function_namespace.nspname
+            END,
+            'newTransitionTable', COALESCE(trigger_record.tgnewtable, ''),
+            'oldTransitionTable', COALESCE(trigger_record.tgoldtable, ''),
+            'type', trigger_record.tgtype,
+            'when', COALESCE(
+                pg_get_expr(trigger_record.tgqual, trigger_record.tgrelid, TRUE),
+                ''
+            )
+        ) AS trigger_definition,
+        COALESCE(constraint_record.conname, '') AS constraint_name,
+        function_record.proname AS function_name,
+        trigger_record.tgtype AS trigger_type
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_trigger AS trigger_record
+      ON trigger_record.tgrelid = table_record.oid
+     AND trigger_record.tgisinternal
+    LEFT JOIN pg_constraint AS constraint_record
+      ON constraint_record.oid = trigger_record.tgconstraint
+    JOIN pg_proc AS function_record
+      ON function_record.oid = trigger_record.tgfoid
+    JOIN pg_namespace AS function_namespace
+      ON function_namespace.oid = function_record.pronamespace
+),
+internal_trigger_shapes AS (
+    SELECT
+        'internal-trigger-set'::text AS object_kind,
+        table_name AS object_identity,
+        jsonb_agg(
+            trigger_definition
+            ORDER BY constraint_name, function_name, trigger_type,
+                     trigger_definition::text
+        )::text AS object_definition
+    FROM internal_trigger_records
+    GROUP BY table_name
+),
+function_shapes AS (
+    SELECT
+        'function'::text AS object_kind,
+        function_record.proname || '('
+            || pg_get_function_identity_arguments(function_record.oid) || ')'
+            AS object_identity,
+        jsonb_build_object(
+            'acl', ARRAY(
+                SELECT jsonb_build_object(
+                    'grantable', privilege.is_grantable,
+                    'grantee', CASE
+                        WHEN privilege.grantee = 0 THEN '<public>'
+                        WHEN privilege.grantee = function_record.proowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantee)
+                    END,
+                    'grantor', CASE
+                        WHEN privilege.grantor = function_record.proowner THEN '<owner>'
+                        ELSE pg_get_userbyid(privilege.grantor)
+                    END,
+                    'privilege', privilege.privilege_type
+                )::text
+                FROM aclexplode(
+                    COALESCE(
+                        function_record.proacl,
+                        acldefault('f', function_record.proowner)
+                    )
+                ) AS privilege
+                ORDER BY 1
+            ),
+            'arguments', pg_get_function_arguments(function_record.oid),
+            'argumentModes', COALESCE(
+                function_record.proargmodes::text[],
+                ARRAY[]::text[]
+            ),
+            'argumentTypes', ARRAY(
+                SELECT CASE
+                    WHEN argument_type_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE argument_type_namespace.nspname
+                END || '.' || argument_type.typname
+                FROM unnest(
+                    COALESCE(
+                        function_record.proallargtypes,
+                        function_record.proargtypes::oid[]
+                    )
+                ) WITH ORDINALITY AS argument(type_oid, position)
+                JOIN pg_type AS argument_type
+                  ON argument_type.oid = argument.type_oid
+                JOIN pg_namespace AS argument_type_namespace
+                  ON argument_type_namespace.oid = argument_type.typnamespace
+                ORDER BY argument.position
+            ),
+            'body', function_record.prosrc,
+            'configuration', ARRAY(
+                SELECT replace(setting, current_schema(), '<current>')
+                FROM unnest(
+                    COALESCE(function_record.proconfig, ARRAY[]::text[])
+                ) AS setting
+                ORDER BY setting
+            ),
+            'kind', function_record.prokind,
+            'language', language_record.lanname,
+            'leakproof', function_record.proleakproof,
+            'namespace', '<current>',
+            'ownerIsCurrentUser',
+                pg_get_userbyid(function_record.proowner) = current_user,
+            'parallel', function_record.proparallel,
+            'result', pg_get_function_result(function_record.oid),
+            'resultType', CASE
+                WHEN result_type_namespace.nspname = current_schema()
+                THEN '<current>'
+                ELSE result_type_namespace.nspname
+            END || '.' || result_type.typname,
+            'resultTypeKind', result_type.typtype,
+            'returnsSet', function_record.proretset,
+            'securityDefiner', function_record.prosecdef,
+            'strict', function_record.proisstrict,
+            'support', COALESCE(
+                CASE
+                    WHEN support_namespace.nspname = current_schema()
+                    THEN '<current>'
+                    ELSE support_namespace.nspname
+                END || '.' || support_function.proname || '('
+                    || pg_get_function_identity_arguments(support_function.oid)
+                    || ')',
+                ''
+            ),
+            'volatility', function_record.provolatile
+        )::text AS object_definition
+    FROM pg_proc AS function_record
+    JOIN pg_namespace AS namespace_record
+      ON namespace_record.oid = function_record.pronamespace
+     AND namespace_record.nspname = current_schema()
+    JOIN pg_language AS language_record
+      ON language_record.oid = function_record.prolang
+    JOIN pg_type AS result_type
+      ON result_type.oid = function_record.prorettype
+    JOIN pg_namespace AS result_type_namespace
+      ON result_type_namespace.oid = result_type.typnamespace
+    LEFT JOIN pg_proc AS support_function
+      ON support_function.oid = function_record.prosupport
+    LEFT JOIN pg_namespace AS support_namespace
+      ON support_namespace.oid = support_function.pronamespace
+),
+policy_shapes AS (
+    SELECT
+        'policy'::text AS object_kind,
+        table_record.relname || '.' || policy_record.polname AS object_identity,
+        jsonb_build_object(
+            'command', policy_record.polcmd,
+            'dependencies', ARRAY(
+                SELECT DISTINCT dependency_identity
+                FROM catalog_dependencies
+                WHERE object_class = 'pg_policy'::regclass
+                  AND object_id = policy_record.oid
+                  AND dependency_identity IS NOT NULL
+                ORDER BY dependency_identity
+            ),
+            'permissive', policy_record.polpermissive,
+            'roles', ARRAY(
+                SELECT CASE
+                    WHEN role_oid = 0 THEN '<public>'
+                    WHEN role_oid = table_record.relowner THEN '<owner>'
+                    ELSE pg_get_userbyid(role_oid)
+                END
+                FROM unnest(policy_record.polroles) AS role_oid
+                ORDER BY 1
+            ),
+            'using', COALESCE(
+                pg_get_expr(policy_record.polqual, policy_record.polrelid, TRUE),
+                ''
+            ),
+            'withCheck', COALESCE(
+                pg_get_expr(
+                    policy_record.polwithcheck,
+                    policy_record.polrelid,
+                    TRUE
+                ),
+                ''
+            )
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_policy AS policy_record
+      ON policy_record.polrelid = table_record.oid
+),
+rule_shapes AS (
+    SELECT
+        'rule'::text AS object_kind,
+        table_record.relname || '.' || rule_record.rulename AS object_identity,
+        jsonb_build_object(
+            'definition', pg_get_ruledef(rule_record.oid, TRUE),
+            'enabled', rule_record.ev_enabled,
+            'event', rule_record.ev_type,
+            'instead', rule_record.is_instead
+        )::text AS object_definition
+    FROM owned_relations
+    JOIN pg_class AS table_record
+      ON table_record.oid = owned_relations.relation_oid
+     AND table_record.relkind IN ('r', 'p')
+    JOIN pg_rewrite AS rule_record
+      ON rule_record.ev_class = table_record.oid
+     AND rule_record.rulename <> '_RETURN'
+),
+inheritance_shapes AS (
+    SELECT
+        'inheritance'::text AS object_kind,
+        CASE
+            WHEN child_namespace.nspname = current_schema() THEN '<current>'
+            ELSE child_namespace.nspname
+        END || '.' || child_table.relname || '->' || CASE
+            WHEN parent_namespace.nspname = current_schema() THEN '<current>'
+            ELSE parent_namespace.nspname
+        END || '.' || parent_table.relname AS object_identity,
+        jsonb_build_object(
+            'ownedRole', CASE
+                WHEN child_table.oid IN (
+                    SELECT relation_oid FROM owned_relations
+                ) AND parent_table.oid IN (
+                    SELECT relation_oid FROM owned_relations
+                ) THEN 'both'
+                WHEN child_table.oid IN (
+                    SELECT relation_oid FROM owned_relations
+                ) THEN 'child'
+                ELSE 'parent'
+            END,
+            'sequence', inheritance.inhseqno
+        )::text AS object_definition
+    FROM pg_inherits AS inheritance
+    JOIN pg_class AS child_table
+      ON child_table.oid = inheritance.inhrelid
+    JOIN pg_namespace AS child_namespace
+      ON child_namespace.oid = child_table.relnamespace
+    JOIN pg_class AS parent_table
+      ON parent_table.oid = inheritance.inhparent
+    JOIN pg_namespace AS parent_namespace
+      ON parent_namespace.oid = parent_table.relnamespace
+    WHERE child_table.oid IN (
+        SELECT relation_oid FROM owned_relations
+    ) OR parent_table.oid IN (
+        SELECT relation_oid FROM owned_relations
+    )
+)
+SELECT object_kind, object_identity, object_definition
+FROM (
+    SELECT * FROM schema_shapes
+    UNION ALL SELECT * FROM table_shapes
+    UNION ALL SELECT * FROM sequence_shapes
+    UNION ALL SELECT * FROM column_shapes
+    UNION ALL SELECT * FROM constraint_shapes
+    UNION ALL SELECT * FROM index_shapes
+    UNION ALL SELECT * FROM trigger_shapes
+    UNION ALL SELECT * FROM internal_trigger_shapes
+    UNION ALL SELECT * FROM function_shapes
+    UNION ALL SELECT * FROM policy_shapes
+    UNION ALL SELECT * FROM rule_shapes
+    UNION ALL SELECT * FROM inheritance_shapes
+) AS structures
+ORDER BY object_kind, object_identity
+""".strip()
+
+# SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
+# This is generated only from a fresh canonical 074.004 schema and changes
+# whenever the structural verifier's expected catalog state changes.
+CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
+    "2e95879e293dbac3018a5c3fea92662b2939390bb12195f5a9f8d1eca03d6ec3"
+)
+CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
+    CURRENT_SCHEMA_STRUCTURE_DIGEST,
+)
+
+_CURRENT_SCHEMA_NAME_QUERY: Final = """
+SELECT
+    namespace_record.nspname AS schema_name,
+    pg_get_userbyid(namespace_record.nspowner) AS schema_owner
+FROM pg_namespace AS namespace_record
+WHERE namespace_record.oid = current_schema()::regnamespace
+""".strip()
+_DEFAULT_PUBLIC_SCHEMA_DEFINITION: Final = (
+    '{"acl": ["{\\"grantee\\": \\"<owner>\\", \\"grantor\\": \\"<owner>\\", '
+    '\\"grantable\\": false, \\"privilege\\": \\"CREATE\\"}", '
+    '"{\\"grantee\\": \\"<owner>\\", \\"grantor\\": \\"<owner>\\", '
+    '\\"grantable\\": false, \\"privilege\\": \\"USAGE\\"}", '
+    '"{\\"grantee\\": \\"<public>\\", \\"grantor\\": \\"<owner>\\", '
+    '\\"grantable\\": false, \\"privilege\\": \\"USAGE\\"}"], '
+    '"ownerIsCurrentUser": false}'
+)
+_CANONICAL_OWNED_SCHEMA_DEFINITION: Final = (
+    '{"acl": ["{\\"grantee\\": \\"<owner>\\", \\"grantor\\": \\"<owner>\\", '
+    '\\"grantable\\": false, \\"privilege\\": \\"CREATE\\"}", '
+    '"{\\"grantee\\": \\"<owner>\\", \\"grantor\\": \\"<owner>\\", '
+    '\\"grantable\\": false, \\"privilege\\": \\"USAGE\\"}"], '
+    '"ownerIsCurrentUser": true}'
+)
+
+
+def _schema_structure_digest(records: tuple[Mapping[str, object], ...]) -> str:
+    canonical = json.dumps(
+        [
+            {
+                "definition": str(record["object_definition"]),
+                "identity": str(record["object_identity"]),
+                "kind": str(record["object_kind"]),
+            }
+            for record in records
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
+    (
+        "066.001",
+        (
+            "4389632042f990aaf6afec57b5bdfd44b2e2711b1c414a6c71591d147546b6c4",
+            "84cc9f0af555517013af26ada3920aebb8cc10e0d05fed75d424f960c810aa5f",
+        ),
+    ),
+    (
+        "067.001",
+        (
+            "8d46db8b3a788a77185b21d149819f6394e14d96cdd6a2e393c105e2adb2b587",
+            "14b1a1369359114c439143a3bdd75f8a51f6b153361e2360759fea96016b8a42",
+        ),
+    ),
+    (
+        "074.001",
+        (
+            "4f312524a3b22eea04a5ef0566200b03aa74a57c3e4a891612dd3f1d8fc978b5",
+            "a02a688814c62c1a8cb864161853bd2b84202fa691626e19d3c588eb7c705a12",
+        ),
+    ),
+    (
+        "074.002",
+        (
+            "6d5b8c61ae3a5e55c26b3abb3c81344c11fbe7c93401cdabcb700eb6dccdf67d",
+            "cb09fe20fd9e1a1e1fc6f92f828d48ed80b2bc2e136ed7df34c7a0835edd5dde",
+        ),
+    ),
+    (
+        "074.003",
+        (
+            "5676e8159ed581433daf24a7d6cad2d3d4ab0cdf94875d1dd870aae382a26bfe",
+            "cf88e094b28ee09a228b9c2d5cf36c95200ae002d5045b6061086ab775fdb1b4",
+        ),
+    ),
+)
+
+
+def _verify_predecessor_plane_schema(
+    transaction: Transaction,
+    revision: str | None,
+) -> None:
+    accepted = dict(PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS).get(revision)
+    if accepted is None:
+        raise SchemaRevisionError(
+            "migration source has no qualified predecessor schema evidence",
+            metadata={"revision": revision or "<empty>"},
+        )
+    records = tuple(transaction.fetch_all(CURRENT_SCHEMA_STRUCTURE_QUERY))
+    observed = _schema_structure_digest(records)
+    if observed in accepted:
+        return
+
+    schema_record = transaction.fetch_one(_CURRENT_SCHEMA_NAME_QUERY)
+    schema_name = None if schema_record is None else schema_record.get("schema_name")
+    schema_owner = None if schema_record is None else schema_record.get("schema_owner")
+    schema_shapes = tuple(
+        record
+        for record in records
+        if record.get("object_kind") == "schema"
+        and record.get("object_identity") == "<current>"
+    )
+    if (
+        schema_name == "public"
+        and schema_owner == "pg_database_owner"
+        and len(schema_shapes) == 1
+        and schema_shapes[0].get("object_definition")
+        == _DEFAULT_PUBLIC_SCHEMA_DEFINITION
+    ):
+        normalized = tuple(
+            {
+                "object_definition": _CANONICAL_OWNED_SCHEMA_DEFINITION,
+                "object_identity": record["object_identity"],
+                "object_kind": record["object_kind"],
+            }
+            if record is schema_shapes[0]
+            else record
+            for record in records
+        )
+        if _schema_structure_digest(normalized) in accepted:
+            return
+
+    if observed not in accepted:
+        raise SchemaRevisionError(
+            "predecessor schema canonical structure does not match revision evidence",
+            metadata={
+                "expected": ",".join(accepted),
+                "observed": observed,
+                "revision": revision or "<empty>",
+            },
+        )
+
+
+def _verify_current_plane_schema(transaction: Transaction) -> None:
+    for statement in CURRENT_SCHEMA_VERIFICATION_STATEMENTS:
+        transaction.execute(statement)
+    observed_digest = _schema_structure_digest(
+        transaction.fetch_all(CURRENT_SCHEMA_STRUCTURE_QUERY)
+    )
+    if observed_digest not in CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS:
+        raise SchemaRevisionError(
+            "current schema canonical structure does not match revision evidence",
+            metadata={
+                "expected": ",".join(CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS),
+                "observed": observed_digest,
+            },
+        )
+
+
 def _statements_checksum(statements: tuple[str, ...]) -> str:
     canonical = json.dumps(
         statements,
@@ -1295,6 +4191,28 @@ def _statements_checksum(statements: tuple[str, ...]) -> str:
         separators=(",", ":"),
     ).encode("ascii")
     return hashlib.sha256(canonical).hexdigest()
+
+
+CURRENT_SCHEMA_VERIFIER_CHECKSUM: Final = _statements_checksum(
+    (
+        *CURRENT_SCHEMA_VERIFICATION_STATEMENTS,
+        CURRENT_SCHEMA_STRUCTURE_QUERY,
+        *CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS,
+    )
+)
+PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = _statements_checksum(
+    (
+        CURRENT_SCHEMA_STRUCTURE_QUERY,
+        _CURRENT_SCHEMA_NAME_QUERY,
+        _DEFAULT_PUBLIC_SCHEMA_DEFINITION,
+        _CANONICAL_OWNED_SCHEMA_DEFINITION,
+        json.dumps(
+            PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ),
+    )
+)
 
 
 PLANE_SCHEMA_067_MIGRATION: Final = Migration(
@@ -1318,22 +4236,139 @@ PLANE_SCHEMA_074_MIGRATION: Final = Migration(
     checksum=_statements_checksum(PLANE_SCHEMA_074_STATEMENTS),
     operation=_apply_plane_schema_074,
 )
-MIGRATION_REGISTRY: Final = MigrationRegistry((PLANE_SCHEMA_074_MIGRATION,))
+PLANE_SCHEMA_074_001_REGISTRY_DIGEST: Final = (
+    "02ee01830e51c97edbeb384eb05f25b5101efa6c0f564383bab5b7b90a7e80cf"
+)
+if (
+    MigrationRegistry((PLANE_SCHEMA_067_MIGRATION, PLANE_SCHEMA_074_MIGRATION)).digest
+    != PLANE_SCHEMA_074_001_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError(
+        "historical 074.001 migration registry no longer matches its pinned digest"
+    )
+PLANE_SCHEMA_074_002_MIGRATION: Final = Migration(
+    name="astralplane-074-quality-audit-ownership",
+    source_revisions=("074.001",),
+    target_revision="074.002",
+    checksum=_statements_checksum(PLANE_SCHEMA_074_002_STATEMENTS),
+    operation=_apply_plane_schema_074_002,
+)
+PLANE_SCHEMA_074_002_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "4ab0716557288b8721ea97b5ecea3b760d58b3539918b2e948341e90ff2d3fd1"
+)
+PLANE_SCHEMA_074_002_REGISTRY_DIGEST: Final = (
+    "1bb948074ec378d2a74e2b74eff29e72a6f9a6be03d3ae24ec6439fcf70f1e02"
+)
+if (
+    MigrationRegistry(
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+        ),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum=(
+            PLANE_SCHEMA_074_002_SCHEMA_VERIFIER_CHECKSUM
+        ),
+    ).digest
+    != PLANE_SCHEMA_074_002_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError(
+        "historical 074.002 migration registry no longer matches its pinned digest"
+    )
+PLANE_SCHEMA_074_003_MIGRATION: Final = Migration(
+    name="astralplane-074-current-runtime-contract",
+    source_revisions=("074.002",),
+    target_revision="074.003",
+    checksum=_statements_checksum(PLANE_SCHEMA_074_003_STATEMENTS),
+    operation=_apply_plane_schema_074_003,
+)
+PLANE_SCHEMA_074_003_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "36638e8a87aa5a516429fa4b4998ae3e72bd8d86d5b25cac4db5fb8ef2d2380e"
+)
+PLANE_SCHEMA_074_003_REGISTRY_DIGEST: Final = (
+    "ae0a3152c11ce711cbc8fbf8c3447d38abfe32db9d9d0fd5149e7e2c1c623296"
+)
+if (
+    MigrationRegistry(
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+            PLANE_SCHEMA_074_003_MIGRATION,
+        ),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum=(
+            PLANE_SCHEMA_074_003_SCHEMA_VERIFIER_CHECKSUM
+        ),
+    ).digest
+    != PLANE_SCHEMA_074_003_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError(
+        "historical 074.003 migration registry no longer matches its pinned digest"
+    )
+PLANE_SCHEMA_074_004_MIGRATION: Final = Migration(
+    name="astralplane-074-pending-attachment-materialization",
+    source_revisions=("074.003",),
+    target_revision="074.004",
+    checksum=_statements_checksum(PLANE_SCHEMA_074_004_STATEMENTS),
+    operation=_apply_plane_schema_074_004,
+)
+MIGRATION_REGISTRY: Final = MigrationRegistry(
+    (
+        PLANE_SCHEMA_067_MIGRATION,
+        PLANE_SCHEMA_074_MIGRATION,
+        PLANE_SCHEMA_074_002_MIGRATION,
+        PLANE_SCHEMA_074_003_MIGRATION,
+        PLANE_SCHEMA_074_004_MIGRATION,
+    ),
+    current_schema_verifier=_verify_current_plane_schema,
+    current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
+    predecessor_schema_verifier=_verify_predecessor_plane_schema,
+    predecessor_schema_verifier_checksum=PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+)
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="074.001",
-    read_compatible_from=("067.001",),
+    schema_revision="074.004",
+    read_compatible_from=(
+        "066.001",
+        "067.001",
+        "074.001",
+        "074.002",
+        "074.003",
+    ),
     migration_digest=MIGRATION_DIGEST,
-    accepted_predecessor_digests=(("067.001", PLANE_SCHEMA_067_REGISTRY_DIGEST),),
+    accepted_predecessor_digests=(
+        ("067.001", PLANE_SCHEMA_067_REGISTRY_DIGEST),
+        ("074.001", PLANE_SCHEMA_074_001_REGISTRY_DIGEST),
+        ("074.002", PLANE_SCHEMA_074_002_REGISTRY_DIGEST),
+        ("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),
+    ),
 )
 
 
 __all__ = (
     "CURRENT_DATA_PLANE_REVISION",
+    "CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
+    "CURRENT_SCHEMA_STRUCTURE_DIGEST",
+    "CURRENT_SCHEMA_STRUCTURE_QUERY",
+    "CURRENT_SCHEMA_VERIFICATION_STATEMENTS",
+    "CURRENT_SCHEMA_VERIFIER_CHECKSUM",
     "MIGRATION_DIGEST",
     "MIGRATION_REGISTRY",
     "PLANE_SCHEMA_067_MIGRATION",
     "PLANE_SCHEMA_067_STATEMENTS",
+    "PLANE_SCHEMA_074_001_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_074_002_MIGRATION",
+    "PLANE_SCHEMA_074_002_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_074_002_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_074_002_STATEMENTS",
+    "PLANE_SCHEMA_074_003_MIGRATION",
+    "PLANE_SCHEMA_074_003_STATEMENTS",
+    "PLANE_SCHEMA_074_004_MIGRATION",
+    "PLANE_SCHEMA_074_004_STATEMENTS",
+    "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
+    "PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
     "Migration",
     "MigrationRegistry",
     "MigrationReport",
