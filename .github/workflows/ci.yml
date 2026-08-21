@@ -19,6 +19,7 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v7.2.1
         with:
+          version: "0.11.26"
           python-version: "3.11"
       - run: uv lock --check
       - run: uv sync --frozen --group ci
@@ -51,6 +52,7 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v7.2.1
         with:
+          version: "0.11.26"
           python-version: "3.11"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6.0.2
         with:
@@ -74,6 +76,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6.0.2
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v7.2.1
         with:
+          version: "0.11.26"
           python-version: ${{ matrix.python-version }}
       - run: uv lock --check
       - run: uv build --build-constraints tooling/python-ci/build-requirements.lock.txt --require-hashes

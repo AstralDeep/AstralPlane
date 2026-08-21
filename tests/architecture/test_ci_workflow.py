@@ -14,6 +14,7 @@ BUILD_REQUIREMENTS_PATH = (
 
 CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+SETUP_UV_VERSION = "0.11.26"
 POSTGRES_IMAGE = (
     "postgres:17-alpine@"
     "sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4"
@@ -97,6 +98,15 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
     assert CHECKOUT_ACTION in uses
     assert SETUP_UV_ACTION in uses
+
+    for owner_job in OWNER_JOBS:
+        setup_uv_steps = re.findall(
+            rf"(?m)^      - uses: {re.escape(SETUP_UV_ACTION)}[^\n]*\n"
+            r"((?:^        .*\n?)*)",
+            jobs[owner_job],
+        )
+        assert len(setup_uv_steps) == 1
+        assert f'          version: "{SETUP_UV_VERSION}"' in setup_uv_steps[0]
 
 
 def test_quality_job_runs_locked_source_and_architecture_gates() -> None:
