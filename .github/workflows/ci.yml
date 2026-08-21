@@ -1,0 +1,101 @@
+name: AstralPlane CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.26"
+          python-version: "3.11"
+      - run: uv lock --check
+      - run: uv sync --frozen --group ci
+      - run: uv run --frozen --group ci ruff check .
+      - run: uv run --frozen --group ci python tests/architecture/test_dependency_direction.py
+
+  postgresql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ASTRALPLANE_TEST_POSTGRES_DSN: postgresql://astralplane:astralplane_ci@127.0.0.1:5432/astralplane
+      ASTRALDEEP_SOURCE_REPO: ${{ github.workspace }}/source-deep
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4
+        env:
+          POSTGRES_USER: astralplane
+          POSTGRES_PASSWORD: astralplane_ci
+          POSTGRES_DB: astralplane
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U astralplane -d astralplane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.26"
+          python-version: "3.11"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AstralDeep/AstralDeep
+          ref: fc113c4f99121b2053bb71523835c5c4743f1f56
+          path: source-deep
+      - run: uv sync --frozen --group ci
+      - name: Run the complete Python suite against PostgreSQL
+        run: |
+          uv run --frozen --group ci pytest -q -p no:cacheprovider \
+            --cov=astralplane --cov-branch --cov-report=xml --cov-fail-under=88.75
+      - run: uv run --frozen --group ci diff-cover coverage.xml --compare-branch origin/main --fail-under=90
+
+  package-compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.26"
+          python-version: ${{ matrix.python-version }}
+      - run: uv lock --check
+      - run: uv build --build-constraints tooling/python-ci/build-requirements.lock.txt --require-hashes
+      - name: Install and import the wheel in a clean environment
+        shell: bash
+        run: |
+          uv venv --python "${{ matrix.python-version }}" --seed .package-smoke
+          .package-smoke/bin/python -m pip install --no-deps dist/*.whl
+          .package-smoke/bin/python -c "import astralplane; assert astralplane.CONTRACT_VERSION == 'astralplane.contract/v1'"
+
+  gates:
+    if: always()
+    needs: [quality, postgresql, package-compatibility]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every owner gate
+        shell: bash
+        run: |
+          [[ '${{ needs.quality.result }}' == 'success' ]]
+          [[ '${{ needs.postgresql.result }}' == 'success' ]]
+          [[ '${{ needs['package-compatibility'].result }}' == 'success' ]]
