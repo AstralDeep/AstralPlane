@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools==80.10.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,6 +18,15 @@ classifiers = [
 
 [project.urls]
 Repository = "https://github.com/AstralDeep/AstralPlane"
+
+[dependency-groups]
+ci = [
+  "diff-cover==10.3.0",
+  "pytest==8.4.2",
+  "pytest-asyncio==1.3.0",
+  "pytest-cov==7.0.0",
+  "ruff==0.15.21",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

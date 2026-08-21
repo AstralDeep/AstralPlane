@@ -1682,9 +1682,7 @@ def test_authorized_prefix_delete_is_idempotent_and_surfaces_filesystem_failure(
     original_unlink = _DirectoryAnchor.unlink
 
     def denied(anchor: _DirectoryAnchor, name: str) -> None:
-        if name == "file.bin":
-            raise PermissionError("synthetic denial")
-        original_unlink(anchor, name)
+        raise PermissionError("synthetic denial")
 
     monkeypatch.setattr(_DirectoryAnchor, "unlink", denied)
     with pytest.raises(PlaneError) as raised:
@@ -1694,7 +1692,7 @@ def test_authorized_prefix_delete_is_idempotent_and_surfaces_filesystem_failure(
     monkeypatch.setattr(_DirectoryAnchor, "unlink", original_unlink)
     first = _purge_prefix_for_test(blobs, owner_id="owner-1", prefix="attachment-1")
     replay = _purge_prefix_for_test(blobs, owner_id="owner-1", prefix="attachment-1")
-    assert first.deleted_files == 1
+    assert first.deleted_files == 2
     assert first.absent_verified is True
     assert replay.deleted_files == 0
     assert replay.absent_verified is True

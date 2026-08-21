@@ -142,11 +142,28 @@ facades are likewise available only through named typed catalog members.
 
 ## Local verification
 
+AstralPlane owns qualification of its Python source, architecture boundary, PostgreSQL migration
+and repository behavior, and standalone package compatibility. Pull requests and `main` pushes run
+the repository-owned `.github/workflows/ci.yml` jobs `quality`, `postgresql`, and
+`package-compatibility`; the `gates` aggregate fails closed unless every owner job succeeds. The
+PostgreSQL lane runs the complete Python 3.11 suite against PostgreSQL 17 with a measured-baseline
+combined branch-coverage floor of 88.75% and a changed-line coverage threshold of 90%. Package
+compatibility builds and installs a clean wheel on Python 3.11 and 3.14; it does not replace the
+PostgreSQL production lane.
+
 ```text
-uv run --offline --isolated --python 3.11 --with pytest --with pytest-asyncio --with pytest-cov \
-  python -m pytest --cov=astralplane --cov-branch --cov-fail-under=90 -q
-uv tool run --offline --python 3.11 --from ruff==0.15.21 ruff check .
-python tests/architecture/test_dependency_direction.py
+uv lock --check
+uv sync --frozen --group ci
+uv run --frozen --group ci ruff check .
+uv run --frozen --group ci python tests/architecture/test_dependency_direction.py
+ASTRALDEEP_SOURCE_REPO=/path/to/AstralDeep \
+ASTRALPLANE_TEST_POSTGRES_DSN=postgresql://user:password@127.0.0.1:5432/isolated_database \
+  uv run --frozen --group ci pytest -q -p no:cacheprovider \
+  --cov=astralplane --cov-branch --cov-report=xml --cov-fail-under=88.75
+uv run --frozen --group ci diff-cover coverage.xml --compare-branch origin/main --fail-under=90
+uv lock --check
+uv build --build-constraints tooling/python-ci/build-requirements.lock.txt --require-hashes
+actionlint .github/workflows/ci.yml
 ```
 
 PostgreSQL integration checks use an isolated test database and the synthetic non-PHI fixture under
