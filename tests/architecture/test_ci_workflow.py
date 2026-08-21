@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ BUILD_REQUIREMENTS_PATH = (
 )
 
 CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+WRONG_CHECKOUT_ACTION = "actions/checkout@1111111111111111111111111111111111111111"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
 SETUP_UV_VERSION = "0.11.26"
 POSTGRES_IMAGE = (
@@ -99,8 +101,12 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
     uses = re.findall(r"^\s*- uses:\s*([^\s#]+)", text, flags=re.MULTILINE)
     assert uses
     assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
-    assert CHECKOUT_ACTION in uses
-    assert SETUP_UV_ACTION in uses
+    assert Counter(uses) == Counter(
+        {
+            CHECKOUT_ACTION: 4,
+            SETUP_UV_ACTION: len(OWNER_JOBS),
+        }
+    )
     setup_uv_uses = [action for action in uses if action.startswith("astral-sh/setup-uv@")]
     assert setup_uv_uses == [SETUP_UV_ACTION] * len(OWNER_JOBS)
 
@@ -122,7 +128,7 @@ def test_owner_workflow_rejects_setup_uv_outside_expected_jobs(
     mutated = text.replace(
         gates_step,
         "    steps:\n"
-        f"      - uses: {SETUP_UV_ACTION} # v7.2.1\n"
+        f"      - uses: {SETUP_UV_ACTION} # v9.0.0\n"
         "      - name: Require every owner gate",
         1,
     )
@@ -149,6 +155,21 @@ def test_owner_workflow_rejects_split_line_setup_uv_step(
         1,
     )
     assert mutated != text
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_owner_workflow_is_active_pinned_and_read_only()
+
+
+def test_owner_workflow_rejects_wrong_checkout_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _workflow_text()
+    mutated = text.replace(CHECKOUT_ACTION, WRONG_CHECKOUT_ACTION, 1)
+    assert mutated != text
+    assert mutated.count(WRONG_CHECKOUT_ACTION) == 1
     mutated_path = tmp_path / "ci.yml"
     mutated_path.write_text(mutated, encoding="utf-8")
     monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
