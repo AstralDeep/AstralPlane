@@ -6,6 +6,7 @@ import pytest
 from _support import ScriptedTransaction
 
 from astralplane.errors import PlaneError
+from astralplane.repositories import RepositoryValidationError
 from astralplane.repositories.voice import (
     VoiceRepository,
     VoiceSessionCreate,
@@ -24,6 +25,7 @@ def session_create(**overrides: object) -> VoiceSessionCreate:
         "activation_id": "activation-1",
         "device_id": "device-1",
         "device_kind": "web",
+        "speech_backend": "llm_factory",
         "transport": "livekit",
         "room_name": "room-1",
         "participant_identity": "participant-1",
@@ -48,6 +50,7 @@ def session_row(**overrides: object) -> dict[str, object]:
         "activation_id": "activation-1",
         "device_id": "device-1",
         "device_kind": "web",
+        "speech_backend": "llm_factory",
         "transport": "livekit",
         "room_name": "room-1",
         "participant_identity": "participant-1",
@@ -62,6 +65,13 @@ def session_row(**overrides: object) -> dict[str, object]:
         "media_grant_nonce_hash": b"n" * 32,
         "media_grant_issued_at": NOW,
         "media_grant_expires_at": NOW + timedelta(seconds=30),
+        "media_grant_consumed_at": None,
+        "last_media_refresh_id": None,
+        "worker_identity": None,
+        "worker_assignment_id": None,
+        "worker_rtc_grant_revision": 1,
+        "worker_rtc_grant_issued_at": None,
+        "worker_rtc_grant_expires_at": None,
         "started_at": NOW,
         "updated_at": NOW,
         "ended_at": None,
@@ -132,6 +142,66 @@ def test_session_metadata_validation(changes: dict[str, object]) -> None:
         session_create(**changes)
 
 
+def test_client_local_session_metadata_has_no_remote_media_fields() -> None:
+    created = session_create(
+        speech_backend="client_local",
+        transport="client_local",
+        room_name=None,
+        participant_identity=None,
+        media_grant_nonce_hash=None,
+        media_grant_issued_at=None,
+        media_grant_expires_at=None,
+    )
+
+    assert created.speech_backend == "client_local"
+    assert created.transport == "client_local"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"speech_backend": "remote"},
+        {"speech_backend": "llm_factory", "transport": "client_local"},
+        {"speech_backend": "client_local", "transport": "livekit"},
+        {
+            "speech_backend": "client_local",
+            "transport": "client_local",
+            "room_name": "remote-room",
+            "participant_identity": None,
+            "media_grant_nonce_hash": None,
+            "media_grant_issued_at": None,
+            "media_grant_expires_at": None,
+        },
+        {
+            "speech_backend": "client_local",
+            "transport": "client_local",
+            "room_name": None,
+            "participant_identity": "remote-participant",
+            "media_grant_nonce_hash": None,
+            "media_grant_issued_at": None,
+            "media_grant_expires_at": None,
+        },
+        {
+            "speech_backend": "client_local",
+            "transport": "client_local",
+            "room_name": None,
+            "participant_identity": None,
+            "media_grant_nonce_hash": b"n" * 32,
+            "media_grant_issued_at": None,
+            "media_grant_expires_at": None,
+        },
+        {"speech_backend": "llm_factory", "room_name": None},
+        {"speech_backend": "llm_factory", "participant_identity": None},
+        {"speech_backend": "llm_factory", "media_grant_nonce_hash": None},
+        {"speech_backend": "llm_factory", "media_grant_issued_at": None},
+        {"speech_backend": "llm_factory", "media_grant_expires_at": None},
+    ],
+)
+def test_session_metadata_rejects_mixed_backend_fields(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="speech backend"):
+        session_create(**changes)
+
+
 def test_create_session_is_idempotent_and_owner_scoped() -> None:
     repository = VoiceRepository()
     created = repository.create_session(ScriptedTransaction(one=[session_row()]), session_create())
@@ -149,12 +219,98 @@ def test_create_session_is_idempotent_and_owner_scoped() -> None:
     assert raised.value.code == "voice_session_idempotency_conflict"
 
 
+def test_create_and_read_client_local_session_preserve_immutable_backend() -> None:
+    create = session_create(
+        speech_backend="client_local",
+        transport="client_local",
+        room_name=None,
+        participant_identity=None,
+        media_grant_nonce_hash=None,
+        media_grant_issued_at=None,
+        media_grant_expires_at=None,
+    )
+    row = session_row(
+        speech_backend="client_local",
+        transport="client_local",
+        room_name=None,
+        participant_identity=None,
+        worker_identity=None,
+        media_grant_nonce_hash=None,
+        media_grant_issued_at=None,
+        media_grant_expires_at=None,
+        media_grant_consumed_at=None,
+        last_media_refresh_id=None,
+        worker_assignment_id=None,
+        worker_rtc_grant_revision=None,
+        worker_rtc_grant_issued_at=None,
+        worker_rtc_grant_expires_at=None,
+    )
+    transaction = ScriptedTransaction(one=[row])
+
+    created = VoiceRepository().create_session(transaction, create)
+
+    assert created.speech_backend == "client_local"
+    assert created.transport == "client_local"
+    assert transaction.calls[0][2][5:10] == (
+        "client_local",
+        "client_local",
+        None,
+        None,
+        "chat-1",
+    )
+
+
+def test_session_read_rejects_mixed_persisted_backend_shape() -> None:
+    with pytest.raises(RepositoryValidationError, match="speech backend"):
+        VoiceRepository().get_session(
+            ScriptedTransaction(
+                one=[
+                    session_row(
+                        speech_backend="client_local",
+                        transport="client_local",
+                        room_name="remote-room",
+                    )
+                ]
+            ),
+            owner_id="owner-1",
+            session_id="session-1",
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"media_grant_nonce_hash": b"short"},
+        {"media_grant_expires_at": NOW},
+        {"media_grant_consumed_at": NOW - timedelta(seconds=1)},
+        {"worker_identity": "worker-1"},
+        {
+            "worker_identity": "worker-1",
+            "worker_assignment_id": "assignment-1",
+            "worker_rtc_grant_issued_at": NOW + timedelta(seconds=2),
+            "worker_rtc_grant_expires_at": NOW + timedelta(seconds=1),
+        },
+    ],
+)
+def test_session_read_rejects_malformed_remote_backend_shape(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(RepositoryValidationError, match="speech backend"):
+        VoiceRepository().get_session(
+            ScriptedTransaction(one=[session_row(**overrides)]),
+            owner_id="owner-1",
+            session_id="session-1",
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("session_id", "session-2"),
         ("user_id", "owner-2"),
         ("activation_id", "activation-2"),
+        ("speech_backend", "client_local"),
+        ("transport", "watch_pcm_websocket"),
         ("room_name", "room-2"),
         ("participant_identity", "participant-2"),
         ("control_binding_id", "binding-2"),

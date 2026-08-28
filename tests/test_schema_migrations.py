@@ -403,6 +403,77 @@ def test_partially_applied_repeat_safe_ddl_recovers_from_the_old_marker() -> Non
     assert database.metadata["revision"] == "066.001"
 
 
+def _speech_backend_075_runner(database: FakeDatabase) -> MigrationRunner:
+    registry = MigrationRegistry(
+        (
+            Migration(
+                name="074-004-to-075-001",
+                source_revisions=("074.004",),
+                target_revision="075.001",
+                checksum=_checksum("074-004-to-075-001"),
+                operation=_add_object("voice-speech-backend"),
+            ),
+        ),
+        current_schema_verifier=_verify_objects("voice-speech-backend"),
+        current_schema_verifier_checksum=_checksum("verify-voice-speech-backend"),
+    )
+    revision = DataPlaneRevision(
+        schema_revision="075.001",
+        read_compatible_from=("074.004",),
+        migration_digest=registry.digest,
+        accepted_predecessor_digests=(("074.004", _checksum("074.004-registry")),),
+    )
+    return MigrationRunner(database, revision=revision, registry=registry)  # type: ignore[arg-type]
+
+
+def test_075_requires_the_exact_074_004_registry_digest() -> None:
+    database = FakeDatabase(
+        revision="074.004",
+        digest="f" * 64,
+        objects={"legacy-voice-turn"},
+    )
+
+    with pytest.raises(SchemaRevisionError, match="unrecognized migration-set digest"):
+        _speech_backend_075_runner(database).run(expected_revision="075.001")
+
+    assert database.objects == {"legacy-voice-turn"}
+    assert database.metadata["revision"] == "074.004"
+
+
+def test_075_upgrade_and_repeat_preserve_predecessor_objects() -> None:
+    database = FakeDatabase(
+        revision="074.004",
+        digest=_checksum("074.004-registry"),
+        objects={"legacy-voice-turn"},
+    )
+    runner = _speech_backend_075_runner(database)
+
+    first = runner.run(expected_revision="075.001")
+    second = runner.run(expected_revision="075.001")
+
+    assert first.applied_steps == ("074-004-to-075-001",)
+    assert second.already_current
+    assert database.objects == {"legacy-voice-turn", "voice-speech-backend"}
+    assert database.metadata == {
+        "revision": "075.001",
+        "astralplane_migration_digest": first.migration_digest,
+    }
+
+
+def test_075_forward_recovery_accepts_repeat_safe_partial_ddl() -> None:
+    database = FakeDatabase(
+        revision="074.004",
+        digest=_checksum("074.004-registry"),
+        objects={"legacy-voice-turn", "voice-speech-backend"},
+    )
+
+    report = _speech_backend_075_runner(database).run(expected_revision="075.001")
+
+    assert report.applied_steps == ("074-004-to-075-001",)
+    assert database.objects == {"legacy-voice-turn", "voice-speech-backend"}
+    assert database.metadata["revision"] == "075.001"
+
+
 def test_incompatible_revision_is_rejected_without_mutation() -> None:
     database = FakeDatabase(revision="064.001", objects={"legacy"})
     before = (dict(database.metadata), set(database.objects))

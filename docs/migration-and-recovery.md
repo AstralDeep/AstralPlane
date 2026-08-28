@@ -45,8 +45,8 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004`; every edge required for one run
-commits in the same transaction. Before the first write, the runner compares the exact source
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001`; every edge required
+for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
 a damaged predecessor. The `067.001` edge adds transactional outbox, audit-retention
@@ -75,6 +75,37 @@ to manual review. It drops the lifecycle default after backfill so a stale basel
 fails closed. Partial lifecycle namesakes, noncanonical legacy READY locators, case aliases, or
 incompatible owner-state objects fail before any mutation or revision stamp.
 
+The `075.001` edge requires the exact `074.004` predecessor revision, historical registry digest,
+and attested catalog. Under closed admission it adds nullable `voice_session.speech_backend`,
+backfills every predecessor session to `llm_factory`, then makes the discriminator non-null. Only
+after verifying the exact predecessor transport, identity, revision, media-grant, and worker-grant
+constraints does it replace them. Remote-only columns become conditionally nullable: an
+`llm_factory` row retains a `livekit|watch_pcm_websocket` transport and complete bounded remote
+media/grant shape, while a `client_local` row uses only the `client_local` transport and carries no
+room, participant, worker, media-grant, or worker-grant metadata. Backend and transport remain
+immutable repository identities. Voice turns are unchanged and remain bound to their parent
+session; no audio, transcript, digest, proof, local-engine, or capability field is added.
+
+### `075.001` deployment profile
+
+1. Quiesce voice admission and drain or end every active session; keep all other writers closed
+   under the normal maintenance procedure.
+2. Record and verify the exact `074.004` revision/digest and create the paired PostgreSQL and
+   durable-root backup described above.
+3. Apply the pinned Plane candidate and verify `075.001`, its exact migration digest, the current
+   structural verifier, every predecessor session backfilled as `llm_factory`, and preserved voice
+   turns.
+4. Start the candidate with the product selector still set to `llm_factory`; run the ordinary
+   authenticated remote LiveKit/watch smoke before reopening that profile.
+5. Qualify `client_local` separately in a candidate environment: create a local-profile session,
+   confirm every remote-only database field is null, and exercise ordinary authenticated dispatch
+   while remote speech media endpoints are blocked. Do not infer local execution from the database
+   discriminator alone.
+6. If validation fails before traffic reopens, prefer a guarded forward repair. Otherwise keep
+   writers quiescent and restore the verified pre-upgrade PostgreSQL and durable-root snapshots as
+   one unit with the prior application. Never run inferred down-SQL or rewrite `client_local` rows
+   into a predecessor shape.
+
 An authority provisioning row uses deterministic `pending:<field>:<32hex>` remote identities and
 zero lease metadata until a compare-and-set activation supplies the issued LETS identities. That
 pending shape is valid only while `provisioning` or after an unissued attempt is durably `closed`;
@@ -87,7 +118,8 @@ any other non-empty database must carry a known revision and every required base
 partial or unknown schema fails closed without being overwritten. A `067.001` predecessor must
 carry the pinned historical registry digest, and a `074.001` predecessor must carry its pinned
 full-path digest, and a `074.002` predecessor must carry its pinned historical digest. A current
-`074.004` marker and digest are still insufficient on their own. The verifier binds the owned
+`074.004` predecessor must carry its pinned historical digest. A current `075.001` marker and
+digest are still insufficient on their own. The verifier binds the owned
 schema owner/ACL and the behavior, durability, authorization, namespace, dependency, and lifecycle
 shape of all Plane-owned tables, columns, sequences, constraints, indexes, functions, triggers,
 policies, rules, and inheritance edges after a transition and on every already-current startup. A
@@ -180,8 +212,8 @@ maintenance window has been verified:
    paired blob/workspace root into new explicit destinations without following links.
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
-   `074.001`, `074.002`, and `074.003` states must have their exact declared digests and pinned
-   predecessor catalog shape; `074.004` must also pass the current structural verifier.
+   `074.001`, `074.002`, `074.003`, and `074.004` states must have their exact declared digests and
+   pinned predecessor catalog shape; `075.001` must also pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the

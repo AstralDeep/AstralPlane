@@ -104,6 +104,7 @@ from astralplane.database.pool import ConnectionPool
 from astralplane.database.revision import (
     ADVISORY_LOCK_IDS,
     READ_COMPATIBLE_FROM,
+    SCHEMA_PREDECESSOR_REVISION,
     SCHEMA_REVISION,
     DataPlaneRevision,
 )
@@ -194,6 +195,7 @@ __all__ = (
     "READ_COMPATIBLE_FROM",
     "RECONCILIATION_ADVISORY_LOCK",
     "RECOVERY_CONTRACT_VERSION",
+    "SCHEMA_PREDECESSOR_REVISION",
     "SCHEMA_REVISION",
     "AdmissionClass",
     "AgentRevisionRecord",
