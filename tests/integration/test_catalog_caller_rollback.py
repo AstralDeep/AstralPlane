@@ -949,6 +949,7 @@ def _write_voice(catalog: api.RepositoryCatalog, transaction: Transaction) -> No
             device_id="74000000-0000-4000-8000-000000000014",
             device_kind="web",
             transport="livekit",
+            speech_backend="llm_factory",
             room_name="rollback-room",
             participant_identity="rollback-participant",
             visible_chat_id=_SUPPORT_CHAT,
