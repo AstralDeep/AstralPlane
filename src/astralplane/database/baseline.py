@@ -21,7 +21,15 @@ BASELINE_MIGRATION_NAME: Final = "astralplane-066-fresh-install-baseline"
 
 _SCHEMA_MIGRATION_LOCK: Final = ADVISORY_LOCK_IDS[0]
 _KNOWN_REVISIONS: Final = frozenset(
-    {BASELINE_REVISION, "067.001", "074.001", "074.002", "074.003", "074.004"}
+    {
+        BASELINE_REVISION,
+        "067.001",
+        "074.001",
+        "074.002",
+        "074.003",
+        "074.004",
+        "075.001",
+    }
 )
 _SCHEMA_META_TABLE: Final = "schema_meta"
 _SCHEMA_META_REVISION: Final = "revision"

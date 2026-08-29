@@ -2715,6 +2715,331 @@ PLANE_SCHEMA_074_004_STATEMENTS: Final = (
     """.strip(),
 )
 
+PLANE_SCHEMA_075_STATEMENTS: Final = (
+    """
+DO $astralplane_075_clean_predecessor$
+DECLARE
+    observed_revision TEXT;
+    invalid_object TEXT;
+BEGIN
+    SELECT value INTO observed_revision
+    FROM schema_meta
+    WHERE key = 'revision';
+    IF observed_revision IS DISTINCT FROM '074.004' THEN
+        RAISE EXCEPTION '075.001 requires a clean 074.004 predecessor; found %',
+            COALESCE(observed_revision, '<empty>') USING ERRCODE = '42P16';
+    END IF;
+    IF to_regclass('voice_session') IS NULL THEN
+        RAISE EXCEPTION '075.001 requires the voice_session predecessor table'
+            USING ERRCODE = '42P16';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_attribute
+        WHERE attrelid = 'voice_session'::regclass
+          AND attname = 'speech_backend'
+          AND attnum > 0
+          AND NOT attisdropped
+    ) THEN
+        RAISE EXCEPTION '075.001 requires speech_backend to be absent from 074.004'
+            USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+    INTO invalid_object
+    FROM (
+        VALUES
+            ('transport', 'text'::regtype::oid, TRUE),
+            ('room_name', 'text'::regtype::oid, TRUE),
+            ('participant_identity', 'text'::regtype::oid, TRUE),
+            ('worker_identity', 'text'::regtype::oid, FALSE),
+            ('media_grant_nonce_hash', 'bytea'::regtype::oid, TRUE),
+            ('media_grant_expires_at', 'timestamptz'::regtype::oid, TRUE),
+            ('media_grant_consumed_at', 'timestamptz'::regtype::oid, FALSE),
+            ('last_media_refresh_id', 'uuid'::regtype::oid, FALSE),
+            ('media_grant_issued_at', 'timestamptz'::regtype::oid, TRUE),
+            ('worker_assignment_id', 'uuid'::regtype::oid, FALSE),
+            ('worker_rtc_grant_revision', 'int8'::regtype::oid, TRUE),
+            ('worker_rtc_grant_issued_at', 'timestamptz'::regtype::oid, FALSE),
+            ('worker_rtc_grant_expires_at', 'timestamptz'::regtype::oid, FALSE)
+    ) AS required(column_name, type_oid, not_null)
+    LEFT JOIN pg_attribute AS attribute
+      ON attribute.attrelid = 'voice_session'::regclass
+     AND attribute.attname = required.column_name
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped
+    WHERE attribute.attname IS NULL
+       OR attribute.atttypid <> required.type_oid
+       OR attribute.attnotnull <> required.not_null;
+    IF invalid_object IS NOT NULL THEN
+        RAISE EXCEPTION '075.001 voice predecessor columns are incompatible: %',
+            invalid_object USING ERRCODE = '42P16';
+    END IF;
+
+    IF (
+        SELECT pg_get_expr(default_record.adbin, default_record.adrelid, TRUE)
+        FROM pg_attribute AS attribute
+        LEFT JOIN pg_attrdef AS default_record
+          ON default_record.adrelid = attribute.attrelid
+         AND default_record.adnum = attribute.attnum
+        WHERE attribute.attrelid = 'voice_session'::regclass
+          AND attribute.attname = 'worker_rtc_grant_revision'
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+    ) IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION '075.001 worker grant revision predecessor is incompatible'
+            USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT string_agg(required.constraint_name, ', ' ORDER BY required.constraint_name)
+    INTO invalid_object
+    FROM (
+        VALUES
+            ('voice_session_transport_check',
+             '0420e327861bd7015033af7aa2d7c7af'),
+            ('voice_session_identity_065_check',
+             '06316b7e99a1b1a3b0bd0a9efbb13c97'),
+            ('voice_session_revisions_065_check',
+             '862dce9f94228085078b2b262125787d'),
+            ('voice_session_media_grant_065_check',
+             'd3c2516b0392df7259346adb34771135'),
+            ('voice_session_worker_grant_065_check',
+             '71cfd36a2a3b22c427388ed8f1d07a04')
+    ) AS required(constraint_name, expression_md5)
+    LEFT JOIN pg_constraint AS constraint_record
+      ON constraint_record.conrelid = 'voice_session'::regclass
+     AND constraint_record.conname = required.constraint_name
+     AND constraint_record.contype = 'c'
+    WHERE constraint_record.oid IS NULL
+       OR NOT constraint_record.convalidated
+       OR md5(pg_get_expr(
+            constraint_record.conbin,
+            constraint_record.conrelid,
+            TRUE
+       )) <> required.expression_md5;
+    IF invalid_object IS NOT NULL THEN
+        RAISE EXCEPTION '075.001 voice predecessor constraints are incompatible: %',
+            invalid_object USING ERRCODE = '42P16';
+    END IF;
+END
+$astralplane_075_clean_predecessor$
+""".strip(),
+    "ALTER TABLE voice_session ADD COLUMN IF NOT EXISTS speech_backend TEXT",
+    "UPDATE voice_session SET speech_backend = 'llm_factory' WHERE speech_backend IS NULL",
+    "ALTER TABLE voice_session ALTER COLUMN speech_backend SET NOT NULL",
+    """
+ALTER TABLE voice_session
+    ALTER COLUMN room_name DROP NOT NULL,
+    ALTER COLUMN participant_identity DROP NOT NULL,
+    ALTER COLUMN media_grant_nonce_hash DROP NOT NULL,
+    ALTER COLUMN media_grant_expires_at DROP NOT NULL,
+    ALTER COLUMN media_grant_issued_at DROP NOT NULL,
+    ALTER COLUMN worker_rtc_grant_revision DROP NOT NULL,
+    ALTER COLUMN worker_rtc_grant_revision DROP DEFAULT
+""".strip(),
+    """
+DO $astralplane_075_constraints$
+BEGIN
+    ALTER TABLE voice_session
+        DROP CONSTRAINT voice_session_transport_check;
+    ALTER TABLE voice_session
+        DROP CONSTRAINT voice_session_identity_065_check;
+    ALTER TABLE voice_session
+        DROP CONSTRAINT voice_session_revisions_065_check;
+    ALTER TABLE voice_session
+        DROP CONSTRAINT voice_session_media_grant_065_check;
+    ALTER TABLE voice_session
+        DROP CONSTRAINT voice_session_worker_grant_065_check;
+
+    ALTER TABLE voice_session
+        ADD CONSTRAINT voice_session_identity_075_check CHECK (
+            length(btrim(user_id)) BETWEEN 1 AND 512
+            AND (
+                worker_identity IS NULL
+                OR length(worker_identity) BETWEEN 1 AND 255
+            )
+            AND length(visible_chat_id) BETWEEN 1 AND 255
+            AND (
+                control_owner_id IS NULL
+                OR length(control_owner_id) BETWEEN 1 AND 128
+            )
+        ) NOT VALID;
+    ALTER TABLE voice_session
+        ADD CONSTRAINT voice_session_revisions_075_check CHECK (
+            generation >= 1
+            AND media_grant_revision >= 1
+            AND chat_context_revision >= 1
+            AND (
+                (
+                    applied_visible_chat_id IS NULL
+                    AND applied_chat_context_revision IS NULL
+                )
+                OR (
+                    applied_visible_chat_id IS NOT NULL
+                    AND length(applied_visible_chat_id) BETWEEN 1 AND 255
+                    AND applied_chat_context_revision IS NOT NULL
+                    AND applied_chat_context_revision BETWEEN 1
+                        AND chat_context_revision
+                )
+            )
+        ) NOT VALID;
+    ALTER TABLE voice_session
+        ADD CONSTRAINT voice_session_speech_backend_075_check CHECK (
+            (
+                speech_backend = 'llm_factory'
+                AND transport IN ('livekit', 'watch_pcm_websocket')
+                AND room_name IS NOT NULL
+                AND length(room_name) BETWEEN 1 AND 255
+                AND participant_identity IS NOT NULL
+                AND length(participant_identity) BETWEEN 1 AND 255
+                AND media_grant_nonce_hash IS NOT NULL
+                AND octet_length(media_grant_nonce_hash) = 32
+                AND media_grant_issued_at IS NOT NULL
+                AND media_grant_expires_at IS NOT NULL
+                AND media_grant_expires_at > media_grant_issued_at
+                AND (
+                    media_grant_consumed_at IS NULL
+                    OR media_grant_consumed_at >= media_grant_issued_at
+                )
+                AND worker_rtc_grant_revision IS NOT NULL
+                AND worker_rtc_grant_revision >= 1
+                AND (
+                    (
+                        worker_identity IS NULL
+                        AND worker_assignment_id IS NULL
+                        AND worker_rtc_grant_issued_at IS NULL
+                        AND worker_rtc_grant_expires_at IS NULL
+                    )
+                    OR (
+                        worker_identity IS NOT NULL
+                        AND worker_assignment_id IS NOT NULL
+                        AND worker_rtc_grant_issued_at IS NOT NULL
+                        AND worker_rtc_grant_expires_at IS NOT NULL
+                        AND worker_rtc_grant_expires_at
+                            > worker_rtc_grant_issued_at
+                    )
+                )
+            )
+            OR (
+                speech_backend = 'client_local'
+                AND transport = 'client_local'
+                AND room_name IS NULL
+                AND participant_identity IS NULL
+                AND worker_identity IS NULL
+                AND media_grant_nonce_hash IS NULL
+                AND media_grant_expires_at IS NULL
+                AND media_grant_consumed_at IS NULL
+                AND last_media_refresh_id IS NULL
+                AND media_grant_issued_at IS NULL
+                AND worker_assignment_id IS NULL
+                AND worker_rtc_grant_revision IS NULL
+                AND worker_rtc_grant_issued_at IS NULL
+                AND worker_rtc_grant_expires_at IS NULL
+            )
+        ) NOT VALID;
+
+    ALTER TABLE voice_session
+        VALIDATE CONSTRAINT voice_session_identity_075_check;
+    ALTER TABLE voice_session
+        VALIDATE CONSTRAINT voice_session_revisions_075_check;
+    ALTER TABLE voice_session
+        VALIDATE CONSTRAINT voice_session_speech_backend_075_check;
+END
+$astralplane_075_constraints$
+""".strip(),
+    """
+DO $astralplane_075_postcondition$
+DECLARE
+    invalid_object TEXT;
+BEGIN
+    SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+    INTO invalid_object
+    FROM (
+        VALUES
+            ('speech_backend', 'text'::regtype::oid, TRUE),
+            ('transport', 'text'::regtype::oid, TRUE),
+            ('room_name', 'text'::regtype::oid, FALSE),
+            ('participant_identity', 'text'::regtype::oid, FALSE),
+            ('media_grant_nonce_hash', 'bytea'::regtype::oid, FALSE),
+            ('media_grant_expires_at', 'timestamptz'::regtype::oid, FALSE),
+            ('media_grant_issued_at', 'timestamptz'::regtype::oid, FALSE),
+            ('worker_rtc_grant_revision', 'int8'::regtype::oid, FALSE)
+    ) AS required(column_name, type_oid, not_null)
+    LEFT JOIN pg_attribute AS attribute
+      ON attribute.attrelid = 'voice_session'::regclass
+     AND attribute.attname = required.column_name
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped
+    WHERE attribute.attname IS NULL
+       OR attribute.atttypid <> required.type_oid
+       OR attribute.attnotnull <> required.not_null;
+    IF invalid_object IS NOT NULL THEN
+        RAISE EXCEPTION 'voice speech backend columns are incompatible: %',
+            invalid_object USING ERRCODE = '42P16';
+    END IF;
+
+    IF (
+        SELECT pg_get_expr(default_record.adbin, default_record.adrelid, TRUE)
+        FROM pg_attribute AS attribute
+        LEFT JOIN pg_attrdef AS default_record
+          ON default_record.adrelid = attribute.attrelid
+         AND default_record.adnum = attribute.attnum
+        WHERE attribute.attrelid = 'voice_session'::regclass
+          AND attribute.attname = 'worker_rtc_grant_revision'
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+    ) IS NOT NULL THEN
+        RAISE EXCEPTION 'voice worker grant revision default is incompatible'
+            USING ERRCODE = '42P16';
+    END IF;
+
+    SELECT string_agg(required.constraint_name, ', ' ORDER BY required.constraint_name)
+    INTO invalid_object
+    FROM (
+        VALUES
+            ('voice_session_identity_075_check',
+             'eb4bb8a941e65dea22304fc9cf908d0d'),
+            ('voice_session_revisions_075_check',
+             'd081758b7eaf338f8c9c7d87c79bcfbe'),
+            ('voice_session_speech_backend_075_check',
+             'e229755e487ab22f36039c3efec82204')
+    ) AS required(constraint_name, expression_md5)
+    LEFT JOIN pg_constraint AS constraint_record
+      ON constraint_record.conrelid = 'voice_session'::regclass
+     AND constraint_record.conname = required.constraint_name
+     AND constraint_record.contype = 'c'
+    WHERE constraint_record.oid IS NULL
+       OR NOT constraint_record.convalidated
+       OR md5(pg_get_expr(
+            constraint_record.conbin,
+            constraint_record.conrelid,
+            TRUE
+       )) <> required.expression_md5;
+    IF invalid_object IS NOT NULL THEN
+        RAISE EXCEPTION 'voice speech backend constraint is incompatible: %',
+            invalid_object USING ERRCODE = '42P16';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'voice_session'::regclass
+          AND conname IN (
+              'voice_session_transport_check',
+              'voice_session_identity_065_check',
+              'voice_session_revisions_065_check',
+              'voice_session_media_grant_065_check',
+              'voice_session_worker_grant_065_check'
+          )
+    ) THEN
+        RAISE EXCEPTION 'legacy voice remote-field constraints remain installed'
+            USING ERRCODE = '42P16';
+    END IF;
+END
+$astralplane_075_postcondition$
+""".strip(),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Migration:
@@ -3049,12 +3374,18 @@ def _apply_plane_schema_074_004(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_075(transaction: Transaction) -> None:
+    for statement in PLANE_SCHEMA_075_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
     PLANE_SCHEMA_074_002_STATEMENTS[-1],
     PLANE_SCHEMA_074_003_STATEMENTS[-1],
     PLANE_SCHEMA_074_004_STATEMENTS[-1],
+    PLANE_SCHEMA_075_STATEMENTS[-1],
 )
 
 CURRENT_SCHEMA_STRUCTURE_QUERY: Final = """
@@ -4023,10 +4354,10 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 # SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
-# This is generated only from a fresh canonical 074.004 schema and changes
+# This is generated only from a fresh canonical 075.001 schema and changes
 # whenever the structural verifier's expected catalog state changes.
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "2e95879e293dbac3018a5c3fea92662b2939390bb12195f5a9f8d1eca03d6ec3"
+    "0b623484495b64cb2557473f6e9d9c1d9f41a6798090641f2ffe65f8c7076b15"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     CURRENT_SCHEMA_STRUCTURE_DIGEST,
@@ -4109,6 +4440,10 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
             "5676e8159ed581433daf24a7d6cad2d3d4ab0cdf94875d1dd870aae382a26bfe",
             "cf88e094b28ee09a228b9c2d5cf36c95200ae002d5045b6061086ab775fdb1b4",
         ),
+    ),
+    (
+        "074.004",
+        ("2e95879e293dbac3018a5c3fea92662b2939390bb12195f5a9f8d1eca03d6ec3",),
     ),
 )
 
@@ -4314,6 +4649,45 @@ PLANE_SCHEMA_074_004_MIGRATION: Final = Migration(
     checksum=_statements_checksum(PLANE_SCHEMA_074_004_STATEMENTS),
     operation=_apply_plane_schema_074_004,
 )
+PLANE_SCHEMA_074_004_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "bd5ff43f781e08fe127a6e28ae9bd9b57a796190360215ee485941bc56870e69"
+)
+PLANE_SCHEMA_074_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "e8eecf5c403b73f2d6f0678de6bbf0e9cfc219c10e89d59a961b8c6d63fa9c7e"
+)
+PLANE_SCHEMA_074_004_REGISTRY_DIGEST: Final = (
+    "31495e9b916301e5d9d5011f256224e62e0a0822e25fdf3b9c339beb695eff50"
+)
+if (
+    MigrationRegistry(
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+            PLANE_SCHEMA_074_003_MIGRATION,
+            PLANE_SCHEMA_074_004_MIGRATION,
+        ),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum=(
+            PLANE_SCHEMA_074_004_SCHEMA_VERIFIER_CHECKSUM
+        ),
+        predecessor_schema_verifier=_verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=(
+            PLANE_SCHEMA_074_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+        ),
+    ).digest
+    != PLANE_SCHEMA_074_004_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError(
+        "historical 074.004 migration registry no longer matches its pinned digest"
+    )
+PLANE_SCHEMA_075_MIGRATION: Final = Migration(
+    name="astralplane-075-client-local-speech",
+    source_revisions=("074.004",),
+    target_revision="075.001",
+    checksum=_statements_checksum(PLANE_SCHEMA_075_STATEMENTS),
+    operation=_apply_plane_schema_075,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -4321,6 +4695,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_074_002_MIGRATION,
         PLANE_SCHEMA_074_003_MIGRATION,
         PLANE_SCHEMA_074_004_MIGRATION,
+        PLANE_SCHEMA_075_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -4329,13 +4704,14 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="074.004",
+    schema_revision="075.001",
     read_compatible_from=(
         "066.001",
         "067.001",
         "074.001",
         "074.002",
         "074.003",
+        "074.004",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -4343,6 +4719,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("074.001", PLANE_SCHEMA_074_001_REGISTRY_DIGEST),
         ("074.002", PLANE_SCHEMA_074_002_REGISTRY_DIGEST),
         ("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),
+        ("074.004", PLANE_SCHEMA_074_004_REGISTRY_DIGEST),
     ),
 )
 
@@ -4366,7 +4743,11 @@ __all__ = (
     "PLANE_SCHEMA_074_003_MIGRATION",
     "PLANE_SCHEMA_074_003_STATEMENTS",
     "PLANE_SCHEMA_074_004_MIGRATION",
+    "PLANE_SCHEMA_074_004_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_074_004_SCHEMA_VERIFIER_CHECKSUM",
     "PLANE_SCHEMA_074_004_STATEMENTS",
+    "PLANE_SCHEMA_075_MIGRATION",
+    "PLANE_SCHEMA_075_STATEMENTS",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
     "PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
     "Migration",

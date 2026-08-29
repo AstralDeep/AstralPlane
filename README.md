@@ -10,21 +10,24 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `074.004`, with guarded upgrade entry points at `066.001`, `067.001`,
-  `074.001`, `074.002`, and `074.003`
+- Current schema: `075.001`, with guarded upgrade entry points at `066.001`, `067.001`,
+  `074.001`, `074.002`, `074.003`, and `074.004`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
 `create_postgres_runtime(...)` owns psycopg2 driver-pool construction, bounded checkout, runtime
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
-required edge of `066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004` in one registry transaction. A pre-split
+required edge of
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001` in one registry
+transaction. A pre-split
 `066.001` database has only its legacy revision marker; a `067.001`
 database is accepted only when
 it carries the pinned historical `067.001` migration-registry digest. A `074.001` predecessor must
 carry its pinned historical full-path digest. A `074.002` predecessor must carry its pinned
-historical digest. Every supported predecessor is structurally attested before the first migration
-write. A current `074.004` database must carry the exact current registry digest and pass canonical
+historical digest, and a `074.004` predecessor must carry its pinned historical digest. Every
+supported predecessor is structurally attested before the first migration write. A current
+`075.001` database must carry the exact current registry digest and pass canonical
 catalog-structure verification over all Plane-owned tables, sequences, functions, indexes,
 constraints, triggers, rules, policies, inheritance, and owned-schema privileges. A same-name or
 unexpected object with changed behavior is rejected. A non-empty partial or unrecognized schema is
@@ -139,6 +142,11 @@ owner chain head and a versioned full-record hash; legacy v1 entries remain read
 silently rewritten. Tutorial content/revisions, remote-operation proposals, feedback paging and
 deduplication, personalization mutation, external-identity linking, and the other extended-state
 facades are likewise available only through named typed catalog members.
+
+Revision `075.001` adds the immutable `voice_session.speech_backend` discriminator. Historical
+sessions backfill to `llm_factory`; new `client_local` rows carry no remote room, participant,
+worker, or media-grant metadata. Voice-turn persistence remains unchanged, and Plane adds no audio,
+transcript, local-engine, proof, or client-capability storage.
 
 ## Local verification
 

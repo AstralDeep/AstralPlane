@@ -216,7 +216,11 @@ def test_exact_record_inserts_reject_missing_or_unknown_fields(
     table: str,
 ) -> None:
     repository = VoiceRepository()
-    values = {field: f"value-{index}" for index, field in enumerate(fields)}
+    values = (
+        _session_insert_values()
+        if table == "voice_session"
+        else {field: f"value-{index}" for index, field in enumerate(fields)}
+    )
     transaction = ScriptedTransaction(one=[{"stored": table}])
 
     assert getattr(repository, method)(transaction, values=values) == {"stored": table}
@@ -232,6 +236,105 @@ def test_exact_record_inserts_reject_missing_or_unknown_fields(
             ScriptedTransaction(),
             values={**values, "unsupported": True},
         )
+
+
+def _session_insert_values(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        field: f"value-{index}"
+        for index, field in enumerate(voice_module._SESSION_INSERT_FIELDS)
+    }
+    values.update(
+        {
+            "speech_backend": "llm_factory",
+            "transport": "livekit",
+            "room_name": "room-1",
+            "participant_identity": "participant-1",
+            "media_grant_nonce_hash": b"n" * 32,
+            "media_grant_issued_at": NOW,
+            "media_grant_expires_at": NOW + timedelta(seconds=30),
+            "worker_rtc_grant_revision": 1,
+        }
+    )
+    values.update(overrides)
+    return values
+
+
+@pytest.mark.parametrize("transport", ["livekit", "watch_pcm_websocket"])
+def test_session_record_insert_accepts_only_remote_backend_transports(
+    transport: str,
+) -> None:
+    transaction = ScriptedTransaction(one=[{"speech_backend": "llm_factory"}])
+
+    row = VoiceRepository().insert_session_record(
+        transaction,
+        values=_session_insert_values(transport=transport),
+    )
+
+    assert row == {"speech_backend": "llm_factory"}
+    assert "speech_backend" in transaction.fetch_sql()
+
+
+def test_session_record_insert_accepts_exact_client_local_shape() -> None:
+    transaction = ScriptedTransaction(one=[{"speech_backend": "client_local"}])
+
+    row = VoiceRepository().insert_session_record(
+        transaction,
+        values=_session_insert_values(
+            speech_backend="client_local",
+            transport="client_local",
+            room_name=None,
+            participant_identity=None,
+            media_grant_nonce_hash=None,
+            media_grant_issued_at=None,
+            media_grant_expires_at=None,
+            worker_rtc_grant_revision=None,
+        ),
+    )
+
+    assert row == {"speech_backend": "client_local"}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"speech_backend": "server_media"},
+        {"speech_backend": "llm_factory", "transport": "client_local"},
+        {"speech_backend": "client_local", "transport": "livekit"},
+        {"speech_backend": "client_local", "transport": "watch_pcm_websocket"},
+        {"speech_backend": "client_local", "room_name": "remote-room"},
+        {"speech_backend": "client_local", "participant_identity": "remote-participant"},
+        {"speech_backend": "client_local", "media_grant_nonce_hash": b"n" * 32},
+        {"speech_backend": "client_local", "media_grant_issued_at": NOW},
+        {
+            "speech_backend": "client_local",
+            "media_grant_expires_at": NOW + timedelta(seconds=30),
+        },
+        {"speech_backend": "client_local", "worker_rtc_grant_revision": 1},
+        {"speech_backend": "llm_factory", "room_name": None},
+        {"speech_backend": "llm_factory", "participant_identity": None},
+        {"speech_backend": "llm_factory", "media_grant_nonce_hash": None},
+        {"speech_backend": "llm_factory", "media_grant_issued_at": None},
+        {"speech_backend": "llm_factory", "media_grant_expires_at": None},
+        {"speech_backend": "llm_factory", "worker_rtc_grant_revision": None},
+    ],
+)
+def test_session_record_insert_rejects_every_mixed_backend_shape(
+    overrides: dict[str, object],
+) -> None:
+    local_defaults = {
+        "transport": "client_local",
+        "room_name": None,
+        "participant_identity": None,
+        "media_grant_nonce_hash": None,
+        "media_grant_issued_at": None,
+        "media_grant_expires_at": None,
+        "worker_rtc_grant_revision": None,
+    }
+    selected = local_defaults if overrides.get("speech_backend") == "client_local" else {}
+    values = _session_insert_values(**{**selected, **overrides})
+
+    with pytest.raises(RepositoryValidationError, match="speech backend"):
+        VoiceRepository().insert_session_record(ScriptedTransaction(), values=values)
 
 
 def test_dynamic_record_patches_are_allowlisted_and_fenced() -> None:
@@ -266,6 +369,14 @@ def test_dynamic_record_patches_are_allowlisted_and_fenced() -> None:
                 owner_id="owner-1",
                 session_id="session-1",
                 updates=updates,
+            )
+    for immutable in ("speech_backend", "transport"):
+        with pytest.raises(RepositoryValidationError):
+            repository.patch_session_record(
+                ScriptedTransaction(),
+                owner_id="owner-1",
+                session_id="session-1",
+                updates={immutable: "client_local"},
             )
     with pytest.raises(RepositoryValidationError):
         repository.patch_turn_record(

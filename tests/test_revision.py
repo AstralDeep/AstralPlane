@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+import astralplane.database.migrations as migrations_module
 import astralplane.database.revision as revision_module
 from astralplane.database.migrations import (
     CURRENT_DATA_PLANE_REVISION,
@@ -30,6 +31,7 @@ from astralplane.database.migrations import (
 from astralplane.database.revision import (
     ADVISORY_LOCK_IDS,
     READ_COMPATIBLE_FROM,
+    SCHEMA_PREDECESSOR_REVISION,
     SCHEMA_REVISION,
     DataPlaneRevision,
     validate_revision,
@@ -47,7 +49,13 @@ class _RecordingTransaction:
 
 
 def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> None:
-    assert SCHEMA_REVISION == "074.004"
+    plane_schema_075_migration = migrations_module.PLANE_SCHEMA_075_MIGRATION
+    plane_schema_075_statements = migrations_module.PLANE_SCHEMA_075_STATEMENTS
+    plane_schema_074_004_registry_digest = (
+        migrations_module.PLANE_SCHEMA_074_004_REGISTRY_DIGEST
+    )
+    assert SCHEMA_PREDECESSOR_REVISION == "074.004"
+    assert SCHEMA_REVISION == "075.001"
     assert READ_COMPATIBLE_FROM == "066.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
@@ -59,6 +67,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         "074.001",
         "074.002",
         "074.003",
+        "074.004",
     )
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
@@ -66,6 +75,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         ("074.001", PLANE_SCHEMA_074_001_REGISTRY_DIGEST),
         ("074.002", PLANE_SCHEMA_074_002_REGISTRY_DIGEST),
         ("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),
+        ("074.004", plane_schema_074_004_registry_digest),
     )
     assert CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("067.001") == (
         PLANE_SCHEMA_067_REGISTRY_DIGEST
@@ -85,13 +95,16 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert PLANE_SCHEMA_074_003_MIGRATION.source_revisions == ("074.002",)
     assert PLANE_SCHEMA_074_003_MIGRATION.target_revision == "074.003"
     assert PLANE_SCHEMA_074_004_MIGRATION.source_revisions == ("074.003",)
-    assert PLANE_SCHEMA_074_004_MIGRATION.target_revision == SCHEMA_REVISION
+    assert PLANE_SCHEMA_074_004_MIGRATION.target_revision == "074.004"
+    assert plane_schema_075_migration.source_revisions == (SCHEMA_PREDECESSOR_REVISION,)
+    assert plane_schema_075_migration.target_revision == SCHEMA_REVISION
     assert MIGRATION_REGISTRY.migrations == (
         PLANE_SCHEMA_067_MIGRATION,
         PLANE_SCHEMA_074_MIGRATION,
         PLANE_SCHEMA_074_002_MIGRATION,
         PLANE_SCHEMA_074_003_MIGRATION,
         PLANE_SCHEMA_074_004_MIGRATION,
+        plane_schema_075_migration,
     )
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {
@@ -148,6 +161,13 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert "astralplane_blob_owner_state" in attachment_materialization_sql
     assert "astralplane_purge_tombstone_target_shape_check" in attachment_materialization_sql
 
+    speech_backend_sql = "\n".join(plane_schema_075_statements)
+    assert "voice_session_speech_backend_075_check" in speech_backend_sql
+    assert "ADD COLUMN IF NOT EXISTS speech_backend TEXT" in speech_backend_sql
+    assert "SET speech_backend = 'llm_factory'" in speech_backend_sql
+    assert "ALTER COLUMN speech_backend SET NOT NULL" in speech_backend_sql
+    assert "transport = 'client_local'" in speech_backend_sql
+
     canonical = json.dumps(
         PLANE_SCHEMA_067_STATEMENTS,
         ensure_ascii=True,
@@ -183,6 +203,14 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     ).encode("ascii")
     assert PLANE_SCHEMA_074_004_MIGRATION.checksum == hashlib.sha256(
         canonical_attachment_materialization
+    ).hexdigest()
+    canonical_speech_backend = json.dumps(
+        plane_schema_075_statements,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    assert plane_schema_075_migration.checksum == hashlib.sha256(
+        canonical_speech_backend
     ).hexdigest()
 
     declared = DataPlaneRevision(
@@ -222,6 +250,12 @@ def test_canonical_migration_executes_every_repeat_safe_statement_without_rewrit
     PLANE_SCHEMA_074_004_MIGRATION.apply(transaction)  # type: ignore[arg-type]
     assert transaction.executions == [
         (statement, ()) for statement in PLANE_SCHEMA_074_004_STATEMENTS
+    ]
+
+    transaction = _RecordingTransaction()
+    migrations_module.PLANE_SCHEMA_075_MIGRATION.apply(transaction)  # type: ignore[arg-type]
+    assert transaction.executions == [
+        (statement, ()) for statement in migrations_module.PLANE_SCHEMA_075_STATEMENTS
     ]
 
 

@@ -50,6 +50,7 @@ _SESSION_INSERT_FIELDS = (
     "activation_id",
     "device_id",
     "device_kind",
+    "speech_backend",
     "transport",
     "room_name",
     "participant_identity",
@@ -67,6 +68,7 @@ _SESSION_INSERT_FIELDS = (
     "media_grant_nonce_hash",
     "media_grant_expires_at",
     "media_grant_issued_at",
+    "worker_rtc_grant_revision",
 )
 _SESSION_PATCH_FIELDS = frozenset(
     {
@@ -178,17 +180,18 @@ class VoiceSessionCreate:
     activation_id: str
     device_id: str
     device_kind: str
+    speech_backend: str
     transport: str
-    room_name: str
-    participant_identity: str
+    room_name: str | None
+    participant_identity: str | None
     visible_chat_id: str
     owner_connection_generation: str
     control_binding_id: str
     control_binding_expires_at: datetime
     lease_expires_at: datetime
-    media_grant_nonce_hash: bytes
-    media_grant_issued_at: datetime
-    media_grant_expires_at: datetime
+    media_grant_nonce_hash: bytes | None
+    media_grant_issued_at: datetime | None
+    media_grant_expires_at: datetime | None
     started_at: datetime
 
     def __post_init__(self) -> None:
@@ -197,8 +200,6 @@ class VoiceSessionCreate:
             ("owner_id", self.owner_id, 512),
             ("activation_id", self.activation_id, 64),
             ("device_id", self.device_id, 64),
-            ("room_name", self.room_name, 255),
-            ("participant_identity", self.participant_identity, 255),
             ("visible_chat_id", self.visible_chat_id, 255),
             ("owner_connection_generation", self.owner_connection_generation, 64),
             ("control_binding_id", self.control_binding_id, 64),
@@ -206,21 +207,47 @@ class VoiceSessionCreate:
             _required(name, value, maximum)
         if self.device_kind not in {"web", "windows", "android", "ios", "macos", "watchos"}:
             raise ValueError("device_kind is not supported")
-        if self.transport not in {"livekit", "watch_pcm_websocket"}:
-            raise ValueError("transport metadata is not supported")
-        if len(self.media_grant_nonce_hash) != 32:
-            raise ValueError("media_grant_nonce_hash must contain 32 bytes")
+        if not _valid_backend_core_shape(
+            speech_backend=self.speech_backend,
+            transport=self.transport,
+            room_name=self.room_name,
+            participant_identity=self.participant_identity,
+            media_grant_nonce_hash=self.media_grant_nonce_hash,
+            media_grant_issued_at=self.media_grant_issued_at,
+            media_grant_expires_at=self.media_grant_expires_at,
+            worker_rtc_grant_revision=(
+                1 if self.speech_backend == "llm_factory" else None
+            ),
+        ):
+            raise ValueError("voice session speech backend fields are inconsistent")
+        if self.speech_backend == "llm_factory":
+            assert self.room_name is not None
+            assert self.participant_identity is not None
+            assert self.media_grant_nonce_hash is not None
+            assert self.media_grant_issued_at is not None
+            assert self.media_grant_expires_at is not None
+            _required("room_name", self.room_name, 255)
+            _required("participant_identity", self.participant_identity, 255)
+            if len(self.media_grant_nonce_hash) != 32:
+                raise ValueError("media_grant_nonce_hash must contain 32 bytes")
         for name, value in (
             ("control_binding_expires_at", self.control_binding_expires_at),
             ("lease_expires_at", self.lease_expires_at),
-            ("media_grant_issued_at", self.media_grant_issued_at),
-            ("media_grant_expires_at", self.media_grant_expires_at),
             ("started_at", self.started_at),
         ):
             _aware(name, value)
         if min(self.control_binding_expires_at, self.lease_expires_at) <= self.started_at:
             raise ValueError("session leases must expire after the session starts")
-        if self.media_grant_expires_at <= self.media_grant_issued_at:
+        if self.speech_backend == "llm_factory":
+            assert self.media_grant_issued_at is not None
+            assert self.media_grant_expires_at is not None
+            _aware("media_grant_issued_at", self.media_grant_issued_at)
+            _aware("media_grant_expires_at", self.media_grant_expires_at)
+        if (
+            self.media_grant_expires_at is not None
+            and self.media_grant_issued_at is not None
+            and self.media_grant_expires_at <= self.media_grant_issued_at
+        ):
             raise ValueError("grant expiry must follow grant issue time")
 
 
@@ -231,6 +258,7 @@ class VoiceSession:
     activation_id: str
     device_id: str
     device_kind: str
+    speech_backend: str
     transport: str
     visible_chat_id: str
     chat_context_revision: int
@@ -670,6 +698,19 @@ class VoiceRepository:
         values: Mapping[str, object],
     ) -> Record:
         normalized = _exact_values(values, _SESSION_INSERT_FIELDS, "voice session")
+        if not _valid_backend_core_shape(
+            speech_backend=normalized["speech_backend"],
+            transport=normalized["transport"],
+            room_name=normalized["room_name"],
+            participant_identity=normalized["participant_identity"],
+            media_grant_nonce_hash=normalized["media_grant_nonce_hash"],
+            media_grant_issued_at=normalized["media_grant_issued_at"],
+            media_grant_expires_at=normalized["media_grant_expires_at"],
+            worker_rtc_grant_revision=normalized["worker_rtc_grant_revision"],
+        ):
+            raise RepositoryValidationError(
+                "voice session speech backend fields are inconsistent"
+            )
         placeholders = ", ".join("%s" for _field in _SESSION_INSERT_FIELDS)
         row = transaction.fetch_one(
             "INSERT INTO voice_session ("
@@ -1031,14 +1072,16 @@ class VoiceRepository:
             """
             INSERT INTO voice_session (
                 session_id, user_id, activation_id, device_id, device_kind,
-                transport, room_name, participant_identity, visible_chat_id,
+                speech_backend, transport, room_name, participant_identity,
+                visible_chat_id,
                 owner_connection_generation, control_binding_id,
                 control_binding_expires_at, lease_expires_at,
                 media_grant_nonce_hash, media_grant_issued_at,
-                media_grant_expires_at, started_at, updated_at
+                media_grant_expires_at, worker_rtc_grant_revision,
+                started_at, updated_at
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (user_id, activation_id) DO NOTHING
             RETURNING *
@@ -1049,6 +1092,7 @@ class VoiceRepository:
                 session.activation_id,
                 session.device_id,
                 session.device_kind,
+                session.speech_backend,
                 session.transport,
                 session.room_name,
                 session.participant_identity,
@@ -1060,6 +1104,7 @@ class VoiceRepository:
                 session.media_grant_nonce_hash,
                 session.media_grant_issued_at,
                 session.media_grant_expires_at,
+                1 if session.speech_backend == "llm_factory" else None,
                 session.started_at,
                 session.started_at,
             ),
@@ -1348,6 +1393,121 @@ def _aware(name: str, value: datetime) -> None:
         raise ValueError(f"{name} must be timezone-aware")
 
 
+def _valid_backend_core_shape(
+    *,
+    speech_backend: object,
+    transport: object,
+    room_name: object,
+    participant_identity: object,
+    media_grant_nonce_hash: object,
+    media_grant_issued_at: object,
+    media_grant_expires_at: object,
+    worker_rtc_grant_revision: object,
+) -> bool:
+    remote_fields = (
+        room_name,
+        participant_identity,
+        media_grant_nonce_hash,
+        media_grant_issued_at,
+        media_grant_expires_at,
+        worker_rtc_grant_revision,
+    )
+    if speech_backend == "llm_factory":
+        return (
+            transport in {"livekit", "watch_pcm_websocket"}
+            and all(value is not None for value in remote_fields)
+            and isinstance(room_name, str)
+            and 1 <= len(room_name) <= 255
+            and isinstance(participant_identity, str)
+            and 1 <= len(participant_identity) <= 255
+            and isinstance(media_grant_nonce_hash, (bytes, bytearray, memoryview))
+            and len(media_grant_nonce_hash) == 32
+            and _is_aware_datetime(media_grant_issued_at)
+            and _is_aware_datetime(media_grant_expires_at)
+            and media_grant_expires_at > media_grant_issued_at
+            and isinstance(worker_rtc_grant_revision, int)
+            and not isinstance(worker_rtc_grant_revision, bool)
+            and worker_rtc_grant_revision >= 1
+        )
+    if speech_backend == "client_local":
+        return transport == "client_local" and all(
+            value is None for value in remote_fields
+        )
+    return False
+
+
+def _is_aware_datetime(value: object) -> bool:
+    return (
+        isinstance(value, datetime)
+        and value.tzinfo is not None
+        and value.utcoffset() is not None
+    )
+
+
+def _valid_remote_worker_shape(row: Record) -> bool:
+    worker_fields = (
+        row.get("worker_identity"),
+        row.get("worker_assignment_id"),
+        row.get("worker_rtc_grant_issued_at"),
+        row.get("worker_rtc_grant_expires_at"),
+    )
+    if all(value is None for value in worker_fields):
+        return True
+    worker_identity, _assignment_id, issued_at, expires_at = worker_fields
+    return (
+        all(value is not None for value in worker_fields)
+        and isinstance(worker_identity, str)
+        and 1 <= len(worker_identity) <= 255
+        and _is_aware_datetime(issued_at)
+        and _is_aware_datetime(expires_at)
+        and expires_at > issued_at
+    )
+
+
+def _validate_persisted_backend_shape(row: Record) -> None:
+    valid = _valid_backend_core_shape(
+        speech_backend=row.get("speech_backend"),
+        transport=row.get("transport"),
+        room_name=row.get("room_name"),
+        participant_identity=row.get("participant_identity"),
+        media_grant_nonce_hash=row.get("media_grant_nonce_hash"),
+        media_grant_issued_at=row.get("media_grant_issued_at"),
+        media_grant_expires_at=row.get("media_grant_expires_at"),
+        worker_rtc_grant_revision=row.get("worker_rtc_grant_revision"),
+    )
+    if row.get("speech_backend") == "llm_factory":
+        consumed_at = row.get("media_grant_consumed_at")
+        issued_at = row.get("media_grant_issued_at")
+        valid = (
+            valid
+            and (
+                consumed_at is None
+                or (
+                    _is_aware_datetime(consumed_at)
+                    and _is_aware_datetime(issued_at)
+                    and consumed_at >= issued_at
+                )
+            )
+            and _valid_remote_worker_shape(row)
+        )
+    elif row.get("speech_backend") == "client_local":
+        valid = valid and not any(
+            row.get(field) is not None
+            for field in (
+                "worker_identity",
+                "media_grant_consumed_at",
+                "last_media_refresh_id",
+                "worker_assignment_id",
+                "worker_rtc_grant_issued_at",
+                "worker_rtc_grant_expires_at",
+            )
+        )
+    if not valid:
+        raise RepositoryValidationError(
+            "persisted voice session speech backend fields are inconsistent"
+        )
+
+
 def _same_session(row: Record, session: VoiceSessionCreate) -> bool:
     return all(
         (
@@ -1356,15 +1516,21 @@ def _same_session(row: Record, session: VoiceSessionCreate) -> bool:
             str(row["activation_id"]) == session.activation_id,
             str(row["device_id"]) == session.device_id,
             str(row["device_kind"]) == session.device_kind,
+            str(row["speech_backend"]) == session.speech_backend,
             str(row["transport"]) == session.transport,
-            str(row["room_name"]) == session.room_name,
-            str(row["participant_identity"]) == session.participant_identity,
+            row["room_name"] == session.room_name,
+            row["participant_identity"] == session.participant_identity,
             str(row["visible_chat_id"]) == session.visible_chat_id,
             str(row["owner_connection_generation"]) == session.owner_connection_generation,
             str(row["control_binding_id"]) == session.control_binding_id,
             row["control_binding_expires_at"] == session.control_binding_expires_at,
             row["lease_expires_at"] == session.lease_expires_at,
-            bytes(row["media_grant_nonce_hash"]) == session.media_grant_nonce_hash,
+            (
+                None
+                if row["media_grant_nonce_hash"] is None
+                else bytes(row["media_grant_nonce_hash"])
+            )
+            == session.media_grant_nonce_hash,
             row["media_grant_issued_at"] == session.media_grant_issued_at,
             row["media_grant_expires_at"] == session.media_grant_expires_at,
             row["started_at"] == session.started_at,
@@ -1373,12 +1539,14 @@ def _same_session(row: Record, session: VoiceSessionCreate) -> bool:
 
 
 def _session(row: Record) -> VoiceSession:
+    _validate_persisted_backend_shape(row)
     return VoiceSession(
         session_id=str(row["session_id"]),
         owner_id=str(row["user_id"]),
         activation_id=str(row["activation_id"]),
         device_id=str(row["device_id"]),
         device_kind=str(row["device_kind"]),
+        speech_backend=str(row["speech_backend"]),
         transport=str(row["transport"]),
         visible_chat_id=str(row["visible_chat_id"]),
         chat_context_revision=int(row["chat_context_revision"]),
