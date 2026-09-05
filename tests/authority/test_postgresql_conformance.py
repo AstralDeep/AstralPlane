@@ -1,4 +1,4 @@
-"""Real-PostgreSQL conformance for the current AstralPlane 075.001 schema.
+"""Real-PostgreSQL conformance for the current AstralPlane 079.001 schema.
 
 The suite is opt-in because AstralPlane has no runtime dependency on a driver.
 Set ``ASTRALPLANE_TEST_POSTGRES_DSN`` to an isolated PostgreSQL test database;
@@ -475,8 +475,8 @@ def test_074_001_authority_ddl_is_repeat_safe_on_real_postgresql(
             assert "UNIQUE INDEX" in index["indexdef"]
             assert "WHERE" in index["indexdef"]
 
-    assert astralplane.SCHEMA_REVISION == "075.001"
-    assert astralplane.CURRENT_DATA_PLANE_REVISION.schema_revision == "075.001"
+    assert astralplane.SCHEMA_REVISION == "079.001"
+    assert astralplane.CURRENT_DATA_PLANE_REVISION.schema_revision == "079.001"
 
 
 def test_partial_binding_uniqueness_and_owner_isolation_use_public_repository(

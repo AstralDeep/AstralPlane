@@ -1112,6 +1112,25 @@ class SessionRepository:
         )
         return result.rowcount == 1
 
+    def delete_and_return(
+        self, transaction: Transaction, *, owner_id: str, session_id: str,
+    ) -> SessionRecord | None:
+        """Atomically remove a session and return its exact final encrypted tokens.
+
+        Refresh settlement and revocation are ordered by the same row lock;
+        callers must not revoke credential bytes from a stale process cache.
+        """
+        owner = _required_id(owner_id, "owner_id")
+        session = _required_id(session_id, "session_id")
+        row = transaction.fetch_one(
+            """DELETE FROM web_session WHERE sid = %s AND user_id = %s
+               RETURNING sid, user_id, access_token_enc, refresh_token_enc,
+                         interactive_anchor, hard_expires_at, last_refresh_at,
+                         resumed, created_at""",
+            (session, owner),
+        )
+        return None if row is None else _session(row)
+
     def delete_owner(self, transaction: Transaction, *, owner_id: str) -> int:
         """Delete every session in an authorized account-retirement transaction."""
 

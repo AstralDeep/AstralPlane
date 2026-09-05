@@ -260,6 +260,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
 
     assert isinstance(first, RepositoryCatalog)
     assert tuple(first.as_mapping()) == (
+        "assignments",
         "agent_management",
         "agents",
         "artifacts",
