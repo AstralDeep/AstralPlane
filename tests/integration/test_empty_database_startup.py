@@ -1,4 +1,4 @@
-"""Real-PostgreSQL fresh baseline through the full 075.001 lineage."""
+"""Real-PostgreSQL fresh baseline through the full 079.001 lineage."""
 
 from __future__ import annotations
 
@@ -236,11 +236,11 @@ def test_template0_default_public_schema_is_exactly_qualified_then_hardened(
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
 
-    first = runner.run(expected_revision="075.001")
-    second = runner.run(expected_revision="075.001")
+    first = runner.run(expected_revision="079.001")
+    second = runner.run(expected_revision="079.001")
 
     assert first.source_revision is None
-    assert first.target_revision == "075.001"
+    assert first.target_revision == "079.001"
     assert second.already_current
     cursor = fixture.connection.cursor()
     try:
@@ -257,7 +257,7 @@ def test_template0_default_public_schema_is_exactly_qualified_then_hardened(
         )
         assert cursor.fetchone() == ("public", True, False, False)
         cursor.execute("SELECT value FROM schema_meta WHERE key = 'revision'")
-        assert cursor.fetchone() == ("075.001",)
+        assert cursor.fetchone() == ("079.001",)
     finally:
         cursor.close()
         fixture.connection.rollback()
@@ -292,7 +292,7 @@ def test_template0_public_schema_with_arbitrary_owner_is_not_normalized(
         SchemaRevisionError,
         match="predecessor schema canonical structure",
     ):
-        migration.run(expected_revision="075.001")
+        migration.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -318,8 +318,8 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
 
-    first = runner.run(expected_revision="075.001")
-    second = runner.run(expected_revision="075.001")
+    first = runner.run(expected_revision="079.001")
+    second = runner.run(expected_revision="079.001")
     compatibility = inspect_baseline_compatibility(fixture.database)
 
     assert first.source_revision is None
@@ -331,11 +331,12 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-074-current-runtime-contract",
         "astralplane-074-pending-attachment-materialization",
         "astralplane-075-client-local-speech",
+        "astralplane-079-persistent-assignments",
     )
     assert second.already_current
     assert second.applied_steps == ()
     assert compatibility.state is BaselineCompatibilityState.COMPATIBLE
-    assert compatibility.observed_revision == "075.001"
+    assert compatibility.observed_revision == "079.001"
     assert not compatibility.missing_required_tables
 
     cursor = fixture.connection.cursor()
@@ -459,7 +460,7 @@ def test_voice_backend_constraint_accepts_only_exact_remote_and_local_rows(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     insert_sql = """
         INSERT INTO voice_session (
             session_id, user_id, activation_id, device_id, device_kind,
@@ -614,6 +615,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-074-current-runtime-contract",
         "astralplane-074-pending-attachment-materialization",
         "astralplane-075-client-local-speech",
+        "astralplane-079-persistent-assignments",
     )
     trial_count = 50
     migration_owner_violations = 0
@@ -662,7 +664,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
                         revision=CURRENT_DATA_PLANE_REVISION,
                         registry=MIGRATION_REGISTRY,
                     ),
-                ).run(expected_revision="075.001")
+                ).run(expected_revision="079.001")
                 with lock:
                     result_reports.append(report)
             except BaseException as exc:
@@ -697,7 +699,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
         compatibility = inspect_baseline_compatibility(fixture.database)
         if not (
             compatibility.state is BaselineCompatibilityState.COMPATIBLE
-            and compatibility.observed_revision == "075.001"
+            and compatibility.observed_revision == "079.001"
             and not compatibility.missing_required_tables
         ):
             migration_owner_violations += 1
@@ -722,7 +724,7 @@ def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="079.001")
 
     required_indexes = {
         "idx_attachment_parser_status": ("attachment_parser", "(status)"),
@@ -806,7 +808,7 @@ def test_hot_message_queries_use_the_declared_composite_index(
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -863,7 +865,7 @@ def test_fresh_baseline_ignores_same_table_columns_in_another_schema(
                 revision=CURRENT_DATA_PLANE_REVISION,
                 registry=MIGRATION_REGISTRY,
             ),
-        ).run(expected_revision="075.001")
+        ).run(expected_revision="079.001")
 
         cursor.execute(
             "SELECT is_nullable, data_type "
@@ -916,7 +918,7 @@ def test_fresh_host_registration_accepts_only_current_runtime_contract(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     repository = AgentRepository()
 
     current = _host_session_kwargs(3)
@@ -982,12 +984,13 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     assert report.source_revision == "074.002"
     assert report.applied_steps == (
         "astralplane-074-current-runtime-contract",
         "astralplane-074-pending-attachment-materialization",
         "astralplane-075-client-local-speech",
+        "astralplane-079-persistent-assignments",
     )
 
     cursor = fixture.connection.cursor()
@@ -1015,7 +1018,7 @@ def test_current_metadata_rejects_same_name_runtime_contract_tampering(
             registry=MIGRATION_REGISTRY,
         ),
     )
-    runner.run(expected_revision="075.001")
+    runner.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1033,7 +1036,7 @@ def test_current_metadata_rejects_same_name_runtime_contract_tampering(
         cursor.close()
 
     with pytest.raises(Exception, match="runtime contract constraint is incompatible"):
-        runner.run(expected_revision="075.001")
+        runner.run(expected_revision="079.001")
 
 
 def test_current_metadata_cannot_admit_a_dropped_current_index(
@@ -1046,7 +1049,7 @@ def test_current_metadata_cannot_admit_a_dropped_current_index(
         registry=MIGRATION_REGISTRY,
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
-    runner.run(expected_revision="075.001")
+    runner.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1056,13 +1059,13 @@ def test_current_metadata_cannot_admit_a_dropped_current_index(
         cursor.close()
 
     with pytest.raises(Exception, match="qualification audit indexes"):
-        runner.run(expected_revision="075.001")
+        runner.run(expected_revision="079.001")
 
     fixture.connection.rollback()
     cursor = fixture.connection.cursor()
     try:
         cursor.execute("SELECT value FROM schema_meta WHERE key = 'revision'")
-        assert cursor.fetchone() == ("075.001",)
+        assert cursor.fetchone() == ("079.001",)
     finally:
         cursor.close()
 
@@ -1079,7 +1082,7 @@ def test_current_metadata_cannot_admit_same_name_structural_tampering(
         registry=MIGRATION_REGISTRY,
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
-    runner.run(expected_revision="075.001")
+    runner.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1096,7 +1099,7 @@ def test_current_metadata_cannot_admit_same_name_structural_tampering(
         cursor.close()
 
     with pytest.raises(Exception, match="canonical structure"):
-        runner.run(expected_revision="075.001")
+        runner.run(expected_revision="079.001")
 
 
 def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
@@ -1111,7 +1114,7 @@ def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
             registry=MIGRATION_REGISTRY,
         ),
     )
-    runner.run(expected_revision="075.001")
+    runner.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1128,7 +1131,7 @@ def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
         cursor.close()
 
     with pytest.raises(Exception, match="voice speech backend constraint is incompatible"):
-        runner.run(expected_revision="075.001")
+        runner.run(expected_revision="079.001")
 
 
 def test_failed_reconciliation_marker_retries_against_real_postgresql(
@@ -1142,13 +1145,13 @@ def test_failed_reconciliation_marker_retries_against_real_postgresql(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     coordinator = PostgresReconciliationCoordinator(fixture.pool)
     hook = ReconciliationHookIdentity(name="deep-contract", version="1.0.0")
 
     with coordinator.coordinate(
         advisory_lock=RECONCILIATION_ADVISORY_LOCK,
-        schema_revision="075.001",
+        schema_revision="079.001",
         plan_digest="b" * 64,
     ) as session:
         first = session.mark_started(hook)
@@ -1297,7 +1300,7 @@ def test_concurrent_quality_reviews_serialize_chain_and_case_transition(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     repository = QualityAuditRepository()
     observed_at = datetime(2026, 8, 14, 16, 0, tzinfo=UTC)
     with fixture.database.transaction() as transaction:
@@ -1479,7 +1482,7 @@ def test_074_004_refuses_unaddressable_legacy_ready_attachment_before_mutation(
         registry=MIGRATION_REGISTRY,
     )
     with pytest.raises(Exception, match="cannot represent legacy attachment"):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1546,7 +1549,7 @@ def test_074_004_accepts_canonical_windows_legacy_attachment_locator_without_rew
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1590,7 +1593,7 @@ def test_074_004_backfills_predecessor_ready_without_admitting_stale_shaped_inse
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1684,7 +1687,7 @@ def test_074_004_seeds_legacy_owner_fence_before_casefold_alias_admission(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1825,7 +1828,7 @@ def test_074_004_refuses_partial_pending_predecessor_without_exposing_or_clearin
         Exception,
         match=r"predecessor schema canonical structure|clean 074[.]003 predecessor",
     ):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1903,7 +1906,7 @@ def test_074_004_refuses_partial_typed_purge_scope_without_retargeting_bytes(
         Exception,
         match=r"predecessor schema canonical structure|clean 074[.]003 predecessor",
     ):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -1963,7 +1966,7 @@ def test_074_004_refuses_hostile_precreated_namesakes_without_stamping(
         Exception,
         match=r"predecessor schema canonical structure|clean 074[.]003 predecessor",
     ):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -2035,7 +2038,7 @@ def test_074_004_refuses_tampered_predecessor_before_canonicalization(
             r"clean 074[.]003 predecessor|legacy foreign key"
         ),
     ):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
 
     cursor = fixture.connection.cursor()
     try:
@@ -2140,7 +2143,7 @@ def test_current_074_004_rejects_same_name_blob_lifecycle_tampering(
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         if tamper_kind == "scope_constraint":
@@ -2276,7 +2279,7 @@ def test_current_074_004_rejects_same_name_blob_lifecycle_tampering(
             r"authority validation functions are missing"
         ),
     ):
-        runner.run(expected_revision="075.001")
+        runner.run(expected_revision="079.001")
 
 
 def test_current_074_004_rejects_cross_schema_legacy_foreign_key_rebind(
@@ -2288,7 +2291,7 @@ def test_current_074_004_rejects_cross_schema_legacy_foreign_key_rebind(
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="079.001")
     hostile_schema = f"astralplane_hostile_{uuid.uuid4().hex}"
     quoted_hostile = f'"{hostile_schema}"'
     cursor = fixture.connection.cursor()
@@ -2306,7 +2309,7 @@ def test_current_074_004_rejects_cross_schema_legacy_foreign_key_rebind(
 
     try:
         with pytest.raises(Exception, match=r"canonical structure|index is incompatible"):
-            runner.run(expected_revision="075.001")
+            runner.run(expected_revision="079.001")
     finally:
         cursor = fixture.connection.cursor()
         try:
@@ -2325,7 +2328,7 @@ def test_current_verifier_never_resolves_missing_owned_table_from_later_search_p
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, runner).run(expected_revision="079.001")
     hostile_schema = f"astralplane_hostile_{uuid.uuid4().hex}"
     quoted_hostile = f'"{hostile_schema}"'
     cursor = fixture.connection.cursor()
@@ -2346,7 +2349,7 @@ def test_current_verifier_never_resolves_missing_owned_table_from_later_search_p
 
     try:
         with pytest.raises(Exception, match=r"canonical structure|index is incompatible"):
-            runner.run(expected_revision="075.001")
+            runner.run(expected_revision="079.001")
     finally:
         cursor = fixture.connection.cursor()
         try:
@@ -2393,7 +2396,7 @@ def test_074_004_legacy_exact_manual_review_has_evidence_bound_operator_recovery
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    current.run(expected_revision="075.001")
+    current.run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2496,7 +2499,7 @@ def test_074_004_quarantines_live_attachment_legacy_tombstone_before_later_typed
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2621,9 +2624,9 @@ def test_074_004_schedules_every_legacy_deleted_attachment_for_typed_cleanup(
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    current.run(expected_revision="075.001")
+    current.run(expected_revision="079.001")
     # Current startup replay is a no-op and must not duplicate typed cleanup work.
-    current.run(expected_revision="075.001")
+    current.run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2717,7 +2720,7 @@ def test_074_004_deleted_attachment_schedule_failure_rolls_back_every_schema_and
         registry=MIGRATION_REGISTRY,
     )
     with pytest.raises(Exception, match=r"duplicate key|unique constraint"):
-        current.run(expected_revision="075.001")
+        current.run(expected_revision="079.001")
     cursor = fixture.connection.cursor()
     try:
         cursor.execute("SELECT value FROM schema_meta WHERE key = 'revision'")
@@ -2757,7 +2760,7 @@ def test_generation_log_write_preserves_claim_revision_and_finish_fence(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     repository = DraftAgentRepository()
     active_claim = str(uuid.uuid4())
 
@@ -2887,7 +2890,7 @@ def test_draft_creation_round_trips_initial_candidate_provenance(
             revision=CURRENT_DATA_PLANE_REVISION,
             registry=MIGRATION_REGISTRY,
         ),
-    ).run(expected_revision="075.001")
+    ).run(expected_revision="079.001")
     repository = DraftAgentRepository()
     tools_spec = '[{"description":"","name":"search","scope":"records:read"}]'
     plan_json = (
@@ -2935,7 +2938,7 @@ def test_user_agent_policy_reconciliation_is_concurrent_idempotent_and_rollback_
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
-    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="075.001")
+    BaselineMigrationRunner(fixture.database, migration).run(expected_revision="079.001")
     repository = AgentRepository()
     with fixture.database.transaction() as transaction:
         for index in range(5):

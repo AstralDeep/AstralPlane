@@ -68,7 +68,7 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "7e5b2f697972ee0f8e01f46e3b83395a28172a976d38302e77168d8d0d20e361"
+          "sha256": "dbdf1848c074737161d0f6b55ceee82201be1cc2b1154f1adc8e377b6d7a3ccf"
         }
       ],
       "task": "T075/T085",
@@ -611,7 +611,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "6765edebc8f1965ca54ad7139dd984973729e5b196e905ab012297d9d270430b"
+          "sha256": "41434bf52e929b2b62d2a7d4939d343aea71230cd6ee1426a30e09b3992a67e4"
         },
         {
           "path": "src/astralplane/database/pool.py",

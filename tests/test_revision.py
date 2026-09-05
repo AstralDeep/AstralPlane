@@ -51,11 +51,9 @@ class _RecordingTransaction:
 def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> None:
     plane_schema_075_migration = migrations_module.PLANE_SCHEMA_075_MIGRATION
     plane_schema_075_statements = migrations_module.PLANE_SCHEMA_075_STATEMENTS
-    plane_schema_074_004_registry_digest = (
-        migrations_module.PLANE_SCHEMA_074_004_REGISTRY_DIGEST
-    )
-    assert SCHEMA_PREDECESSOR_REVISION == "074.004"
-    assert SCHEMA_REVISION == "075.001"
+    plane_schema_074_004_registry_digest = migrations_module.PLANE_SCHEMA_074_004_REGISTRY_DIGEST
+    assert SCHEMA_PREDECESSOR_REVISION == "075.001"
+    assert SCHEMA_REVISION == "079.001"
     assert READ_COMPATIBLE_FROM == "066.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
@@ -68,6 +66,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         "074.002",
         "074.003",
         "074.004",
+        "075.001",
     )
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
@@ -76,6 +75,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         ("074.002", PLANE_SCHEMA_074_002_REGISTRY_DIGEST),
         ("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),
         ("074.004", plane_schema_074_004_registry_digest),
+        ("075.001", migrations_module.PLANE_SCHEMA_075_REGISTRY_DIGEST),
     )
     assert CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("067.001") == (
         PLANE_SCHEMA_067_REGISTRY_DIGEST
@@ -96,8 +96,12 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert PLANE_SCHEMA_074_003_MIGRATION.target_revision == "074.003"
     assert PLANE_SCHEMA_074_004_MIGRATION.source_revisions == ("074.003",)
     assert PLANE_SCHEMA_074_004_MIGRATION.target_revision == "074.004"
-    assert plane_schema_075_migration.source_revisions == (SCHEMA_PREDECESSOR_REVISION,)
-    assert plane_schema_075_migration.target_revision == SCHEMA_REVISION
+    assert plane_schema_075_migration.source_revisions == ("074.004",)
+    assert plane_schema_075_migration.target_revision == "075.001"
+    assert migrations_module.PLANE_SCHEMA_079_MIGRATION.source_revisions == (
+        SCHEMA_PREDECESSOR_REVISION,
+    )
+    assert migrations_module.PLANE_SCHEMA_079_MIGRATION.target_revision == SCHEMA_REVISION
     assert MIGRATION_REGISTRY.migrations == (
         PLANE_SCHEMA_067_MIGRATION,
         PLANE_SCHEMA_074_MIGRATION,
@@ -105,6 +109,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         PLANE_SCHEMA_074_003_MIGRATION,
         PLANE_SCHEMA_074_004_MIGRATION,
         plane_schema_075_migration,
+        migrations_module.PLANE_SCHEMA_079_MIGRATION,
     )
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {
@@ -185,33 +190,33 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
-    assert PLANE_SCHEMA_074_002_MIGRATION.checksum == hashlib.sha256(
-        canonical_quality
-    ).hexdigest()
+    assert PLANE_SCHEMA_074_002_MIGRATION.checksum == hashlib.sha256(canonical_quality).hexdigest()
     canonical_runtime_contract = json.dumps(
         PLANE_SCHEMA_074_003_STATEMENTS,
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
-    assert PLANE_SCHEMA_074_003_MIGRATION.checksum == hashlib.sha256(
-        canonical_runtime_contract
-    ).hexdigest()
+    assert (
+        PLANE_SCHEMA_074_003_MIGRATION.checksum
+        == hashlib.sha256(canonical_runtime_contract).hexdigest()
+    )
     canonical_attachment_materialization = json.dumps(
         PLANE_SCHEMA_074_004_STATEMENTS,
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
-    assert PLANE_SCHEMA_074_004_MIGRATION.checksum == hashlib.sha256(
-        canonical_attachment_materialization
-    ).hexdigest()
+    assert (
+        PLANE_SCHEMA_074_004_MIGRATION.checksum
+        == hashlib.sha256(canonical_attachment_materialization).hexdigest()
+    )
     canonical_speech_backend = json.dumps(
         plane_schema_075_statements,
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
-    assert plane_schema_075_migration.checksum == hashlib.sha256(
-        canonical_speech_backend
-    ).hexdigest()
+    assert (
+        plane_schema_075_migration.checksum == hashlib.sha256(canonical_speech_backend).hexdigest()
+    )
 
     declared = DataPlaneRevision(
         schema_revision="067.001",
