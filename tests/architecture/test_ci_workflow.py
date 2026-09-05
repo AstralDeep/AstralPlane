@@ -28,8 +28,8 @@ POSTGRES_IMAGE = (
 )
 DEEP_COMMIT = "fc113c4f99121b2053bb71523835c5c4743f1f56"
 OWNER_JOBS = ("quality", "postgresql", "package-compatibility")
-SETUPTOOLS_REQUIREMENT = "setuptools==80.10.2"
-SETUPTOOLS_HASH = "sha256:95b30ddfb717250edb492926c92b5221f7ef3fbcc2b07579bcd4a27da21d0173"
+SETUPTOOLS_REQUIREMENT = "setuptools==83.0.0"
+SETUPTOOLS_HASH = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3"
 
 
 def _workflow_text() -> str:
