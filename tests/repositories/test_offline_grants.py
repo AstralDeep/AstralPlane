@@ -226,6 +226,54 @@ def test_owner_revoke_uses_one_timestamp_and_counts_transitions_only() -> None:
     assert "revoked_at IS NULL" in transaction.calls[0][1]
 
 
+def test_ciphertext_rotation_is_owner_live_expiry_and_exact_ciphertext_fenced() -> None:
+    transaction = ScriptedTransaction(one=[_grant_row(refresh_token_enc=b"rotated")])
+    record = OfflineGrantRepository().replace_refresh_token_if_current(
+        transaction,
+        owner_id="owner-1",
+        grant_id=GRANT_ID,
+        expected_encrypted_refresh_token=b"opaque-token",
+        encrypted_refresh_token=b"rotated",
+        as_of=500,
+    )
+    assert record.encrypted_refresh_token == b"rotated"
+    sql = transaction.calls[0][1]
+    assert "user_id = %s" in sql and "refresh_token_enc = %s" in sql
+    assert "revoked_at IS NULL" in sql and "expires_at > %s" in sql
+    assert transaction.calls[0][2] == (
+        b"rotated", 500, GRANT_ID, "owner-1", b"opaque-token", 500,
+    )
+
+
+def test_ciphertext_rotation_refuses_stale_revoked_expired_or_missing_grant() -> None:
+    transaction = ScriptedTransaction(one=[None])
+    assert OfflineGrantRepository().replace_refresh_token_if_current(
+        transaction,
+        owner_id="owner-1",
+        grant_id=GRANT_ID,
+        expected_encrypted_refresh_token=b"opaque-token",
+        encrypted_refresh_token=b"rotated",
+        as_of=500,
+    ) is None
+    assert len(transaction.calls) == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner_id", ""), ("grant_id", "bad"), ("as_of", -1),
+    ("encrypted_refresh_token", b""),
+    ("expected_encrypted_refresh_token", "plaintext"),
+])
+def test_ciphertext_rotation_validates_before_query(field, value) -> None:
+    args = dict(owner_id="owner-1", grant_id=GRANT_ID,
+                expected_encrypted_refresh_token=b"opaque-token",
+                encrypted_refresh_token=b"rotated", as_of=500)
+    args[field] = value
+    transaction = ScriptedTransaction()
+    with pytest.raises(RepositoryValidationError):
+        OfflineGrantRepository().replace_refresh_token_if_current(transaction, **args)
+    assert not transaction.calls
+
+
 @pytest.mark.parametrize(
     ("argument", "value"),
     [
