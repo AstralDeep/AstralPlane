@@ -262,6 +262,27 @@ def _write_agents(catalog: api.RepositoryCatalog, transaction: Transaction) -> N
     )
 
 
+def _write_assignments(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    from dataclasses import replace
+
+    from tests.repositories.test_assignments import definition
+
+    grant_id = "79000000-0000-4000-8000-000000000001"
+    transaction.execute(
+        "INSERT INTO user_offline_grant(id,user_id,refresh_token_enc,issued_at,expires_at) "
+        "VALUES(%s,%s,%s,1,9999999999999)",
+        (grant_id, _OWNER, b"rollback-test-opaque"),
+    )
+    catalog.assignments.create_assignment(
+        transaction,
+        owner_id=_OWNER,
+        assignment_id="79000000-0000-4000-8000-000000000002",
+        submission_id="79000000-0000-4000-8000-000000000003",
+        submission_digest=_DIGEST_A,
+        definition=replace(definition(), offline_grant_id=grant_id),
+    )
+
+
 def _write_artifacts(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.artifacts.materializations.begin_pending_materialization(
         transaction,
@@ -1010,6 +1031,13 @@ def _observe_work_admission_revision(transaction: Transaction) -> object:
 
 ROLLBACK_CASES = (
     RollbackCase(
+        "assignments",
+        _write_assignments,
+        _count("persistent_assignment", "id", "79000000-0000-4000-8000-000000000002"),
+        1,
+        0,
+    ),
+    RollbackCase(
         "agents",
         _write_agents,
         _count("user_agent", "agent_id", "rollback-agent"),
@@ -1247,7 +1275,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 36
+    assert len(applicable_keys) == len(set(applicable_keys)) == 37
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

@@ -45,7 +45,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -86,6 +86,40 @@ room, participant, worker, media-grant, or worker-grant metadata. Backend and tr
 immutable repository identities. Voice turns are unchanged and remain bound to their parent
 session; no audio, transcript, digest, proof, local-engine, or capability field is added.
 
+The additive `079.001` edge requires the attested `075.001` catalog and historical registry
+digest. It creates owner-isolated assignment, source-event, action/approval, and activity tables.
+Assignments retain bounded JSON checkpoints and task graphs; indexed event and action identities
+protect replay independently of working memory. Existing voice, audit, conversation, grant, and
+blob data remain unchanged. The current structural verifier checks the four tables, constraints,
+indexes, and immutable remote-proposal association index on every startup.
+
+### `079.001` deployment and recovery
+
+1. Quiesce all writers and take the joint database/durable-root backup described above. Record
+   the exact `075.001` revision and migration digest, the candidate Plane commit, and target digest.
+2. Apply the guarded registry and verify `079.001` and its exact catalog. Repeating boot must be
+   a verified no-op. Keep the product's assignment worker admission disabled until its foreground
+   authorization, cancellation, cost bounds, and activity paths have passed qualification.
+3. Enable only the qualified product worker. Recover expired assignment leases through
+   `recover_expired_for_administration`; use the returned operation bindings to reconcile the
+   ordinary work-admission coordinator. Never copy a lease token into a new worker.
+4. A reserved action has not begun and may release its reservation. A committed dispatch permit
+   is the durable start boundary: controls prevent subsequent permits, while prior permitted
+   work may finish and report its exact receipt. Read-only interruption is charged at its reserved
+   maximum before bounded retry. Uncertain effects retain their maximum liability and require an
+   exact late receipt or owner-authorized reconciliation; never reset their ledger to ready.
+   A `reconciled_applied` result with `result_available: false` records the effect classification
+   without recovering its response. Keep dependent work in reconciliation until usable evidence
+   or revised owner instructions permit continuation; never publish a fabricated result.
+5. Stop and inspect assignments before account retirement. `retire_owner` permanently fences
+   new owner work and removes safe terminal assignments. A result containing unresolved action
+   IDs must be committed and reported as awaiting reconciliation; physical owner purge must wait.
+   Linked pending/approved remote proposals are expired before their inverse association is removed.
+6. If qualification fails before admission reopens, prefer guarded forward repair. Restore the
+   verified joint backup with the previous application only under closed admission. Never drop
+   the assignment tables or rewrite revision metadata as an inferred rollback; doing so destroys
+   the replay and approval evidence for actions that may already have begun.
+
 ### `075.001` deployment profile
 
 1. Quiesce voice admission and drain or end every active session; keep all other writers closed
@@ -118,7 +152,7 @@ any other non-empty database must carry a known revision and every required base
 partial or unknown schema fails closed without being overwritten. A `067.001` predecessor must
 carry the pinned historical registry digest, and a `074.001` predecessor must carry its pinned
 full-path digest, and a `074.002` predecessor must carry its pinned historical digest. A current
-`074.004` predecessor must carry its pinned historical digest. A current `075.001` marker and
+`074.004` or `075.001` predecessor must carry its pinned historical digest. A current `079.001` marker and
 digest are still insufficient on their own. The verifier binds the owned
 schema owner/ACL and the behavior, durability, authorization, namespace, dependency, and lifecycle
 shape of all Plane-owned tables, columns, sequences, constraints, indexes, functions, triggers,
@@ -212,8 +246,8 @@ maintenance window has been verified:
    paired blob/workspace root into new explicit destinations without following links.
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
-   `074.001`, `074.002`, `074.003`, and `074.004` states must have their exact declared digests and
-   pinned predecessor catalog shape; `075.001` must also pass the current structural verifier.
+   `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
+   pinned predecessor catalog shape; `079.001` must also pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the

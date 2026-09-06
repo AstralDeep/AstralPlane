@@ -2,6 +2,7 @@
 
 from astralplane.api import (
     AgentRevisionRecord,
+    AssignmentRepository,
     AsyncPlaneRuntime,
     AttachmentMaterializationCoordinator,
     AuthorityCompareAndSetConflictError,
@@ -18,6 +19,7 @@ from astralplane.api import (
     create_agent_management_repository,
     create_agent_repository,
     create_artifact_repository,
+    create_assignment_repository,
     create_attachment_materialization_coordinator,
     create_attachment_parser_repository,
     create_audit_repository,
@@ -204,6 +206,7 @@ __all__ = (
     "ArtifactPublicationError",
     "ArtifactPublicationRevokedError",
     "ArtifactReconciliationError",
+    "AssignmentRepository",
     "AsyncPlaneRuntime",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
@@ -286,6 +289,7 @@ __all__ = (
     "create_agent_management_repository",
     "create_agent_repository",
     "create_artifact_repository",
+    "create_assignment_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",

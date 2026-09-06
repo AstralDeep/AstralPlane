@@ -92,6 +92,7 @@ from astralplane.repositories.artifacts import (
     AttachmentMaterializationCoordinator,
     MaterializationRepository,
 )
+from astralplane.repositories.assignments import AssignmentRepository
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
@@ -155,6 +156,12 @@ def create_history_repository() -> HistoryRepository:
     """Create neutral conversation, message, and session stores."""
 
     return HistoryRepository()
+
+
+def create_assignment_repository() -> AssignmentRepository:
+    """Create owner-isolated persistent assignment journals and execution fences."""
+
+    return AssignmentRepository()
 
 
 def create_identity_repository() -> IdentityRepository:
@@ -426,6 +433,7 @@ class RepositoryCatalog:
     """One discoverable set of stateless repositories for a composition."""
 
     identity: IdentityRepository
+    assignments: AssignmentRepository
     agents: AgentRepository
     agent_management: AgentManagementRepository
     draft_agents: DraftAgentRepository
@@ -468,6 +476,7 @@ class RepositoryCatalog:
 
         return MappingProxyType(
             {
+                "assignments": self.assignments,
                 "agent_management": self.agent_management,
                 "agents": self.agents,
                 "artifacts": self.artifacts,
@@ -516,6 +525,7 @@ def create_repository_catalog() -> RepositoryCatalog:
     drafts = create_draft_agent_repository()
     work_admission = create_work_admission_repository()
     return RepositoryCatalog(
+        assignments=create_assignment_repository(),
         identity=create_identity_repository(),
         agents=agents,
         agent_management=create_agent_management_repository(),
@@ -787,6 +797,7 @@ __all__ = (
     "ArtifactPublicationError",
     "ArtifactPublicationRevokedError",
     "ArtifactReconciliationError",
+    "AssignmentRepository",
     "AsyncPlaneRuntime",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
@@ -827,6 +838,7 @@ __all__ = (
     "create_agent_management_repository",
     "create_agent_repository",
     "create_artifact_repository",
+    "create_assignment_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",

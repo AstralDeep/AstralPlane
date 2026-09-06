@@ -731,6 +731,20 @@ def test_session_put_get_delete_and_owner_conflict() -> None:
         repository.put(conflict, record)
 
 
+def test_session_delete_returns_only_the_exact_owner_scoped_final_record() -> None:
+    repository = SessionRepository()
+    tx = FakeTransaction()
+    tx.fetch_one_results.extend((session_row(refresh_token_enc="latest-cipher"), None))
+    deleted = repository.delete_and_return(tx, owner_id="owner-1", session_id="session-1")
+    assert deleted.refresh_token_ciphertext == "latest-cipher"
+    assert "DELETE FROM web_session" in tx.calls[0][1]
+    assert "RETURNING" in tx.calls[0][1]
+    assert tx.calls[0][2] == ("session-1", "owner-1")
+    assert repository.delete_and_return(tx, owner_id="owner-1", session_id="missing") is None
+    with pytest.raises(RepositoryValidationError):
+        repository.delete_and_return(FakeTransaction(), owner_id="", session_id="session-1")
+
+
 def test_session_refresh_requires_an_exact_monotonic_generation() -> None:
     repository = SessionRepository()
     refreshed = SessionRecord(

@@ -48,6 +48,17 @@ counting or auditing a stale open. Owner listing omits both digest and snapshot 
   through `IS NOT DISTINCT FROM NULL` once.
 - Single-grant revocations return `revoked`, `already_revoked`, or `missing`; owner-wide offline
   revocation changes only live rows and returns the transition count.
+- `replace_refresh_token_if_current(transaction, owner_id, grant_id,
+  expected_encrypted_refresh_token, encrypted_refresh_token, as_of)` replaces
+  opaque credential state only when owner, exact prior ciphertext, unrevoked
+  state and expiry predicates all match. It returns the detached new record or
+  `None`; it cannot reactivate a revoked grant. This also supports a product-owned
+  encrypted reference to a canonical credential without copying refresh tokens.
+  The caller owns encryption, exact reference validation and the external exchange.
+- `history.sessions.delete_and_return(transaction, owner_id, session_id)`
+  atomically returns the encrypted session record that was actually deleted.
+  Product logout uses those final credential bytes for best-effort IdP revocation;
+  a prior read or process cache cannot safely supply them during rotation.
 - Deletes are owner-scoped and idempotent where the legacy caller treats absence as success.
 
 The repositories never borrow or commit a connection. Callers that combine a durable mutation

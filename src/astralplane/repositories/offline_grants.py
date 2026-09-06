@@ -163,6 +163,39 @@ class OfflineGrantRepository:
         )
         return None if row is None else _grant(row)
 
+    def replace_refresh_token_if_current(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        grant_id: str,
+        expected_encrypted_refresh_token: bytes,
+        encrypted_refresh_token: bytes,
+        as_of: int,
+    ) -> OfflineGrantRecord | None:
+        """Replace opaque credential state without reviving a stale or revoked grant.
+
+        The product owns encrypted credential-reference/rotation semantics. A
+        failed predicate returns no credential, including when revocation wins
+        while a caller is acquiring or settling an exchange.
+        """
+        owner = _required_id(owner_id, "owner_id")
+        grant = _uuid_text(grant_id, "grant_id")
+        expected = _opaque_bytes(expected_encrypted_refresh_token)
+        replacement = _opaque_bytes(encrypted_refresh_token)
+        observed = _non_negative_int(as_of, "as_of")
+        row = transaction.fetch_one(
+            f"""
+            UPDATE user_offline_grant
+               SET refresh_token_enc = %s, updated_at = %s
+             WHERE id = %s AND user_id = %s AND refresh_token_enc = %s
+               AND revoked_at IS NULL AND expires_at > %s
+            RETURNING {self._FIELDS}
+            """,
+            (replacement, observed, grant, owner, expected, observed),
+        )
+        return None if row is None else _grant(row)
+
     def find_latest_valid(
         self,
         transaction: Transaction,

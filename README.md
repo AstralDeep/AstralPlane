@@ -10,8 +10,8 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `075.001`, with guarded upgrade entry points at `066.001`, `067.001`,
-  `074.001`, `074.002`, `074.003`, and `074.004`
+- Current schema: `079.001`, with guarded upgrade entry points at `066.001`, `067.001`,
+  `074.001`, `074.002`, `074.003`, `074.004`, and `075.001`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
@@ -19,7 +19,7 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001` in one registry
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001` in one registry
 transaction. A pre-split
 `066.001` database has only its legacy revision marker; a `067.001`
 database is accepted only when
@@ -27,7 +27,7 @@ it carries the pinned historical `067.001` migration-registry digest. A `074.001
 carry its pinned historical full-path digest. A `074.002` predecessor must carry its pinned
 historical digest, and a `074.004` predecessor must carry its pinned historical digest. Every
 supported predecessor is structurally attested before the first migration write. A current
-`075.001` database must carry the exact current registry digest and pass canonical
+`079.001` database must carry the exact current registry digest and pass canonical
 catalog-structure verification over all Plane-owned tables, sequences, functions, indexes,
 constraints, triggers, rules, policies, inheritance, and owned-schema privileges. A same-name or
 unexpected object with changed behavior is rejected. A non-empty partial or unrecognized schema is
@@ -39,6 +39,11 @@ A fresh `TEMPLATE template0` database's exact PostgreSQL default `public` schema
 (`pg_database_owner`, PUBLIC `USAGE`) is a qualified predecessor variant. Revision `074.004`
 atomically transfers the selected schema to the migration user and revokes PUBLIC schema
 privileges; any other predecessor owner or ACL shape remains a fail-closed mismatch.
+
+Revision `079.001` adds persistent assignments with durable owner controls, source deduplication,
+bounded task graphs, resource reservations, execution permits and immutable approval/effect
+records. See [persistent assignment contracts](docs/persistent-assignment-contracts.md) and
+[migration and recovery](docs/migration-and-recovery.md).
 
 The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, API, UI, agent,
 media, or transport implementation dependency. Product policy and authorization remain in

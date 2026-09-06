@@ -91,6 +91,10 @@ def _agent_management(catalog: api.RepositoryCatalog, transaction: FailingExecut
     )
 
 
+def _assignments(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.assignments.get_assignment(transaction, owner_id=_OWNER, assignment_id=_UUID4)
+
+
 def _agents(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.agents.get_agent(transaction, owner_id=_OWNER, agent_id="agent-1")
 
@@ -354,6 +358,18 @@ def _work_admission(catalog: api.RepositoryCatalog, transaction: FailingExecutor
 
 
 REPOSITORY_CONTRACT_MATRIX = (
+    RepositoryContract(
+        "assignments",
+        api.create_assignment_repository,
+        "src/astralplane/repositories/assignments.py",
+        _assignments,
+        _OWNER,
+        "owner_user_id=%s",
+        ("FOR UPDATE SKIP LOCKED", "expected_control_epoch"),
+        ("assignment_idempotency_conflict", "submission_digest"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError"),
+    ),
     RepositoryContract(
         "agent_management",
         api.create_agent_management_repository,
@@ -815,6 +831,13 @@ class BehavioralEvidence:
 
 
 BEHAVIORAL_EVIDENCE = (
+    BehavioralEvidence(
+        "assignments",
+        "tests.repositories.test_assignments_postgres:test_public_assignment_contract_behaviors",
+        "tests.repositories.test_assignments_postgres:test_public_assignment_contract_behaviors",
+        "tests.repositories.test_assignments_postgres:test_public_assignment_contract_behaviors",
+        "tests.repositories.test_assignments_postgres:test_public_assignment_contract_behaviors",
+    ),
     BehavioralEvidence(
         "agent_management",
         "tests.repositories.test_agent_management:test_detail_context_is_three_query_typed_and_owner_scoped",
