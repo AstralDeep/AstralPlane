@@ -7,6 +7,45 @@ Every operation uses the caller-owned Plane transaction; Deep supplies policy, a
 offline credentials, trusted resource quotes, ordinary dispatcher and work-admission gates.
 No repository method performs external I/O or grants permission to a model.
 
+## Additive one-shot admission (`088.001`)
+
+`create_operation` shares the assignment initializer, action ledger and execution fences.
+It creates only the `one_shot` profile; `create_assignment` remains `persistent` with
+its original source/tool/offline-grant requirements. Existing row JSON and initial
+definition digests are preserved by the additive migration. Legacy list and due-claim
+methods explicitly select the persistent profile; a registered one-shot host handler
+must deliberately use `claim_operations_for_administration`.
+
+The host supplies a typed `AssignmentOperationSpec` and `AssignmentOperationAuthority`.
+The latter is only an opaque, owner-bound reference to a current session, delegation,
+framework credential or offline grant. It contains no token, role claims or permission
+decision. Deep authenticates the caller and revalidates current lineage, tool/PHI/egress
+permissions and the separate work-admission fence before dispatch. Plane checks closed
+reference kinds, owner equality, owner retirement and database time after the owner lock.
+Scheduled origin additionally requires the same current owner offline-grant reference.
+
+One-shot definitions allow no source or external tools for ordinary model work, but
+research requires a nonempty source plan. They declare no recurrence, have at most three
+retries and a deadline no more than one day after acceptance. Lifetime resource ceilings
+remain authoritative; an omitted daily ceiling uses the lifetime ceiling. Limits and
+reference/profile fields are closed, and working authority is never reconstructed from
+an API body's claims. The legacy cadence-based `request_check` refuses this profile.
+
+Admission receives the original owner/namespace/caller key and canonical command digest.
+An existing matching receipt is resolved before new definition/guidance expansion;
+framework replay also binds the issuing credential reference. Receipt, new assignment,
+and the caller's audit/allowance changes belong in one caller-owned transaction. Separate
+one-shot capacity defaults to 25 active/paused and 256 retained tasks. At most 4096
+original-key receipts per owner are retained; callers may select lower ceilings.
+Reaching a ceiling refuses new admission without evicting replay or unresolved effects.
+
+Terminal task deletion nulls the receipt's live foreign key but retains its original
+logical identity: the same key returns `assignment_operation_deleted` and cannot start
+another effect. A completed account retirement removes the private receipts only after
+unresolved effects are settled; the owner retirement fence still prevents new admission.
+This storage admission contract does not itself install a host execution handler, add
+new effect authority or replace the existing ordinary chat dispatcher.
+
 ## Owner commands and receipts
 
 Create takes an owner, UUID4 assignment/submission IDs, a semantic submission SHA-256 and an
@@ -82,6 +121,11 @@ Never substitute an empty result for a completed investigation or manufacture a 
 
 Lease recovery returns stale operation bindings, preserves completed results, releases unstarted
 reservations, conservatively charges interrupted read-only calls and holds uncertain effects.
-Failed episodes use bounded exponential retry deadlines and the durable retry count. Resume,
+`recover_expired_for_administration` selects only the persistent profile;
+`recover_expired_operations_for_administration` selects only one-shot work. Both filter before
+the batch limit so expired work in one profile cannot block the other's recovery. Persistent
+episodes retain their bounded exponential retry deadlines. One-shot recovery uses 5/15/45-second
+delays, at most its original retry allowance, and never schedules beyond the original authority
+expiry or task deadline. Resume,
 restart and owner check do not reset lifetime spending or turn an uncertain effect into retryable
 work. Refer to [migration and recovery](migration-and-recovery.md) for deployment/restore policy.

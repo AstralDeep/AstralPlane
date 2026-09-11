@@ -68,11 +68,11 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "dbdf1848c074737161d0f6b55ceee82201be1cc2b1154f1adc8e377b6d7a3ccf"
+          "sha256": "57381ed175f3124263bb7aa6a31596f6bf58ceab3ebbcdd7f0e66be0db44951c"
         }
       ],
       "task": "T075/T085",
-      "reason": "Preserved append-only and chain invariants through migration and repository regressions."
+      "reason": "Preserved append-only and chain invariants through migration and repository regressions. The 088 assignment foundation extends registry lineage regression coverage through schema 088.001."
     },
     {
       "sourcePath": "backend/audit/tests/test_repository_filters.py",
@@ -611,7 +611,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "41434bf52e929b2b62d2a7d4939d343aea71230cd6ee1426a30e09b3992a67e4"
+          "sha256": "7f83317ab5447a44a70b5b810206ef23037096b405e95eef4addbf651a7a1f19"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -623,7 +623,7 @@
         }
       ],
       "task": "T068/T069/T075",
-      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state."
+      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state. The 088 assignment foundation adds the guarded 079.001-to-088.001 operation-schema migration while preserving predecessor digests."
     },
     {
       "sourcePath": "backend/tests/attachments/test_account_deletion.py",

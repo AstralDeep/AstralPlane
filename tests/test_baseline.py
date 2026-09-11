@@ -212,14 +212,15 @@ def test_schema_meta_only_shell_is_recoverable_as_empty(
     assert transaction.metadata == {"revision": BASELINE_REVISION}
 
 
-def test_existing_structurally_complete_database_is_not_rewritten() -> None:
-    database = _compatible_database(revision="067.001")
+@pytest.mark.parametrize("revision", ["067.001", "079.001", "088.001"])
+def test_existing_structurally_complete_database_is_not_rewritten(revision: str) -> None:
+    database = _compatible_database(revision=revision)
 
     report = initialize_empty_database(database)
 
     assert not report.initialized
     assert report.compatibility.state is BaselineCompatibilityState.COMPATIBLE
-    assert report.compatibility.observed_revision == "067.001"
+    assert report.compatibility.observed_revision == revision
 
 
 @pytest.mark.parametrize(

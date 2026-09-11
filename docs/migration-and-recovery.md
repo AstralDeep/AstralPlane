@@ -12,6 +12,15 @@ the complete existing ancestry; operators can require fail-closed pre-provisioni
 
 ## Before upgrade
 
+Revision `088.001` adds the assignment execution-profile discriminator and original-key
+operation receipts. Its predecessor is the exact qualified `079.001` registry/digest;
+existing assignment JSON, submission digests and unresolved effects are not rewritten.
+Legacy workers must use profile-filtered claims, and the matching Deep composition must
+remain closed until its new exact Plane schema/digest pin is qualified. An older binary
+is not declared compatible with the new schema merely because its rows remain present.
+The populated predecessor, repeat-upgrade and new-catalog corruption cases are exercised
+in `tests/repositories/test_assignments_postgres.py`.
+
 1. Close admission and quiesce all writers.
 2. Record the exact AstralDeep composition, AstralPlane commit, contract version, schema revision,
    migration digest, blob-layout version, and configured durable roots.
@@ -247,7 +256,8 @@ maintenance window has been verified:
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
    `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
-   pinned predecessor catalog shape; `079.001` must also pass the current structural verifier.
+   pinned predecessor catalog shape; `079.001` must match its pinned predecessor catalog
+   and `088.001` must pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the

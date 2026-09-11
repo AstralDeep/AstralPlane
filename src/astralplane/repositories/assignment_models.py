@@ -43,6 +43,28 @@ class AssignmentDefinition(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentOperationAuthority(_Record):
+    """Host-verified reference metadata, never an authentication or dispatch permit."""
+
+    owner_id: str = field(repr=False)
+    origin: str
+    reference_kind: str
+    reference_id: str = field(repr=False)
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentOperationSpec(_Record):
+    """Bounded one-shot intent supplied through the trusted host's admission service."""
+
+    kind: str
+    authority: AssignmentOperationAuthority = field(repr=False)
+    deadline_at: datetime
+    source_retention: str
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentRecord(_Record):
     assignment_id: str
     owner_id: str = field(repr=False)
@@ -62,6 +84,8 @@ class AssignmentRecord(_Record):
     updated_at: datetime
     safe_error_code: str | None = None
     last_completed_generation: int = 0
+    execution_profile: str = "persistent"
+    operation: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

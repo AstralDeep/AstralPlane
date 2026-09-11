@@ -37,7 +37,9 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentDispatchPermit,
     AssignmentEpisodeCompletion,
     AssignmentFence,
+    AssignmentOperationAuthority,
     AssignmentOperationBinding,
+    AssignmentOperationSpec,
     AssignmentOwnerRetirementResult,
     AssignmentRecord,
     AssignmentRecoveryResult,
@@ -153,9 +155,15 @@ def _definition(value):
 
 
 def _record(data):
-    names = {entry.name for entry in fields(AssignmentRecord)} - {"last_completed_generation"}
+    names = {entry.name for entry in fields(AssignmentRecord)} - {
+        "last_completed_generation",
+        "execution_profile",
+        "operation",
+    }
     values = {key: data[key] for key in names}
     values["last_completed_generation"] = data.get("last_completion", {}).get("claim_generation", 0)
+    values["execution_profile"] = data.get("execution_profile", "persistent")
+    values["operation"] = data.get("operation")
     values["definition"] = _definition(values["definition"])
     for key in ("created_at", "updated_at", "next_wake_at"):
         values[key] = _time(values[key])
@@ -194,12 +202,24 @@ class AssignmentRepository:
 
     @staticmethod
     def validate_definition(definition: AssignmentDefinition) -> None:
+        """Validate the unchanged persistent, grant-dependent definition profile."""
+        AssignmentRepository._validate_definition(definition, one_shot=False)
+
+    @staticmethod
+    def validate_operation_definition(definition: AssignmentDefinition) -> None:
+        """Validate bounded one-shot work without synthetic source or cadence fields."""
+        AssignmentRepository._validate_definition(definition, one_shot=True)
+
+    @staticmethod
+    def _validate_definition(definition, *, one_shot):
+        if not isinstance(definition, AssignmentDefinition):
+            raise RepositoryValidationError("typed assignment definition required")
         _text(definition.name, 256)
         _text(definition.instructions, 8192)
         if not isinstance(definition.source, Mapping) or not isinstance(definition.limits, Mapping):
             raise RepositoryValidationError("source and limits must be objects")
         canonical(definition.source, 8192)
-        if not definition.source or not 1 <= len(definition.allowed_tools) <= 64:
+        if not one_shot and (not definition.source or not 1 <= len(definition.allowed_tools) <= 64):
             raise RepositoryValidationError("source and explicit allowed tools required")
         for values in (definition.allowed_tools, definition.consented_scopes):
             if len(values) > 64 or len(set(values)) != len(values):
@@ -209,20 +229,45 @@ class AssignmentRepository:
         if definition.offline_grant_id is not None:
             _uuid(definition.offline_grant_id)
         limits = definition.limits
-        _integer(limits.get("cadence_seconds"), 60, 31536000)
+        if one_shot:
+            known_limits = (
+                set(_DIMENSIONS)
+                | {"daily_" + key for key in _DIMENSIONS}
+                | {
+                    "max_retries",
+                    "max_concurrent_tasks",
+                    "max_depth",
+                    "max_tasks",
+                    "spend_micro_units",
+                    "daily_spend_micro_units",
+                    "currency",
+                }
+            )
+            if set(limits) - known_limits:
+                raise RepositoryValidationError("unknown one-shot limit")
+        if not one_shot:
+            _integer(limits.get("cadence_seconds"), 60, 31536000)
+        elif "cadence_seconds" in limits:
+            raise RepositoryValidationError("one-shot work cannot declare recurrence")
         for key, maximum in (
-            ("max_retries", 10),
+            ("max_retries", 3 if one_shot else 10),
             ("max_concurrent_tasks", 5),
             ("max_depth", 4),
             ("max_tasks", 32),
         ):
             _integer(limits.get(key), 0 if key in {"max_retries", "max_depth"} else 1, maximum)
         for key in _DIMENSIONS:
-            _integer(limits.get(key), 1)
-            _integer(limits.get("daily_" + key), 1)
+            minimum = 0 if one_shot and key == "tool_calls" else 1
+            _integer(limits.get(key), minimum)
+            if not one_shot or "daily_" + key in limits:
+                _integer(limits.get("daily_" + key), minimum)
         if limits.get("spend_micro_units") is not None:
             _integer(limits["spend_micro_units"])
-            _integer(limits.get("daily_spend_micro_units"))
+            _integer(
+                limits.get("daily_spend_micro_units", limits["spend_micro_units"])
+                if one_shot
+                else limits.get("daily_spend_micro_units")
+            )
             _text(limits.get("currency"), 8)
             coverage = definition.cost_quote_coverage
             if not coverage or not coverage.get("quote_digest") or not coverage.get("expires_at"):
@@ -245,6 +290,9 @@ class AssignmentRepository:
             if required:
                 raise RepositoryNotFoundError("assignment_not_found", code="assignment_not_found")
             return None
+        return self._validated_assignment_row(row, owner_id, assignment_id)
+
+    def _validated_assignment_row(self, row, owner_id, assignment_id):
         try:
             data = plain(row["data"])
             if (
@@ -256,7 +304,16 @@ class AssignmentRepository:
                 or _time(data["lease_expires_at"]) != row["lease_expires_at"]
             ):
                 raise ValueError
-            self.validate_definition(_definition(data["definition"]))
+            profile = row.get("execution_profile", "persistent")
+            if profile != data.get("execution_profile", "persistent"):
+                raise ValueError
+            if profile == "one_shot":
+                self.validate_operation_definition(_definition(data["definition"]))
+                self._operation_spec(data["operation"], owner_id)
+            elif profile == "persistent":
+                self.validate_definition(_definition(data["definition"]))
+            else:
+                raise ValueError
             if data["phase"] not in _PHASES or not isinstance(data["tasks"], list):
                 raise ValueError
             if len(data["tasks"]) > 32 or not isinstance(data["checkpoint"], dict):
@@ -310,6 +367,10 @@ class AssignmentRepository:
             _conflict("assignment_claim_stale")
         if data.get("approved_action_id") and data["approved_action_id"] != action_id:
             _conflict("assignment_action_claim_restricted")
+        if data.get("execution_profile") == "one_shot":
+            self._check_operation_time(
+                transaction, self._operation_spec(data["operation"], fence.owner_id)
+            )
         return data
 
     @staticmethod
@@ -384,7 +445,7 @@ class AssignmentRepository:
             _conflict("assignment_owner_retired")
         replay = transaction.fetch_one(
             "SELECT id,submission_digest,data FROM persistent_assignment "
-            "WHERE owner_user_id=%s AND submission_id=%s",
+            "WHERE owner_user_id=%s AND submission_id=%s AND execution_profile='persistent'",
             (owner_id, submission_id),
         )
         if replay:
@@ -397,12 +458,33 @@ class AssignmentRepository:
             )
         counts = transaction.fetch_one(
             "SELECT count(*) AS total,count(*) FILTER(WHERE lifecycle IN ('active','paused')) "
-            "AS active FROM persistent_assignment WHERE owner_user_id=%s",
+            "AS active FROM persistent_assignment WHERE owner_user_id=%s "
+            "AND execution_profile='persistent'",
             (owner_id,),
         )
         if counts["total"] >= max_retained_assignments or counts["active"] >= max_owned_assignments:
             _conflict("assignment_capacity_exhausted")
         self._validate_references(transaction, owner_id, definition)
+        return self._initialize_assignment(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            submission_id=submission_id,
+            submission_digest=submission_digest,
+            definition=definition,
+        )
+
+    def _initialize_assignment(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        submission_id,
+        submission_digest,
+        definition,
+        operation=None,
+    ):
         now = plain(_now(transaction))
         data = dict(
             assignment_id=assignment_id,
@@ -446,16 +528,203 @@ class AssignmentRepository:
             consecutive_failures=0,
             activity_sequence=0,
         )
+        if operation is not None:
+            data.update(execution_profile="one_shot", operation=plain(operation))
         row = transaction.fetch_one(
             "INSERT INTO persistent_assignment(id,owner_user_id,submission_id,submission_digest,"
-            "lifecycle,next_wake_at,state_version,data) "
-            "VALUES(%s,%s,%s,%s,'active',%s,1,%s::jsonb) "
+            "lifecycle,next_wake_at,state_version,data,execution_profile) "
+            "VALUES(%s,%s,%s,%s,'active',%s,1,%s::jsonb,%s) "
             "ON CONFLICT DO NOTHING RETURNING id",
-            (assignment_id, owner_id, submission_id, submission_digest, now, canonical(data)),
+            (
+                assignment_id,
+                owner_id,
+                submission_id,
+                submission_digest,
+                now,
+                canonical(data),
+                "one_shot" if operation is not None else "persistent",
+            ),
         )
         if row is None:
             _conflict("assignment_idempotency_conflict")
         return _record(data)
+
+    @staticmethod
+    def _operation_spec(value, owner_id):
+        try:
+            if isinstance(value, Mapping):
+                value = dict(value)
+                value["authority"] = AssignmentOperationAuthority(**value["authority"])
+                value = AssignmentOperationSpec(**value)
+            if not isinstance(value, AssignmentOperationSpec) or not isinstance(
+                value.authority, AssignmentOperationAuthority
+            ):
+                raise ValueError
+            authority = value.authority
+            if (
+                type(value.version) is not int
+                or value.version != 1
+                or value.kind not in {"chat", "research"}
+            ):
+                raise ValueError
+            if (
+                value.source_retention not in {"none", "operation"}
+                or authority.owner_id != owner_id
+            ):
+                raise ValueError
+            kinds = {
+                "interactive": {"session", "delegation"},
+                "framework": {"credential"},
+                "scheduled": {"offline_grant"},
+            }
+            if authority.reference_kind not in kinds.get(authority.origin, set()):
+                raise ValueError
+            _text(authority.reference_id, 256)
+            _text(authority.owner_id)
+            if _time(authority.expires_at) is None or _time(value.deadline_at) is None:
+                raise ValueError
+            canonical(value, 4096)
+            return value
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RepositoryValidationError(
+                "invalid one-shot authority reference or profile"
+            ) from exc
+
+    @staticmethod
+    def _check_operation_time(transaction, operation):
+        now = _now(transaction)
+        if _time(operation.authority.expires_at) <= now:
+            _conflict("assignment_authorization_unavailable")
+        if _time(operation.deadline_at) <= now:
+            _conflict("assignment_deadline_exceeded")
+
+    def get_operation_receipt(
+        self, query, *, owner_id, origin_namespace, caller_key, command_digest, credential_id=None
+    ):
+        """Resolve accepted intent before expansion; callers still authenticate this read."""
+        _text(owner_id)
+        _text(origin_namespace, 64)
+        _text(caller_key, 256)
+        _digest(command_digest)
+        if credential_id is not None:
+            _text(credential_id, 256)
+        row = query.fetch_one(
+            "SELECT r.assignment_id,r.command_digest,r.credential_id,r.live_assignment_id,a.* "
+            "FROM assignment_operation_receipt r LEFT JOIN persistent_assignment a "
+            "ON a.id=r.live_assignment_id AND a.owner_user_id=r.owner_id "
+            "WHERE r.owner_id=%s AND r.origin_namespace=%s AND r.caller_key=%s",
+            (owner_id, origin_namespace, caller_key),
+        )
+        if row is None:
+            return None
+        if row["command_digest"] != command_digest or row["credential_id"] != credential_id:
+            _conflict("assignment_idempotency_conflict")
+        if row["live_assignment_id"] is None or row["data"] is None:
+            _conflict("assignment_operation_deleted")
+        # Resolve the live row in the receipt's snapshot. A second ID lookup could
+        # follow an unrelated replacement after concurrent deletion and UUID reuse.
+        return _record(self._validated_assignment_row(row, owner_id, str(row["assignment_id"])))
+
+    def create_operation(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        origin_namespace,
+        caller_key,
+        command_digest,
+        definition,
+        operation,
+        credential_id=None,
+        max_owned_operations=25,
+        max_retained_operations=256,
+        max_retained_receipts=4096,
+    ):
+        """Atomically persist host-authorized one-shot intent and its original-key receipt.
+
+        The host authenticates the caller, resolves current authority and appends its
+        audit/allowance mutation in this same transaction. This reference is not a
+        token or an authorization decision. It never permits autonomous dispatch.
+        """
+        _text(owner_id)
+        _uuid(assignment_id)
+        _integer(max_owned_operations, 1, 25)
+        _integer(max_retained_operations, 1, 256)
+        _integer(max_retained_receipts, 1, 4096)
+        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
+        retired = transaction.fetch_one(
+            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+            (owner_id,),
+        )
+        if retired and retired["state"] != "active":
+            _conflict("assignment_owner_retired")
+        replay = self.get_operation_receipt(
+            transaction,
+            owner_id=owner_id,
+            origin_namespace=origin_namespace,
+            caller_key=caller_key,
+            command_digest=command_digest,
+            credential_id=credential_id,
+        )
+        if replay is not None:
+            return replay
+        self.validate_operation_definition(definition)
+        operation = self._operation_spec(operation, owner_id)
+        if (
+            operation.authority.reference_id if operation.authority.origin == "framework" else None
+        ) != credential_id:
+            raise RepositoryValidationError("framework credential reference mismatch")
+        self._check_operation_time(transaction, operation)
+        if _time(operation.deadline_at) > _now(transaction) + timedelta(days=1):
+            raise RepositoryValidationError("one-shot deadline exceeds one day")
+        if operation.kind == "research" and not definition.source:
+            raise RepositoryValidationError("research requires a source plan")
+        unattended = operation.authority.origin == "scheduled"
+        if unattended or definition.offline_grant_id is not None:
+            if unattended and definition.offline_grant_id != operation.authority.reference_id:
+                _conflict("assignment_authorization_unavailable")
+            self._validate_references(transaction, owner_id, definition)
+        else:
+            self._validate_non_grant_references(transaction, owner_id, definition)
+        counts = transaction.fetch_one(
+            "SELECT count(*) AS total,count(*) FILTER(WHERE lifecycle IN ('active','paused')) "
+            "AS active "
+            "FROM persistent_assignment WHERE owner_user_id=%s AND execution_profile='one_shot'",
+            (owner_id,),
+        )
+        if counts["total"] >= max_retained_operations or counts["active"] >= max_owned_operations:
+            _conflict("assignment_capacity_exhausted")
+        receipt_count = transaction.fetch_one(
+            "SELECT count(*) AS total FROM assignment_operation_receipt WHERE owner_id=%s",
+            (owner_id,),
+        )["total"]
+        if receipt_count >= max_retained_receipts:
+            _conflict("assignment_history_capacity_exhausted")
+        record = self._initialize_assignment(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            submission_id=str(uuid.uuid4()),
+            submission_digest=command_digest,
+            definition=definition,
+            operation=operation,
+        )
+        transaction.execute(
+            "INSERT INTO assignment_operation_receipt(owner_id,origin_namespace,caller_key,"
+            "command_digest,credential_id,assignment_id,live_assignment_id,created_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
+            (
+                owner_id,
+                origin_namespace,
+                caller_key,
+                command_digest,
+                credential_id,
+                assignment_id,
+                assignment_id,
+            ),
+        )
+        return record
 
     @staticmethod
     def _validate_references(transaction, owner_id, definition):
@@ -470,6 +739,10 @@ class AssignmentRepository:
                 _conflict("assignment_authorization_unavailable")
         else:
             _conflict("assignment_authorization_unavailable")
+        AssignmentRepository._validate_non_grant_references(transaction, owner_id, definition)
+
+    @staticmethod
+    def _validate_non_grant_references(transaction, owner_id, definition):
         if definition.conversation_id is not None:
             row = transaction.fetch_one(
                 "SELECT id FROM chats WHERE id=%s AND user_id=%s",
@@ -519,6 +792,7 @@ class AssignmentRepository:
             _uuid(after_id)
         rows = query.fetch_all(
             "SELECT id FROM persistent_assignment WHERE owner_user_id=%s "
+            "AND execution_profile='persistent' "
             "AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
             (owner_id, after_id, after_id, limit),
         )
@@ -697,6 +971,8 @@ class AssignmentRepository:
         _version(data, expected_instruction_revision, expected_control_epoch)
         if data["lifecycle"] != "active":
             _conflict("assignment_not_active")
+        if data.get("execution_profile") == "one_shot":
+            _conflict("assignment_operation_requires_explicit_wake")
         key = "check:" + submission_id
         if key in data["controls"]:
             if data["controls"][key] != submission_digest:
@@ -723,13 +999,23 @@ class AssignmentRepository:
         return self._save(transaction, data)
 
     def claim_due_for_administration(self, transaction, *, worker_id, limit=20, lease_seconds=30):
+        """Claim only persistent work; existing workers never receive a one-shot profile."""
+        return self._claim_due(transaction, worker_id, limit, lease_seconds, "persistent")
+
+    def claim_operations_for_administration(
+        self, transaction, *, worker_id, limit=20, lease_seconds=30
+    ):
+        """Claim one-shot controllers for an explicitly registered host handler."""
+        return self._claim_due(transaction, worker_id, limit, lease_seconds, "one_shot")
+
+    def _claim_due(self, transaction, worker_id, limit, lease_seconds, profile):
         _integer(limit, 1, 100)
         rows = transaction.fetch_all(
             "SELECT id,owner_user_id FROM persistent_assignment WHERE lifecycle='active' "
             "AND next_wake_at<=clock_timestamp() AND lease_expires_at IS NULL "
-            "AND data->>'phase' IN ('waiting','failed') "
+            "AND data->>'phase' IN ('waiting','failed') AND execution_profile=%s "
             "ORDER BY next_wake_at,id LIMIT %s FOR UPDATE SKIP LOCKED",
-            (limit,),
+            (profile, limit),
         )
         return tuple(
             self._claim(
@@ -890,10 +1176,9 @@ class AssignmentRepository:
             if value is None:
                 _conflict("assignment_cost_bound_unavailable")
             outstanding = usage["outstanding"].get(key, 0)
-            if (
-                usage["spent"].get(key, 0) + outstanding + value > limits[key]
-                or usage["daily"].get(key, 0) + outstanding + value > limits["daily_" + key]
-            ):
+            if usage["spent"].get(key, 0) + outstanding + value > limits[key] or usage["daily"].get(
+                key, 0
+            ) + outstanding + value > limits.get("daily_" + key, limits[key]):
                 _conflict("assignment_budget_exhausted")
         for key in (*_DIMENSIONS, "spend_micro_units"):
             if amount.get(key) is not None:
@@ -1976,12 +2261,21 @@ class AssignmentRepository:
         return self._save(transaction, data)
 
     def recover_expired_for_administration(self, transaction, *, limit=100):
+        """Recover only persistent work understood by the legacy episode runner."""
+        return self._recover_expired(transaction, limit=limit, profile="persistent")
+
+    def recover_expired_operations_for_administration(self, transaction, *, limit=100):
+        """Recover one-shot work without borrowing persistent recurrence policy."""
+        return self._recover_expired(transaction, limit=limit, profile="one_shot")
+
+    def _recover_expired(self, transaction, *, limit, profile):
         _integer(limit, 1, 100)
         rows = transaction.fetch_all(
             "SELECT id,owner_user_id FROM persistent_assignment "
-            "WHERE lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,id "
+            "WHERE execution_profile=%s AND lease_expires_at<=clock_timestamp() "
+            "ORDER BY lease_expires_at,id "
             "LIMIT %s FOR UPDATE SKIP LOCKED",
-            (limit,),
+            (profile, limit),
         )
         reclaimed, bindings, uncertain = [], [], []
         for row in rows:
@@ -2043,11 +2337,15 @@ class AssignmentRepository:
                 exhausted = (
                     data["consecutive_failures"] > data["definition"]["limits"]["max_retries"]
                 )
-                backoff = min(
-                    data["definition"]["limits"]["cadence_seconds"]
-                    * 2 ** min(data["consecutive_failures"] - 1, 10),
-                    3600,
-                )
+                now = _now(transaction)
+                if profile == "one_shot":
+                    backoff = (5, 15, 45)[min(data["consecutive_failures"] - 1, 2)]
+                else:
+                    backoff = min(
+                        data["definition"]["limits"]["cadence_seconds"]
+                        * 2 ** min(data["consecutive_failures"] - 1, 10),
+                        3600,
+                    )
                 data.update(
                     phase="reconciliation" if held else "failed",
                     safe_error_code="assignment_action_uncertain"
@@ -2055,8 +2353,23 @@ class AssignmentRepository:
                     else "assignment_interrupted",
                     next_wake_at=None
                     if held or exhausted
-                    else plain(_now(transaction) + timedelta(seconds=backoff)),
+                    else plain(now + timedelta(seconds=backoff)),
                 )
+                if profile == "one_shot" and not held:
+                    operation = self._operation_spec(data["operation"], data["owner_id"])
+                    retry_at = now + timedelta(seconds=backoff)
+                    if _time(operation.authority.expires_at) <= retry_at:
+                        data.update(
+                            phase="waiting_authorization",
+                            safe_error_code="assignment_authorization_unavailable",
+                            next_wake_at=None,
+                        )
+                    elif _time(operation.deadline_at) <= retry_at:
+                        data.update(
+                            safe_error_code="assignment_deadline_exceeded", next_wake_at=None
+                        )
+                    elif exhausted:
+                        data.update(safe_error_code="assignment_retry_exhausted")
                 data["next_retry_at"] = data["next_wake_at"]
             self._clear_claim(data)
             self._save(transaction, data)
@@ -2275,4 +2588,9 @@ class AssignmentRepository:
                     expected_control_epoch=data["control_epoch"],
                 )
                 deleted.append(assignment_id)
+        if not unresolved:
+            transaction.execute(
+                "DELETE FROM assignment_operation_receipt WHERE owner_id=%s",
+                (owner_id,),
+            )
         return AssignmentOwnerRetirementResult(tuple(stopped), tuple(deleted), tuple(unresolved))
