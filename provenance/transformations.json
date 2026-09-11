@@ -136,7 +136,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         },
         {
           "path": "tests/repositories/test_preferences.py",
@@ -185,7 +185,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         }
       ],
       "task": "T081",
@@ -501,7 +501,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         }
       ],
       "task": "T081",
