@@ -615,12 +615,15 @@ class SchedulerRepository:
                 if following <= scheduled_ms:
                     raise ValueError("next_run callback must advance the cadence")
             completed = job.schedule_kind == "one_shot" or following is None
+            # Definitions may originate on an application host whose clock is
+            # ahead of PostgreSQL. Advancing cadence must not regress their
+            # modification timestamp or invalidate an otherwise valid record.
             advanced = transaction.execute(
                 """
                 UPDATE scheduled_job
                 SET next_run_at = %s,
                     status = CASE WHEN %s THEN 'completed' ELSE status END,
-                    updated_at = %s
+                    updated_at = GREATEST(updated_at, %s)
                 WHERE id = %s AND user_id = %s AND next_run_at = %s
                 """,
                 (
