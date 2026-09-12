@@ -62,13 +62,14 @@ def operation(tx, repo, *, issued=False):
     record = create_operation(
         repo,
         tx,
+        authority=observation,
         operation=AssignmentOperationSpec(
             "chat",
             AssignmentOperationAuthority(
                 "owner",
                 "interactive",
-                "session",
-                session.session_id,
+                "session_incarnation",
+                session.incarnation_id,
                 now + timedelta(minutes=5),
             ),
             now + timedelta(minutes=5),
@@ -395,9 +396,9 @@ def test_new_observation_after_same_sid_replacement_requires_host_incarnation_bi
     new_observation = SessionExecutionObservation(
         current.credential, current.observed_at, current.observed_at + timedelta(seconds=15)
     )
-    # Explicit limit: the operation stores only SID. A newly host-issued observation
-    # cannot prove its original incarnation without the host's immutable reference.
-    assert guard(tx, repo, values, new_observation).assignment_id == values[3].assignment_id
+    # Even a genuinely current observation cannot replace the operation's original incarnation.
+    with pytest.raises(RepositoryConflictError):
+        guard(tx, repo, values, new_observation)
 
 
 @pytest.mark.parametrize("operation_name", ["guard", "refresh"])

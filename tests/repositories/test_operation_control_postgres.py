@@ -7,6 +7,7 @@ import pytest
 from test_assignments_postgres import (
     action,
     bind,
+    claim_operations,
     create,
     create_operation,
     finish,
@@ -39,7 +40,7 @@ def current(repo, tx, record):
 
 
 def operation_claim(repo, tx):
-    return repo.claim_operations_for_administration(tx, worker_id="one-shot")[0]
+    return claim_operations(repo, tx, worker_id="one-shot")[0]
 
 
 def wait(repo, tx, claim, **changes):
@@ -113,7 +114,7 @@ def test_wait_cleanup_and_exactly_once_wake(tx, repo):
         == "failed_not_started"
     )
     assert reserved.action.assignment_id == record.assignment_id
-    assert repo.claim_operations_for_administration(tx, worker_id="later") == ()
+    assert claim_operations(repo, tx, worker_id="later") == ()
     assert repo.claim_due_for_administration(tx, worker_id="legacy") == ()
     assert wait(repo, tx, claim, expected_state_version=waiting.state_version - 1) == waiting
     args = wake_args(waiting)
@@ -207,7 +208,7 @@ def test_future_versions_inspect_cancel_and_do_not_starve_known_claims(tx, repo,
 
     def upgrade(data):
         if path == "operation":
-            data["operation"]["version"] = 2
+            data["operation"]["version"] = 3
             data["operation"]["future"] = {"opaque": "retained"}
         elif path == "control":
             data["operation"]["control"] = {"version": 2, "future": "retained"}
@@ -218,7 +219,7 @@ def test_future_versions_inspect_cancel_and_do_not_starve_known_claims(tx, repo,
     read = repo.get_operation(tx, owner_id="owner", assignment_id=unknown.assignment_id)
     assert not read.continuation_supported and read.disposition == "unsupported_version"
     supported = create_operation(repo, tx, caller_key="later", command_digest=digest("later"))
-    claimed = repo.claim_operations_for_administration(tx, worker_id="safe", limit=1)
+    claimed = claim_operations(repo, tx, worker_id="safe", limit=1)
     assert [c.assignment.assignment_id for c in claimed] == [supported.assignment_id]
     for command in ("pause", "resume", "revise"):
         with pytest.raises(RepositoryConflictError, match="assignment_version_unsupported"):
@@ -466,7 +467,7 @@ def test_bounded_retry_exhaustion_or_expiry_does_not_recur(tx, repo, kind):
     mutate(tx, claim.assignment, change)
     failed = finish(repo, tx, claim.fence, phase="failed", wake_reason="transient")
     assert failed.next_wake_at is None
-    assert repo.claim_operations_for_administration(tx, worker_id="later") == ()
+    assert claim_operations(repo, tx, worker_id="later") == ()
     if kind == "authority":
         assert failed.phase == "waiting_authorization"
         assert failed.lifecycle == "active"
@@ -625,7 +626,7 @@ def test_total_json_overflow_rolls_back_wake_receipt_and_transition(database, re
         assert unchanged.state_version == waiting.state_version
 
 
-def test_scheduled_resume_revalidates_current_owner_grant(tx, repo):
+def test_scheduled_resume_requires_qualified_adapter_even_with_current_grant(tx, repo):
     base = create_operation(repo, tx)
     grant = legacy_definition(tx).offline_grant_id
     operation = plain(base.operation)
@@ -641,12 +642,13 @@ def test_scheduled_resume_revalidates_current_owner_grant(tx, repo):
         operation=operation,
     )
     paused = control(repo, tx, record).assignment
-    resumed = control(repo, tx, paused, "resume").assignment
-    assert resumed.lifecycle == "active"
-    paused = control(repo, tx, resumed).assignment
-    tx.execute("UPDATE user_offline_grant SET revoked_at=1 WHERE id=%s", (grant,))
-    with pytest.raises(RepositoryConflictError, match="assignment_authorization_unavailable"):
+    with pytest.raises(RepositoryConflictError, match="assignment_version_unsupported"):
         control(repo, tx, paused, "resume")
+    assert current(repo, tx, paused) == paused
+    tx.execute("UPDATE user_offline_grant SET revoked_at=1 WHERE id=%s", (grant,))
+    with pytest.raises(RepositoryConflictError, match="assignment_version_unsupported"):
+        control(repo, tx, paused, "resume")
+    assert current(repo, tx, paused) == paused
 
 
 def test_yield_does_not_reset_one_shot_retry_allowance(tx, repo):
@@ -680,7 +682,7 @@ def test_future_version_does_not_block_recovery_or_change_its_issued_liability(t
 
     def upgrade(data):
         if path == "operation":
-            data["operation"]["version"] = 2
+            data["operation"]["version"] = 3
         elif path == "control":
             data["operation"]["control"] = {"version": 2, "future": "unchanged"}
         else:

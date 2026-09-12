@@ -13,16 +13,35 @@ No repository method performs external I/O or grants permission to a model.
 It creates only the `one_shot` profile; `create_assignment` remains `persistent` with
 its original source/tool/offline-grant requirements. Existing row JSON and initial
 definition digests are preserved by the additive migration. Legacy list and due-claim
-methods explicitly select the persistent profile; a registered one-shot host handler
-must deliberately use `claim_operations_for_administration`.
+methods explicitly select the persistent profile. The former untyped
+`claim_operations_for_administration` entry point now refuses; a one-shot host uses
+read-only discovery followed by an exact observation-bound claim as described below.
+
+New `AssignmentOperationSpec` records use outer version 2 and require the matching
+issued-session storage contract (`088.002`). This assignment change allocates no new
+schema or migration. Versions 1 and 2 remain decodable with understood control and
+checkpoint version 1. Only v2 interactive `session_incarnation` currently has a
+qualified execution observation. Version 1 permits safe inspection, cancellation,
+receipt replay and authentic liability settlement, but never new continuation.
 
 The host supplies a typed `AssignmentOperationSpec` and `AssignmentOperationAuthority`.
-The latter is only an opaque, owner-bound reference to a current session, delegation,
-framework credential or offline grant. It contains no token, role claims or permission
+The latter is only an opaque, owner-bound reference to an issued session incarnation,
+delegation, framework credential or offline grant. It contains no token, role claims or permission
 decision. Deep authenticates the caller and revalidates current lineage, tool/PHI/egress
 permissions and the separate work-admission fence before dispatch. Plane checks closed
 reference kinds, owner equality, owner retirement and database time after the owner lock.
-Scheduled origin additionally requires the same current owner offline-grant reference.
+Scheduled admission additionally requires the same current owner offline-grant reference;
+that stored reference alone does not enable execution, resume or claims.
+
+New interactive admission also requires `authority=SessionExecutionObservation(...)`.
+The operation stores `reference_kind="session_incarnation"` and the original canonical
+UUID4 as `reference_id`, never the observation or credential bytes. Plane validates the
+exact owner/incarnation and current encrypted generation under owner then session locks.
+The immutable authority expiry cannot exceed that session's hard expiry. Both the
+original observation and operation time bounds are checked again after assignment and
+receipt writes. A savepoint rolls back those writes on late refusal even when the
+caller catches the error and commits unrelated work. The host must include its required
+allowance/audit writes and final authority checks in the enclosing transaction.
 
 One-shot definitions allow no source or external tools for ordinary model work, but
 research requires a nonempty source plan. They declare no recurrence, have at most three
@@ -32,8 +51,10 @@ reference/profile fields are closed, and working authority is never reconstructe
 an API body's claims. The legacy cadence-based `request_check` refuses this profile.
 
 Admission receives the original owner/namespace/caller key and canonical command digest.
-An existing matching receipt is resolved before new definition/guidance expansion;
-framework replay also binds the issuing credential reference. Receipt, new assignment,
+An existing matching receipt is resolved before new definition/guidance expansion or
+new observation checks; framework replay also binds the issuing credential reference.
+An accepted v1 receipt returns its original version and binding without adopting a
+current session or spending again. Genuinely new v1 admission is refused. Receipt, new assignment,
 and the caller's audit/allowance changes belong in one caller-owned transaction. Separate
 one-shot capacity defaults to 25 active/paused and 256 retained tasks. At most 4096
 original-key receipts per owner are retained; callers may select lower ceilings.
@@ -93,7 +114,9 @@ completion fields are omitted at default when computing old receipt signatures.
 `get_operation` and bounded UUID-keyset `list_operations` return an
 `AssignmentOperationRead` with the existing assignment revision vector, disposition,
 continuation support and explicit terminal/result metadata. They filter the profile
-before pagination. Unknown positive operation/control/checkpoint versions remain
+before pagination. Known v1 records and unsupported v2 origins report no continuation
+support while preserving their understood historical terminal/result metadata.
+Unknown positive operation/control/checkpoint versions remain
 readable but non-dispatchable; claim selection excludes them before applying its
 limit, so they cannot starve later supported rows. A safe stop preserves unknown
 nested metadata and retires the known outer fence. Invalid identities, malformed
@@ -159,6 +182,25 @@ owner, instruction revision, control epoch, generation and an opaque token. Bind
 `AssignmentOperationBinding` before any dispatch; validate its separate work-admission fence at
 each use. `renew_claim` and `assert_current_claim` never revive invalidated authority.
 
+`discover_due_operations_for_administration(query, limit=20, after_due_at=None,
+after_id=None)` returns a bounded read-only page of due v2 interactive incarnation
+records. Both cursor members are required together; order is `(next_wake_at,id)`.
+The query filters execution profile, phase, known outer/nested versions and supported
+origin before `LIMIT`, and acquires no lease. A host advances after a refused candidate
+and wraps boundedly to avoid repeatedly selecting an unavailable first record.
+
+`claim_operation_for_administration(transaction, owner_id=..., assignment_id=...,
+expected_state_version=..., worker_id=..., authority=..., lease_seconds=30)` grants
+one exact due claim. It locks owner, the original selected session, then assignment;
+validates the observed strict state version, due time, phase and absence of a lease;
+and rechecks the same observation after the write inside a savepoint. Foreign,
+replaced, expired, unsupported or competing claims refuse without partial changes.
+The host obtains fresh remote authority before opening this transaction. Discovery is
+not an authority grant and cannot select the owner's latest session as a substitute.
+One-shot `claim_for_approved_action` likewise requires `authority` and observed
+`expected_state_version`, and rechecks after action waits and the restricted-claim
+write. Persistent approved-action signatures and behavior remain compatible.
+
 Before a host transaction performs a write requiring both execution fences, call
 `assert_current_assignment_execution(transaction, fence=AssignmentFence(...),
 binding=AssignmentOperationBinding(...), action_id=None, authority=None)`. This strict
@@ -181,11 +223,11 @@ refresh institutional session/delegation authority before opening it and perform
 any required audit/outbox writes before commit. A missing, stale or unsupported
 local context refuses the guarded write. Interactive one-shot requires an exact
 `SessionExecutionObservation` in `authority`, bound to the operation's stored
-session reference. A delegation reference has no supported execution observation
-adapter here and is refused. Scheduled one-shot and persistent granted profiles
-retain their existing checks and signatures. Framework origin is explicitly
-refused until the dedicated current issuer-lineage contract is bound; its stored
-credential reference alone is insufficient. These storage primitives do not enable
+incarnation reference. Delegation, scheduled one-shot and framework references have
+no qualified execution observation adapter here and are refused, even if a grant
+row or credential identifier exists. Persistent granted profiles retain their
+existing checks and signatures. Version 1 is settlement-only; a live historical SID
+cannot re-enable it. Reference metadata is insufficient without the required adapter. These storage primitives do not enable
 source-less chat, interactive ingress or a one-shot runner.
 
 Use the named `put_action_for_execution`, `reserve_action_for_execution` and
@@ -329,13 +371,16 @@ does not prevent an authentic issued permit from settling consumption. The fresh
 authority check becomes false rather than raising before mandatory accounting;
 success/failure charge once and uncertainty retains the reservation until explicit
 settlement. This does not relax permit identity, outcome validation, settlement
-replay or unresolved-liability checks. A different session ID cannot substitute for
-the originally selected reference, and an old observation is refused after same-ID
-ciphertext/generation replacement. The operation currently stores only that ID,
-not its original credential incarnation. A newly host-issued valid observation
-after same-ID replacement is therefore locally indistinguishable here. The host
-must preserve and check the immutable issued-session reference before enabling
-continuation; this primitive alone does not close that integration requirement.
+replay or unresolved-liability checks. The operation's original incarnation must
+match the fresh observation; a new same-SID row cannot substitute even when every
+timestamp and encrypted credential repeats. Exact current row and generation checks
+remain additional conditions. Version 1 always has a false current-result context:
+its authentic issued and uncertain attempts remain chargeable once, with no new
+result bytes, checkpoint advancement or wake. Explicit reconciliation and reserved
+no-permit release remain available; issued attempts cannot be refunded. An exact
+historical decision/completion receipt does not authorize another execution.
+This does not enable Deep ingress or runners; caller adoption and institutional
+staging remain separate prerequisites.
 
 Request-local forced-refresh adapters may call
 `SessionRepository.bound_request_execution_waits(transaction)` immediately after
@@ -347,6 +392,11 @@ ordinary server-side lock waits and query execution. A timeout must leave the
 transaction through its failure path so rollback releases every acquired lock and
 the pooled connection; commit and rollback both restore the prior settings.
 Ordinary session operations do not opt in and retain their existing behavior.
+`create_operation`, exact operation claims and approved-action claims do not install
+these caps themselves: a request host must call the helper before its first repository
+call, including the initial owner lock. Real PostgreSQL request-host tests hold owner,
+session or assignment locks while the capped worker fails, rolls back, releases its
+locks and successfully reuses its pooled connection before the blocker is released.
 
 These are per-lock and per-statement limits, not a universal fifteen-second
 physical deadline. They do not replace the original database-clock authority
@@ -377,8 +427,13 @@ Lease recovery returns stale operation bindings, preserves completed results, re
 reservations, conservatively charges interrupted read-only calls and holds uncertain effects.
 `recover_expired_for_administration` selects only the persistent profile;
 `recover_expired_operations_for_administration` selects only one-shot work. Both filter before
-the batch limit so expired work in one profile cannot block the other's recovery. Persistent
-episodes retain their bounded exponential retry deadlines. One-shot recovery uses 5/15/45-second
+the batch limit so expired work in one profile cannot block the other's recovery.
+The one-shot recovery domain includes known outer versions 1 and 2, unlike new claim
+eligibility. Legacy v1 liabilities are not excluded before settlement. Recovery clears
+their old executable lease, retains uncertain/opaque effects and never schedules a
+new due time or retry. Unsupported v2 origins are likewise held without execution.
+Persistent episodes retain their bounded exponential retry deadlines. Executable
+one-shot recovery uses 5/15/45-second
 delays, at most its original retry allowance, and never schedules beyond the original authority
 expiry or task deadline.
 Supported one-shot recovery exhaustion or a deadline without unresolved liabilities

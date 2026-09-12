@@ -173,14 +173,32 @@ def _state_version(data, expected):
 
 
 def _supported(data):
+    """Known persisted envelopes remain decodable for receipts and settlement."""
     if data.get("execution_profile") != "one_shot":
         return True
     operation = data["operation"]
     return (
-        operation["version"] == 1
+        operation["version"] in {1, 2}
         and data["checkpoint"].get("schema_version", 1) == 1
         and operation.get("control", {}).get("version", 1) == 1
     )
+
+
+def _executable(data):
+    """Only v2's qualified incarnation authority can continue one-shot work."""
+    if data.get("execution_profile") != "one_shot":
+        return True
+    return (
+        _supported(data)
+        and data["operation"]["version"] == 2
+        and data["operation"]["authority"]["origin"] == "interactive"
+        and data["operation"]["authority"]["reference_kind"] == "session_incarnation"
+    )
+
+
+def _require_executable(data):
+    if not _executable(data):
+        _conflict("assignment_version_unsupported")
 
 
 def _operation_control(operation):
@@ -559,6 +577,7 @@ class AssignmentRepository:
 
     def _fenced(self, transaction, fence, *, action_id=None):
         data = self._load(transaction, fence.owner_id, fence.assignment_id, lock=True)
+        _require_executable(data)
         _version(data, fence.instruction_revision, fence.control_epoch)
         if (
             data["lifecycle"] != "active"
@@ -766,7 +785,7 @@ class AssignmentRepository:
             authority = value.authority
             if (
                 type(value.version) is not int
-                or value.version != 1
+                or value.version not in {1, 2}
                 or value.kind not in {"chat", "research"}
             ):
                 raise ValueError
@@ -776,13 +795,18 @@ class AssignmentRepository:
             ):
                 raise ValueError
             kinds = {
-                "interactive": {"session", "delegation"},
+                "interactive": {
+                    "session" if value.version == 1 else "session_incarnation",
+                    "delegation",
+                },
                 "framework": {"credential"},
                 "scheduled": {"offline_grant"},
             }
             if authority.reference_kind not in kinds.get(authority.origin, set()):
                 raise ValueError
             _text(authority.reference_id, 256)
+            if authority.reference_kind == "session_incarnation":
+                _uuid(authority.reference_id)
             _text(authority.owner_id)
             if _time(authority.expires_at) is None or _time(value.deadline_at) is None:
                 raise ValueError
@@ -799,7 +823,7 @@ class AssignmentRepository:
             raise RepositoryValidationError("operation object required")
         _integer(operation.get("version"), 1)
         canonical(operation, 73728)
-        if operation["version"] != 1:
+        if operation["version"] not in {1, 2}:
             return
         self._operation_spec(operation, owner_id)
         outcome = operation.get("terminal_outcome")
@@ -885,6 +909,7 @@ class AssignmentRepository:
         definition,
         operation,
         credential_id=None,
+        authority=None,
         max_owned_operations=25,
         max_retained_operations=256,
         max_retained_receipts=4096,
@@ -895,86 +920,120 @@ class AssignmentRepository:
         audit/allowance mutation in this same transaction. This reference is not a
         token or an authorization decision. It never permits autonomous dispatch.
         """
-        _text(owner_id)
-        _uuid(assignment_id)
-        _integer(max_owned_operations, 1, 25)
-        _integer(max_retained_operations, 1, 256)
-        _integer(max_retained_receipts, 1, 4096)
-        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
-        retired = transaction.fetch_one(
-            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
-            (owner_id,),
-        )
-        if retired and retired["state"] != "active":
-            _conflict("assignment_owner_retired")
-        replay = self.get_operation_receipt(
-            transaction,
-            owner_id=owner_id,
-            origin_namespace=origin_namespace,
-            caller_key=caller_key,
-            command_digest=command_digest,
-            credential_id=credential_id,
-        )
-        if replay is not None:
-            return replay
-        self.validate_operation_definition(definition)
-        if isinstance(operation, Mapping) and set(operation) & _OPERATION_STATE_KEYS:
-            raise RepositoryValidationError("operation control is repository-owned")
-        operation = self._operation_spec(operation, owner_id)
-        if (
-            operation.authority.reference_id if operation.authority.origin == "framework" else None
-        ) != credential_id:
-            raise RepositoryValidationError("framework credential reference mismatch")
-        self._check_operation_time(transaction, operation)
-        if _time(operation.deadline_at) > _now(transaction) + timedelta(days=1):
-            raise RepositoryValidationError("one-shot deadline exceeds one day")
-        if operation.kind == "research" and not definition.source:
-            raise RepositoryValidationError("research requires a source plan")
-        unattended = operation.authority.origin == "scheduled"
-        if unattended or definition.offline_grant_id is not None:
-            if unattended and definition.offline_grant_id != operation.authority.reference_id:
-                _conflict("assignment_authorization_unavailable")
-            self._validate_references(transaction, owner_id, definition)
-        else:
-            self._validate_non_grant_references(transaction, owner_id, definition)
-        counts = transaction.fetch_one(
-            "SELECT count(*) AS total,count(*) FILTER(WHERE lifecycle IN ('active','paused')) "
-            "AS active "
-            "FROM persistent_assignment WHERE owner_user_id=%s AND execution_profile='one_shot'",
-            (owner_id,),
-        )
-        if counts["total"] >= max_retained_operations or counts["active"] >= max_owned_operations:
-            _conflict("assignment_capacity_exhausted")
-        receipt_count = transaction.fetch_one(
-            "SELECT count(*) AS total FROM assignment_operation_receipt WHERE owner_id=%s",
-            (owner_id,),
-        )["total"]
-        if receipt_count >= max_retained_receipts:
-            _conflict("assignment_history_capacity_exhausted")
-        record = self._initialize_assignment(
-            transaction,
-            owner_id=owner_id,
-            assignment_id=assignment_id,
-            submission_id=str(uuid.uuid4()),
-            submission_digest=command_digest,
-            definition=definition,
-            operation=operation,
-        )
-        transaction.execute(
-            "INSERT INTO assignment_operation_receipt(owner_id,origin_namespace,caller_key,"
-            "command_digest,credential_id,assignment_id,live_assignment_id,created_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
-            (
-                owner_id,
-                origin_namespace,
-                caller_key,
-                command_digest,
-                credential_id,
-                assignment_id,
-                assignment_id,
-            ),
-        )
-        return record
+        with transaction.savepoint("operation_create_" + uuid.uuid4().hex):
+            _text(owner_id)
+            _uuid(assignment_id)
+            _integer(max_owned_operations, 1, 25)
+            _integer(max_retained_operations, 1, 256)
+            _integer(max_retained_receipts, 1, 4096)
+            transaction.fetch_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,)
+            )
+            retired = transaction.fetch_one(
+                "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+                (owner_id,),
+            )
+            if retired and retired["state"] != "active":
+                _conflict("assignment_owner_retired")
+            replay = self.get_operation_receipt(
+                transaction,
+                owner_id=owner_id,
+                origin_namespace=origin_namespace,
+                caller_key=caller_key,
+                command_digest=command_digest,
+                credential_id=credential_id,
+            )
+            if replay is not None:
+                return replay
+            self.validate_operation_definition(definition)
+            if isinstance(operation, Mapping) and set(operation) & _OPERATION_STATE_KEYS:
+                raise RepositoryValidationError("operation control is repository-owned")
+            operation = self._operation_spec(operation, owner_id)
+            if operation.version != 2:
+                _conflict("assignment_version_unsupported")
+            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
+            if (
+                operation.authority.reference_id
+                if operation.authority.origin == "framework"
+                else None
+            ) != credential_id:
+                raise RepositoryValidationError("framework credential reference mismatch")
+            self._check_operation_time(transaction, operation)
+            if _time(operation.deadline_at) > _now(transaction) + timedelta(days=1):
+                raise RepositoryValidationError("one-shot deadline exceeds one day")
+            if operation.kind == "research" and not definition.source:
+                raise RepositoryValidationError("research requires a source plan")
+            unattended = operation.authority.origin == "scheduled"
+            if unattended or definition.offline_grant_id is not None:
+                if unattended and definition.offline_grant_id != operation.authority.reference_id:
+                    _conflict("assignment_authorization_unavailable")
+                self._validate_references(transaction, owner_id, definition)
+            else:
+                self._validate_non_grant_references(transaction, owner_id, definition)
+            counts = transaction.fetch_one(
+                "SELECT count(*) AS total,count(*) FILTER(WHERE lifecycle IN ('active','paused')) "
+                "AS active "
+                "FROM persistent_assignment WHERE owner_user_id=%s "
+                "AND execution_profile='one_shot'",
+                (owner_id,),
+            )
+            if (
+                counts["total"] >= max_retained_operations
+                or counts["active"] >= max_owned_operations
+            ):
+                _conflict("assignment_capacity_exhausted")
+            receipt_count = transaction.fetch_one(
+                "SELECT count(*) AS total FROM assignment_operation_receipt WHERE owner_id=%s",
+                (owner_id,),
+            )["total"]
+            if receipt_count >= max_retained_receipts:
+                _conflict("assignment_history_capacity_exhausted")
+            record = self._initialize_assignment(
+                transaction,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+                submission_id=str(uuid.uuid4()),
+                submission_digest=command_digest,
+                definition=definition,
+                operation=operation,
+            )
+            transaction.execute(
+                "INSERT INTO assignment_operation_receipt(owner_id,origin_namespace,caller_key,"
+                "command_digest,credential_id,assignment_id,live_assignment_id,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
+                (
+                    owner_id,
+                    origin_namespace,
+                    caller_key,
+                    command_digest,
+                    credential_id,
+                    assignment_id,
+                    assignment_id,
+                ),
+            )
+            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
+            self._check_operation_time(transaction, operation)
+            return record
+
+    def _assert_creation_authority(self, transaction, owner_id, definition, operation, authority):
+        """Bind interactive creation to its original issued session, including expiry."""
+        if operation.authority.origin != "interactive":
+            return
+        data = {
+            "owner_id": owner_id,
+            "execution_profile": "one_shot",
+            "operation": plain(operation),
+            "definition": plain(definition),
+            "checkpoint": {},
+        }
+        if not self._lock_execution_authority(transaction, data, authority):
+            _conflict("assignment_authorization_unavailable")
+        elapsed = _time(operation.authority.expires_at) - datetime(1970, 1, 1, tzinfo=UTC)
+        expiry_microseconds = (
+            elapsed.days * 86400 + elapsed.seconds
+        ) * 1_000_000 + elapsed.microseconds
+        if expiry_microseconds > authority.credential.hard_expires_at * 1_000_000:
+            _conflict("assignment_authorization_unavailable")
 
     @staticmethod
     def _validate_references(transaction, owner_id, definition):
@@ -1041,7 +1100,7 @@ class AssignmentRepository:
         return AssignmentOperationRead(
             _record(data),
             disposition,
-            supported,
+            _executable(data),
             operation.get("result_reference") if supported else None,
             terminal,
         )
@@ -1310,6 +1369,7 @@ class AssignmentRepository:
 
     def _validate_operation_continuation(self, transaction, data, definition=None):
         """Local lineage checks supplement, never replace, current host authentication."""
+        _require_executable(data)
         if data["phase"] == "waiting_authorization":
             _conflict("assignment_authorization_unavailable")
         operation = self._operation_spec(data["operation"], data["owner_id"])
@@ -1485,8 +1545,91 @@ class AssignmentRepository:
     def claim_operations_for_administration(
         self, transaction, *, worker_id, limit=20, lease_seconds=30
     ):
-        """Claim one-shot controllers for an explicitly registered host handler."""
-        return self._claim_due(transaction, worker_id, limit, lease_seconds, "one_shot")
+        """Refuse the historical bulk API, which cannot bind a selected incarnation."""
+        _conflict("assignment_authorization_unavailable")
+
+    def discover_due_operations_for_administration(
+        self, query, *, limit=20, after_due_at=None, after_id=None
+    ):
+        """Read a bounded due page without granting authority or acquiring leases.
+
+        Advance the exact (next_wake_at, assignment_id) cursor after a refused
+        candidate; discovery never resolves authority by owner or current SID.
+        """
+        _integer(limit, 1, 100)
+        if (after_due_at is None) != (after_id is None):
+            raise RepositoryValidationError("complete operation discovery cursor required")
+        if after_id is not None:
+            _uuid(after_id)
+            after_due_at = _time(after_due_at)
+        rows = query.fetch_all(
+            "SELECT * FROM persistent_assignment WHERE execution_profile='one_shot' "
+            "AND lifecycle='active' AND next_wake_at<=clock_timestamp() "
+            "AND lease_expires_at IS NULL AND data->>'phase' IN ('waiting','failed') "
+            "AND data->'operation'->'version'='2'::jsonb "
+            "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
+            "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb "
+            "AND data->'operation'->'authority'->>'origin'='interactive' "
+            "AND data->'operation'->'authority'->>'reference_kind'='session_incarnation' "
+            "AND (%s::timestamptz IS NULL OR (next_wake_at,id)>(%s,%s::uuid)) "
+            "ORDER BY next_wake_at,id LIMIT %s",
+            (after_due_at, after_due_at, after_id, limit),
+        )
+        return tuple(
+            _record(self._validated_assignment_row(row, row["owner_user_id"], str(row["id"])))
+            for row in rows
+        )
+
+    def claim_operation_for_administration(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        worker_id,
+        authority,
+        lease_seconds=30,
+    ):
+        """Claim one exact due operation under owner/session locks and a fresh observation."""
+        _integer(expected_state_version, 1)
+        with transaction.savepoint("operation_claim_" + uuid.uuid4().hex):
+            data = self._operation_claim_context(transaction, owner_id, assignment_id, authority)
+            _state_version(data, expected_state_version)
+            if (
+                data["lifecycle"] != "active"
+                or data["phase"] not in {"waiting", "failed"}
+                or data["lease_expires_at"] is not None
+                or _time(data["next_wake_at"]) is None
+                or _time(data["next_wake_at"]) > _now(transaction)
+            ):
+                _conflict("assignment_not_due")
+            claim = self._claim(transaction, data, worker_id, lease_seconds)
+            self._assert_operation_claim_current(transaction, data, authority)
+            return claim
+
+    def _operation_claim_context(self, transaction, owner_id, assignment_id, authority):
+        """Lock the original authority before a one-shot assignment, never a latest session."""
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        selected = self._load(transaction, owner_id, assignment_id)
+        if selected.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        _require_executable(selected)
+        if not self._lock_execution_authority(transaction, selected, authority):
+            _conflict("assignment_authorization_unavailable")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if self._execution_authority_selection(data) != self._execution_authority_selection(
+            selected
+        ):
+            _conflict("assignment_authorization_unavailable")
+        self._assert_operation_claim_current(transaction, data, authority)
+        return data
+
+    def _assert_operation_claim_current(self, transaction, data, authority):
+        self._validate_operation_continuation(transaction, data)
+        if not self._lock_execution_authority(transaction, data, authority):
+            _conflict("assignment_authorization_unavailable")
 
     def _claim_due(self, transaction, worker_id, limit, lease_seconds, profile):
         _integer(limit, 1, 100)
@@ -1494,9 +1637,6 @@ class AssignmentRepository:
             "SELECT id,owner_user_id FROM persistent_assignment WHERE lifecycle='active' "
             "AND next_wake_at<=clock_timestamp() AND lease_expires_at IS NULL "
             "AND data->>'phase' IN ('waiting','failed') AND execution_profile=%s "
-            "AND (execution_profile='persistent' OR (data->'operation'->'version'='1'::jsonb "
-            "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
-            "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
             "ORDER BY next_wake_at,id LIMIT %s FOR UPDATE SKIP LOCKED",
             (profile, limit),
         )
@@ -1553,29 +1693,24 @@ class AssignmentRepository:
         """
         selected, grant_id = self._execution_authority_selection(data)
         if selected is not None:
-            if selected["origin"] == "framework":
+            if not _executable(data) or not isinstance(authority, SessionExecutionObservation):
                 return False
-            if selected["origin"] == "interactive":
-                if selected["reference_kind"] != "session" or not isinstance(
-                    authority, SessionExecutionObservation
+            try:
+                state = authority.credential
+                if (
+                    state.owner_id != data["owner_id"]
+                    or state.incarnation_id != selected["reference_id"]
                 ):
                     return False
-                try:
-                    state = authority.credential
-                    if (
-                        state.owner_id != data["owner_id"]
-                        or state.session_id != selected["reference_id"]
-                    ):
-                        return False
-                    SessionRepository().assert_current_execution(transaction, observation=authority)
-                except (
-                    AttributeError,
-                    RepositoryConflictError,
-                    RepositoryDataError,
-                    RepositoryNotFoundError,
-                    RepositoryValidationError,
-                ):
-                    return False
+                SessionRepository().assert_current_execution(transaction, observation=authority)
+            except (
+                AttributeError,
+                RepositoryConflictError,
+                RepositoryDataError,
+                RepositoryNotFoundError,
+                RepositoryValidationError,
+            ):
+                return False
         return (
             grant_id is None
             or transaction.fetch_one(
@@ -2462,34 +2597,48 @@ class AssignmentRepository:
         submission_digest,
         worker_id,
         lease_seconds=30,
+        authority=None,
+        expected_state_version=None,
     ):
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        _version(data, expected_instruction_revision, expected_control_epoch)
-        _text(interactive_receipt_id)
-        _uuid(submission_id)
-        _digest(submission_digest)
-        action = self._action(transaction, owner_id, assignment_id, action_id)
-        self._approve_conditions(
-            transaction,
-            data,
-            action,
-            expected_request_digest,
-            action["intent"]["permission_digest"],
-            action["intent"]["precondition_digest"],
-        )
-        if action["state"] != "approved" or action["foreground_admission"] is not None:
-            _conflict("assignment_approval_invalid")
-        if data["lease_expires_at"] is not None:
-            _conflict("assignment_claim_busy")
-        claim = self._claim(transaction, data, worker_id, lease_seconds, action_id)
-        action["foreground_admission"] = dict(
-            submission_id=submission_id,
-            submission_digest=submission_digest,
-            receipt_id=interactive_receipt_id,
-            claim_generation=claim.fence.claim_generation,
-        )
-        self._save_action(transaction, action)
-        return claim
+        """Acquire a restricted approval claim; one-shot claims require exact current authority."""
+        with transaction.savepoint("operation_approved_claim_" + uuid.uuid4().hex):
+            selected = self._load(transaction, owner_id, assignment_id)
+            one_shot = selected.get("execution_profile") == "one_shot"
+            if one_shot:
+                data = self._operation_claim_context(
+                    transaction, owner_id, assignment_id, authority
+                )
+                _state_version(data, expected_state_version)
+            else:
+                data = self._load(transaction, owner_id, assignment_id, lock=True)
+            _version(data, expected_instruction_revision, expected_control_epoch)
+            _text(interactive_receipt_id)
+            _uuid(submission_id)
+            _digest(submission_digest)
+            action = self._action(transaction, owner_id, assignment_id, action_id)
+            self._approve_conditions(
+                transaction,
+                data,
+                action,
+                expected_request_digest,
+                action["intent"]["permission_digest"],
+                action["intent"]["precondition_digest"],
+            )
+            if action["state"] != "approved" or action["foreground_admission"] is not None:
+                _conflict("assignment_approval_invalid")
+            if data["lease_expires_at"] is not None:
+                _conflict("assignment_claim_busy")
+            claim = self._claim(transaction, data, worker_id, lease_seconds, action_id)
+            action["foreground_admission"] = dict(
+                submission_id=submission_id,
+                submission_digest=submission_digest,
+                receipt_id=interactive_receipt_id,
+                claim_generation=claim.fence.claim_generation,
+            )
+            self._save_action(transaction, action)
+            if one_shot:
+                self._assert_operation_claim_current(transaction, data, authority)
+            return claim
 
     def reserve_action(
         self,
@@ -2760,7 +2909,7 @@ class AssignmentRepository:
         binding,
         authority,
     ):
-        if not authority_current or fence is None or binding is None:
+        if not _executable(data) or not authority_current or fence is None or binding is None:
             return False
         if not isinstance(fence, AssignmentFence) or not isinstance(
             binding, AssignmentOperationBinding
@@ -3516,7 +3665,8 @@ class AssignmentRepository:
         rows = transaction.fetch_all(
             "SELECT id,owner_user_id FROM persistent_assignment "
             "WHERE execution_profile=%s AND lease_expires_at<=clock_timestamp() "
-            "AND (execution_profile='persistent' OR (data->'operation'->'version'='1'::jsonb "
+            "AND (execution_profile='persistent' OR (data->'operation'->'version' "
+            "IN ('1'::jsonb,'2'::jsonb) "
             "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
             "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
             "ORDER BY lease_expires_at,id "
@@ -3625,6 +3775,13 @@ class AssignmentRepository:
                         data.update(safe_error_code="assignment_retry_exhausted")
                 data["next_retry_at"] = data["next_wake_at"]
                 if profile == "one_shot":
+                    if not _executable(data):
+                        data.update(
+                            phase="reconciliation" if held else "waiting_authorization",
+                            safe_error_code="assignment_version_unsupported",
+                            next_wake_at=None,
+                            next_retry_at=None,
+                        )
                     self._terminal_operation_failure(transaction, data)
             self._clear_claim(data)
             self._save(transaction, data)

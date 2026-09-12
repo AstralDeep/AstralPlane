@@ -7,6 +7,7 @@ import pytest
 from test_assignments_postgres import (
     action,
     bind,
+    claim_operations,
     create,
     create_operation,
     expire_claim,
@@ -193,7 +194,7 @@ def test_reconciliation_settles_liability_without_reviving_authority(tx, repo, e
         assert after.safe_error_code == "assignment_deadline_exceeded"
     else:
         assert after.lifecycle == before.lifecycle
-    assert repo.claim_operations_for_administration(tx, worker_id="later") == ()
+    assert claim_operations(repo, tx, worker_id="later") == ()
     if expiry == "deadline":
         retirement = repo.retire_operations_for_owner(tx, owner_id="owner")
         assert retirement.retained_assignment_ids == ()
@@ -258,7 +259,7 @@ def test_unknown_assignment_and_opaque_action_survive_retirement_without_starvat
         data["state"] = "succeeded"  # The indexed settled state is not proof.
 
     change_action(tx, value.action_id, corrupt)
-    mutate(tx, record, lambda d: d["operation"].update(version=2, future={"opaque": True}))
+    mutate(tx, record, lambda d: d["operation"].update(version=3, future={"opaque": True}))
     before_action = action_bytes(tx, value.action_id)
     before = current(repo, tx, record)
     neighbor = create(repo, tx)
@@ -295,7 +296,7 @@ def test_unknown_stop_receipt_and_safe_empty_purge(tx, repo, version_path):
 
     def change(data):
         if version_path == "operation":
-            data["operation"]["version"] = 2
+            data["operation"]["version"] = 3
         elif version_path == "checkpoint":
             data["checkpoint"] = {"schema_version": 2, "opaque": [1]}
         else:

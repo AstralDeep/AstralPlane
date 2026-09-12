@@ -33,8 +33,6 @@ from astralplane.repositories import (
 )
 from astralplane.repositories.assignments import (
     AssignmentActionDecision,
-    AssignmentOperationAuthority,
-    AssignmentOperationSpec,
     digest,
     plain,
 )
@@ -45,26 +43,12 @@ def claimed(repo, tx, *, profile="interactive", admission_owner="owner"):
     if profile == "persistent":
         record = create(repo, tx)
         claim = repo.claim_due_for_administration(tx, worker_id="guard-test")[0]
-    elif profile == "scheduled":
+    elif profile == "interactive_grant":
         grant_definition = definition(tx)
-        now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
-        operation = AssignmentOperationSpec(
-            "chat",
-            AssignmentOperationAuthority(
-                "owner",
-                "scheduled",
-                "offline_grant",
-                grant_definition.offline_grant_id,
-                now + timedelta(minutes=10),
-            ),
-            now + timedelta(minutes=5),
-            "none",
-        )
         record = create_operation(
             repo,
             tx,
-            caller_key="scheduled",
-            operation=operation,
+            caller_key="interactive-grant",
             definition=replace(
                 grant_definition,
                 source={},
@@ -84,7 +68,7 @@ def claimed(repo, tx, *, profile="interactive", admission_owner="owner"):
     return record, claim, work, selected, binding
 
 
-@pytest.mark.parametrize("profile", ["interactive", "scheduled", "persistent"])
+@pytest.mark.parametrize("profile", ["interactive", "interactive_grant", "persistent"])
 def test_current_execution_guard_preserves_supported_profiles_without_mutation(tx, repo, profile):
     record, claim, _, _, binding = claimed(repo, tx, profile=profile)
     before = repo.get_assignment(tx, owner_id="owner", assignment_id=record.assignment_id)
@@ -193,7 +177,7 @@ class ObservedTransaction:
 
 
 def test_guard_acquires_authority_assignment_admission_locks_in_declared_order(tx, repo):
-    _, claim, _, _, binding = claimed(repo, tx, profile="scheduled")
+    _, claim, _, _, binding = claimed(repo, tx, profile="interactive_grant")
     observed = ObservedTransaction(tx)
     repo.assert_current_assignment_execution(
         observed, fence=claim.fence, binding=binding, authority=session_observation(tx)
@@ -204,12 +188,22 @@ def test_guard_acquires_authority_assignment_admission_locks_in_declared_order(t
         if "FOR UPDATE" in query or "pg_advisory_xact_lock" in query
     ]
     assert "pg_advisory_xact_lock" in locked[0]
-    assert "astralplane_blob_owner_state" in locked[1]
-    assert "user_offline_grant" in locked[2]
-    assert "persistent_assignment" in locked[3]
-    assert "operation_record" in locked[4]
-    assert "persistent_assignment" in locked[5]
-    assert all("refresh_token" not in query for query in observed.statements)
+    indexes = {
+        table: next(i for i, query in enumerate(locked) if table in query)
+        for table in (
+            "astralplane_blob_owner_state",
+            "web_session",
+            "user_offline_grant",
+            "persistent_assignment",
+            "operation_record",
+        )
+    }
+    assert list(indexes.values()) == sorted(indexes.values())
+    assert all(
+        "refresh_token" not in query
+        for query in observed.statements
+        if "user_offline_grant" in query
+    )
 
 
 def _reset(tx):
@@ -230,7 +224,7 @@ def _wait_for_lock(tx, waiting_pid, blocking_pid):
     pytest.fail("execution guard did not wait on the expected PostgreSQL lock")
 
 
-@pytest.mark.parametrize("profile", ["persistent", "scheduled"])
+@pytest.mark.parametrize("profile", ["persistent", "interactive_grant"])
 def test_grant_revocation_committed_during_lock_wait_refuses_guard(database, repo, profile):
     with database.transaction() as tx:
         _reset(tx)
@@ -297,7 +291,7 @@ def test_guard_resamples_database_time_after_admission_lock_wait(database, repo,
     with database.transaction() as tx:
         _reset(tx)
         record, claim, _, _, binding = claimed(
-            repo, tx, profile="scheduled" if expiry == "grant" else "interactive"
+            repo, tx, profile="interactive_grant" if expiry == "grant" else "interactive"
         )
         schema = tx.fetch_one("SELECT current_schema() AS name")["name"]
         due = tx.fetch_one("SELECT clock_timestamp()+interval '1 second' AS due")["due"]
@@ -425,7 +419,9 @@ def test_guard_refuses_unverified_or_replaced_local_authority(tx, repo, case):
     record, claim, _, _, binding = claimed(
         repo,
         tx,
-        profile="scheduled" if case in {"missing_grant", "changed_grant"} else "interactive",
+        profile="interactive_grant"
+        if case in {"missing_grant", "changed_grant"}
+        else "interactive",
     )
     if case == "framework":
         mutate(
@@ -436,7 +432,7 @@ def test_guard_refuses_unverified_or_replaced_local_authority(tx, repo, case):
             ),
         )
     elif case == "future":
-        mutate(tx, record, lambda data: data["operation"].update(version=2))
+        mutate(tx, record, lambda data: data["operation"].update(version=3))
     elif case == "missing_grant":
         tx.execute(
             "DELETE FROM user_offline_grant WHERE id=%s", (record.definition.offline_grant_id,)

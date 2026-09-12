@@ -311,7 +311,9 @@ def create_operation(repo, tx, **changes):
         if not k.startswith("daily_") and k != "cadence_seconds"
     }
     now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    observed = session_observation(tx)
     args = dict(
+        authority=observed,
         owner_id="owner",
         assignment_id=uid(),
         origin_namespace="web",
@@ -325,8 +327,8 @@ def create_operation(repo, tx, **changes):
             authority=AssignmentOperationAuthority(
                 owner_id="owner",
                 origin="interactive",
-                reference_kind="session",
-                reference_id="session-reference",
+                reference_kind="session_incarnation",
+                reference_id=observed.credential.incarnation_id,
                 expires_at=now + timedelta(minutes=10),
             ),
             deadline_at=now + timedelta(minutes=5),
@@ -335,6 +337,37 @@ def create_operation(repo, tx, **changes):
     )
     args.update(changes)
     return repo.create_operation(tx, **args)
+
+
+def operation_observation(tx, record):
+    """Resolve only the fixture operation's exact original incarnation."""
+    from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
+
+    sessions = SessionRepository()
+    session = sessions.get_by_incarnation(
+        tx, owner_id=record.owner_id, incarnation_id=record.operation["authority"]["reference_id"]
+    )
+    assert session is not None
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    return SessionExecutionObservation(
+        sessions.execution_fence(session), now, now + timedelta(seconds=15)
+    )
+
+
+def claim_operations(repo, tx, *, worker_id, limit=20, lease_seconds=30):
+    """An explicit fixture host observes and claims each discovered operation separately."""
+    return tuple(
+        repo.claim_operation_for_administration(
+            tx,
+            owner_id=record.owner_id,
+            assignment_id=record.assignment_id,
+            expected_state_version=record.state_version,
+            worker_id=worker_id,
+            authority=operation_observation(tx, record),
+            lease_seconds=lease_seconds,
+        )
+        for record in repo.discover_due_operations_for_administration(tx, limit=limit)
+    )
 
 
 def test_one_shot_profile_isolated_from_legacy_claims_and_capacity(tx, repo):
@@ -347,7 +380,7 @@ def test_one_shot_profile_isolated_from_legacy_claims_and_capacity(tx, repo):
     legacy = create(repo, tx, max_retained_assignments=1, max_owned_assignments=1)
     assert legacy.execution_profile == "persistent"
     assert claim(repo, tx).assignment.assignment_id == legacy.assignment_id
-    durable = repo.claim_operations_for_administration(tx, worker_id="operations")
+    durable = claim_operations(repo, tx, worker_id="operations")
     assert [item.assignment.assignment_id for item in durable] == [first.assignment_id]
 
 
@@ -379,7 +412,11 @@ def test_one_shot_authority_owner_expiry_and_unknown_fields_refused(tx, repo):
 
     now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
     authority = AssignmentOperationAuthority(
-        "other", "interactive", "session", "opaque", now + timedelta(minutes=5)
+        "other",
+        "interactive",
+        "session_incarnation",
+        session_observation(tx).credential.incarnation_id,
+        now + timedelta(minutes=5),
     )
     operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
     with pytest.raises(RepositoryValidationError):
@@ -515,7 +552,7 @@ def test_recovery_filters_profiles_before_batch_limit(tx, repo, profile):
     persistent = create(repo, tx)
     operation = create_operation(repo, tx)
     persistent_claim = claim(repo, tx)
-    operation_claim = repo.claim_operations_for_administration(tx, worker_id="operation")[0]
+    operation_claim = claim_operations(repo, tx, worker_id="operation")[0]
     records = {"persistent": persistent, "one_shot": operation}
     claims = {"persistent": persistent_claim, "one_shot": operation_claim}
     recover = {
@@ -541,7 +578,7 @@ def test_recovery_filters_profiles_before_batch_limit(tx, repo, profile):
 def test_one_shot_recovery_exhausts_finite_backoff_without_recurring(tx, repo):
     operation = create_operation(repo, tx)
     for delay in (5, 15, 45, None):
-        repo.claim_operations_for_administration(tx, worker_id="operation")
+        claim_operations(repo, tx, worker_id="operation")
         expire_claim(tx, operation)
         repo.recover_expired_operations_for_administration(tx)
         recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
@@ -567,13 +604,13 @@ def test_one_shot_recovery_exhausts_finite_backoff_without_recurring(tx, repo):
                 "WHERE id=%s",
                 (operation.assignment_id,),
             )
-    assert repo.claim_operations_for_administration(tx, worker_id="again") == ()
+    assert claim_operations(repo, tx, worker_id="again") == ()
 
 
 @pytest.mark.parametrize("boundary", ["read_only", "unreplayable"])
 def test_one_shot_recovery_preserves_issued_liability_and_stale_fence(tx, repo, boundary):
     operation = create_operation(repo, tx)
-    current = repo.claim_operations_for_administration(tx, worker_id="operation")[0]
+    current = claim_operations(repo, tx, worker_id="operation")[0]
     binding = bind(repo, tx, current.fence)
     created = action(repo, tx, current.fence, boundary=boundary)
     permit = start(repo, tx, current.fence, reserve(repo, tx, current.fence, created), binding)
@@ -604,7 +641,7 @@ def test_one_shot_recovery_cannot_renew_expired_authority_or_deadline(
     tx, repo, expired_field, expected
 ):
     operation = create_operation(repo, tx)
-    repo.claim_operations_for_administration(tx, worker_id="operation")
+    claim_operations(repo, tx, worker_id="operation")
     expire_claim(tx, operation)
     tx.execute(
         "UPDATE persistent_assignment SET data=jsonb_set(data,%s::text[], "
@@ -621,7 +658,7 @@ def test_one_shot_recovery_cannot_renew_expired_authority_or_deadline(
     else:
         assert recovered.lifecycle == "active"
         assert recovered.operation.get("terminal_outcome") is None
-    assert repo.claim_operations_for_administration(tx, worker_id="again") == ()
+    assert claim_operations(repo, tx, worker_id="again") == ()
 
 
 def test_one_shot_framework_receipt_is_bound_to_issuing_reference(tx, repo):
@@ -669,7 +706,7 @@ def test_one_shot_deadline_and_research_source_bounds(tx, repo, change):
 
 def test_one_shot_binding_checks_original_deadline_after_claim(tx, repo):
     record = create_operation(repo, tx)
-    current = repo.claim_operations_for_administration(tx, worker_id="operations")[0]
+    current = claim_operations(repo, tx, worker_id="operations")[0]
     tx.execute(
         "UPDATE persistent_assignment SET data=jsonb_set(data,'{operation,deadline_at}', "
         "to_jsonb((clock_timestamp()-interval '1 second')::text)) WHERE id=%s",

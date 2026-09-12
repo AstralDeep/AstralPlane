@@ -61,7 +61,7 @@ class AssignmentOperationSpec(_Record):
     authority: AssignmentOperationAuthority = field(repr=False)
     deadline_at: datetime
     source_retention: str
-    version: int = 1
+    version: int = 2
 
 
 @dataclass(frozen=True, slots=True)
