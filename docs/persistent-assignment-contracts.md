@@ -161,12 +161,14 @@ each use. `renew_claim` and `assert_current_claim` never revive invalidated auth
 
 Before a host transaction performs a write requiring both execution fences, call
 `assert_current_assignment_execution(transaction, fence=AssignmentFence(...),
-binding=AssignmentOperationBinding(...), action_id=None)`. This strict public guard
-locks the owner retirement domain, the selected owner-scoped offline grant when
-present, the logical assignment, then the work-admission execution. It discovers
-the grant reference without an assignment row lock and refuses any changed
-selection when it reloads the assignment under lock. It never reads encrypted
-refresh-token bytes. Grant revocation contends on that same grant row. After the
+binding=AssignmentOperationBinding(...), action_id=None, authority=None)`. This strict
+public guard locks the owner retirement domain, the exact selected interactive
+session when applicable, the selected owner-scoped offline grant when present,
+the logical assignment, then the work-admission execution. It discovers the
+authority references without an assignment row lock and refuses any changed
+selection when it reloads the assignment under lock. Session validation binds
+opaque encrypted credential state without decrypting it. Session deletion and
+rotation contend on that session row; grant revocation contends on its grant row. After the
 admission lock wait it rechecks the current assignment lease, revision/control
 vector, local authority/deadline, grant expiry/revocation and admission ownership.
 An approved-action claim requires its exact `action_id`; omission cannot widen it.
@@ -177,10 +179,28 @@ same transaction and still satisfy its action/state/request checks. No network,
 provider callback or second pool belongs inside the transaction. The host must
 refresh institutional session/delegation authority before opening it and perform
 any required audit/outbox writes before commit. A missing, stale or unsupported
-local context refuses the guarded write. Source-less interactive one-shot,
-scheduled one-shot and persistent granted profiles are supported. Framework origin
-is explicitly refused until the dedicated current issuer-lineage contract is
-bound; its stored credential reference alone is insufficient.
+local context refuses the guarded write. Interactive one-shot requires an exact
+`SessionExecutionObservation` in `authority`, bound to the operation's stored
+session reference. A delegation reference has no supported execution observation
+adapter here and is refused. Scheduled one-shot and persistent granted profiles
+retain their existing checks and signatures. Framework origin is explicitly
+refused until the dedicated current issuer-lineage contract is bound; its stored
+credential reference alone is insufficient. These storage primitives do not enable
+source-less chat, interactive ingress or a one-shot runner.
+
+Use the named `put_action_for_execution`, `reserve_action_for_execution` and
+`start_action_for_execution` wrappers for guarded action transitions. They take
+the existing action arguments plus the exact `binding` and optional `authority`,
+and check current authority/both fences before and after action/resource lock
+waits. Each uses the caller transaction's existing savepoint: an exception rolls
+back that wrapper's prepare, reservation, permit and approval-consumption writes,
+even if the caller catches it and commits independent work. Failure to restore a
+savepoint marks the enclosing transaction failed under the existing transaction
+contract. Do not catch an authority failure and dispatch. Returned records and
+permits are usable only after the enclosing transaction commits successfully;
+the caller remains responsible for same-transaction required audit/outbox writes.
+Raw `put_action`, `reserve_action` and `start_action` signatures remain compatible
+for established callers; they do not replace these stronger execution checks.
 
 The guard shares admission-fence validation with result settlement without changing
 the latter's contract: authentic old permits can still settle usage when execution
@@ -287,11 +307,14 @@ and reconstructing each new request after retry or restart. Those caller changes
 guidance storage are separate integration work.
 
 For one-shot `record_action_outcome`, pass both `result_fence: AssignmentFence` and
-`result_binding: AssignmentOperationBinding`. Result usability requires the exact
+`result_binding: AssignmentOperationBinding`, plus the current
+`result_authority: SessionExecutionObservation` for interactive session origin.
+Result usability requires the exact
 issued assignment fence and admission binding, the current assignment lease/control
 and instruction revisions, a current owner-scoped work-admission execution, live
-local authority, and an active owner. Lock order is owner, assignment, admission,
-action, with database time sampled after the admission lock. The host must refresh
+local authority, and an active owner. Lock order is owner, selected session/grant,
+assignment, admission, action, with database time sampled after the admission and
+action lock waits. The host must refresh
 external authority before this transaction and fence subsequent result incorporation
 and publication. A valid old dispatch token can still settle factual usage after
 either lease or owner authority is lost, even when these optional result arguments
@@ -300,6 +323,19 @@ and cannot advance phase, wake generation, checkpoints or continuation. Exact re
 does not charge twice; a replay made after authority loss returns an unavailable
 projection without rewriting previously accepted result bytes. Inspection of an old
 receipt is not permission to incorporate it.
+
+A missing, revoked, rotated, expired, unknown or malformed session observation
+does not prevent an authentic issued permit from settling consumption. The fresh
+authority check becomes false rather than raising before mandatory accounting;
+success/failure charge once and uncertainty retains the reservation until explicit
+settlement. This does not relax permit identity, outcome validation, settlement
+replay or unresolved-liability checks. A different session ID cannot substitute for
+the originally selected reference, and an old observation is refused after same-ID
+ciphertext/generation replacement. The operation currently stores only that ID,
+not its original credential incarnation. A newly host-issued valid observation
+after same-ID replacement is therefore locally indistinguishable here. The host
+must preserve and check the immutable issued-session reference before enabling
+continuation; this primitive alone does not close that integration requirement.
 
 Unknown positive input/result disposition versions remain inspectable and are refused
 for execution. Safe cancellation and owner retirement retain their opaque actions and

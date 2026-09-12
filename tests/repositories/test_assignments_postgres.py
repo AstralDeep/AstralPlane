@@ -266,6 +266,37 @@ def test_current_assignment_structure_digest(database):
         )
 
 
+def session_observation(tx, *, owner_id="owner", session_id="session-reference"):
+    """Synthetic host observation of an exact real PostgreSQL session row."""
+    from astralplane.repositories.history import (
+        SessionExecutionObservation,
+        SessionRecord,
+        SessionRepository,
+    )
+
+    sessions = SessionRepository()
+    if sessions.get(tx, owner_id=owner_id, session_id=session_id) is None:
+        now = int(tx.fetch_one("SELECT clock_timestamp() AS now")["now"].timestamp())
+        sessions.put(
+            tx,
+            SessionRecord(
+                session_id,
+                owner_id,
+                "synthetic-encrypted-access",
+                "synthetic-encrypted-refresh",
+                now,
+                now + 3600,
+                now,
+                False,
+                now,
+            ),
+        )
+    state = sessions.get_execution_state(tx, owner_id=owner_id, session_id=session_id)
+    return SessionExecutionObservation(
+        state.credential, state.observed_at, state.observed_at + timedelta(seconds=15)
+    )
+
+
 def create_operation(repo, tx, **changes):
     """Use only application-owned opaque references, never synthetic bearer claims."""
     from astralplane.repositories.assignment_models import (

@@ -15,6 +15,7 @@ from test_assignments_postgres import (
     expire_claim,
     parallel_transactions,
     reserve,
+    session_observation,
     start,
     uid,
 )
@@ -133,7 +134,7 @@ def issued(repo, tx, *, owner="owner", transient=True):
     return record, claim, work, selected, binding, created, permit
 
 
-def settle_args(record, claim, binding, permit, *, available=True, **changes):
+def settle_args(tx, record, claim, binding, permit, *, available=True, **changes):
     result = {"text": "safe result"} if available else {}
     disposition = AssignmentResultDisposition(
         available=available,
@@ -152,6 +153,7 @@ def settle_args(record, claim, binding, permit, *, available=True, **changes):
         ),
         result_fence=claim.fence,
         result_binding=binding,
+        result_authority=session_observation(tx),
     )
     values.update(changes)
     return values
@@ -178,7 +180,7 @@ def test_transient_input_contains_only_keyed_reconstruction_metadata(tx, repo):
     assert created.intent.request_digest == keyed(PRIVATE)
     assert created.intent.transient_input.reconstruction_kind == "model_messages"
     assert "assignment_fence" not in repr(created.attempts)
-    result = repo.record_action_outcome(tx, **settle_args(record, claim, binding, permit))
+    result = repo.record_action_outcome(tx, **settle_args(tx, record, claim, binding, permit))
     assert result.result["result_available"] is True
     assert result.result["result"] == {"text": "safe result"}
     assert current(repo, tx, record).usage["spent"]["model_calls"] == 1
@@ -231,7 +233,7 @@ def test_transient_metadata_denials(tx, repo, changes):
 
 def test_successful_discarded_read_is_not_failed_or_reused_as_evidence(tx, repo):
     record, claim, _, _, binding, created, permit = issued(repo, tx, transient=False)
-    args = settle_args(record, claim, binding, permit, available=False)
+    args = settle_args(tx, record, claim, binding, permit, available=False)
     result = repo.record_action_outcome(tx, **args)
     assert result.state == "succeeded"
     assert result.result["result_available"] is False
@@ -244,7 +246,7 @@ def test_successful_discarded_read_is_not_failed_or_reused_as_evidence(tx, repo)
     next_read = action(repo, tx, claim.fence)
     next_permit = start(repo, tx, claim.fence, reserve(repo, tx, claim.fence, next_read), binding)
     repo.record_action_outcome(
-        tx, **settle_args(record, claim, binding, next_permit, available=False)
+        tx, **settle_args(tx, record, claim, binding, next_permit, available=False)
     )
     assert current(repo, tx, record).usage["spent"]["tool_calls"] == 2
     assert next_read.action_id != created.action_id
@@ -270,7 +272,7 @@ def test_late_authentic_outcome_settles_without_continuation_or_result(tx, repo,
     record, claim, work, selected, binding, created, permit = issued(
         repo, tx, owner="other" if loss == "wrong_owner" else "owner"
     )
-    args = settle_args(record, claim, binding, permit)
+    args = settle_args(tx, record, claim, binding, permit)
     if loss in {"stop", "pause"}:
         control(repo, tx, current(repo, tx, record), loss)
     elif loss in {"authority", "deadline", "retired", "revoked"}:
@@ -304,7 +306,7 @@ def test_late_authentic_outcome_settles_without_continuation_or_result(tx, repo,
 
 def test_replay_after_control_does_not_return_previously_available_result(tx, repo):
     record, claim, _, _, binding, _, permit = issued(repo, tx)
-    args = settle_args(record, claim, binding, permit)
+    args = settle_args(tx, record, claim, binding, permit)
     first = repo.record_action_outcome(tx, **args)
     assert first.result["result_available"]
     stopped = control(repo, tx, current(repo, tx, record), "stop").assignment
@@ -319,7 +321,7 @@ def test_replay_after_control_does_not_return_previously_available_result(tx, re
 )
 def test_result_disposition_rejects_private_or_malformed_receipts(tx, repo, bad):
     record, claim, _, _, binding, _, permit = issued(repo, tx)
-    args = settle_args(record, claim, binding, permit, available=False)
+    args = settle_args(tx, record, claim, binding, permit, available=False)
     outcome = args["outcome"]
     if bad == "plaintext":
         outcome = replace(outcome, result={"text": SOURCE})
@@ -346,7 +348,7 @@ def test_result_disposition_rejects_private_or_malformed_receipts(tx, repo, bad)
 @pytest.mark.parametrize("stale", [False, True])
 def test_transient_evidence_reference_is_opaque_before_current_or_stale_settlement(tx, repo, stale):
     record, claim, _, _, binding, created, permit = issued(repo, tx)
-    args = settle_args(record, claim, binding, permit)
+    args = settle_args(tx, record, claim, binding, permit)
     if stale:
         control(repo, tx, current(repo, tx, record), "stop")
     before = action_bytes(tx, created.action_id)
@@ -368,7 +370,7 @@ def test_transient_evidence_reference_is_opaque_before_current_or_stale_settleme
 @pytest.mark.parametrize("malformed", ["evidence", "key"])
 def test_transient_opaque_decoder_holds_malformed_settlement_metadata(tx, repo, malformed):
     record, claim, _, _, binding, created, permit = issued(repo, tx)
-    repo.record_action_outcome(tx, **settle_args(record, claim, binding, permit))
+    repo.record_action_outcome(tx, **settle_args(tx, record, claim, binding, permit))
 
     def change(data):
         outcome = data["attempts"][0]["outcome"]
@@ -414,7 +416,7 @@ def test_future_payload_recovery_holds_opaque_action_and_recovers_supported_neig
 ):
     record, claim, _, _, binding, created, permit = issued(repo, tx)
     if field == "outcome":
-        repo.record_action_outcome(tx, **settle_args(record, claim, binding, permit))
+        repo.record_action_outcome(tx, **settle_args(tx, record, claim, binding, permit))
 
     def change(data):
         if field == "input":
@@ -559,7 +561,7 @@ def test_transient_mode_does_not_change_legacy_or_reviewed_effect_contract(tx, r
 
 def test_result_fence_requires_typed_context_without_exposing_authority_tokens(tx, repo):
     record, claim, _, _, binding, created, permit = issued(repo, tx)
-    args = settle_args(record, claim, binding, permit)
+    args = settle_args(tx, record, claim, binding, permit)
     with pytest.raises(RepositoryValidationError):
         repo.record_action_outcome(tx, **dict(args, result_fence={"claim_token": PRIVATE}))
     inspected = repo.get_action(
@@ -582,7 +584,7 @@ def test_retirement_and_result_share_owner_lock_and_settle_once(database, repo):
         database,
         (
             lambda tx: repo.record_action_outcome(
-                tx, **settle_args(record, claim, binding, permit)
+                tx, **settle_args(tx, record, claim, binding, permit)
             ),
             lambda tx: repo.retire_operations_for_owner(tx, owner_id="owner"),
         ),

@@ -55,6 +55,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentTaskResult,
     AssignmentTransientInput,
 )
+from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
 from astralplane.repositories.work_admission import ExecutionFence, WorkAdmissionRepository
 
 _DIMENSIONS = ("model_calls", "tool_calls", "tokens", "elapsed_ms")
@@ -1537,7 +1538,62 @@ class AssignmentRepository:
     def assert_current_claim(self, query, *, fence):
         return _record(self._fenced(query, fence, action_id=self._foreground_action(query, fence)))
 
-    def assert_current_assignment_execution(self, transaction, *, fence, binding, action_id=None):
+    @staticmethod
+    def _execution_authority_selection(data):
+        return (
+            data["operation"]["authority"] if data.get("execution_profile") == "one_shot" else None,
+            data["definition"]["offline_grant_id"],
+        )
+
+    def _lock_execution_authority(self, transaction, data, authority):
+        """Lock selected local authority before assignment/admission rows.
+
+        False is deliberate for unavailable/unknown observations: authentic issued
+        permits still settle usage, but cannot retain output or continue work.
+        """
+        selected, grant_id = self._execution_authority_selection(data)
+        if selected is not None:
+            if selected["origin"] == "framework":
+                return False
+            if selected["origin"] == "interactive":
+                if selected["reference_kind"] != "session" or not isinstance(
+                    authority, SessionExecutionObservation
+                ):
+                    return False
+                try:
+                    state = authority.credential
+                    if (
+                        state.owner_id != data["owner_id"]
+                        or state.session_id != selected["reference_id"]
+                    ):
+                        return False
+                    SessionRepository().assert_current_execution(transaction, observation=authority)
+                except (
+                    AttributeError,
+                    RepositoryConflictError,
+                    RepositoryDataError,
+                    RepositoryNotFoundError,
+                    RepositoryValidationError,
+                ):
+                    return False
+        return (
+            grant_id is None
+            or transaction.fetch_one(
+                "SELECT id FROM user_offline_grant WHERE id=%s AND user_id=%s FOR UPDATE",
+                (grant_id, data["owner_id"]),
+            )
+            is not None
+        )
+
+    def assert_current_assignment_execution(
+        self,
+        transaction,
+        *,
+        fence,
+        binding,
+        action_id=None,
+        authority=None,
+    ):
         """Lock local authority, assignment and admission before a host mutation.
 
         The host refreshes remote authorization before opening this transaction.
@@ -1558,32 +1614,22 @@ class AssignmentRepository:
             _uuid(action_id)
         if not self._lock_operation_owner(transaction, fence.owner_id):
             _conflict("assignment_owner_retired")
-        # Discover the selected authority without taking the assignment lock
-        # before its grant. Revisions are revalidated under the later row lock.
+        # Discover selected authority before locking the assignment. A session
+        # observation is host-verified, ephemeral, and never replaced by latest-owner lookup.
         selected = self._load(transaction, fence.owner_id, fence.assignment_id)
-        if selected.get("execution_profile") == "one_shot" and (
-            selected["operation"]["authority"]["origin"] == "framework"
-        ):
-            # Current framework issuer lineage has a separate, not-yet-bound
-            # repository contract. A stored reference alone proves no authority.
-            _conflict("assignment_authorization_unavailable")
-        grant_id = selected["definition"]["offline_grant_id"]
-        if (
-            grant_id is not None
-            and transaction.fetch_one(
-                "SELECT id FROM user_offline_grant WHERE id=%s AND user_id=%s FOR UPDATE",
-                (grant_id, fence.owner_id),
-            )
-            is None
-        ):
+        if not self._lock_execution_authority(transaction, selected, authority):
             _conflict("assignment_authorization_unavailable")
         data = self._fenced(transaction, fence, action_id=action_id)
-        if data["definition"]["offline_grant_id"] != grant_id:
+        if self._execution_authority_selection(data) != self._execution_authority_selection(
+            selected
+        ):
             _conflict("assignment_authorization_unavailable")
         self._assert_bound_admission(transaction, data, binding)
         # A lock wait can cross either local lease/authority deadline. Never
         # authorize with the timestamp sampled before the admission lock.
         data = self._fenced(transaction, fence, action_id=action_id)
+        if not self._lock_execution_authority(transaction, data, authority):
+            _conflict("assignment_authorization_unavailable")
         if data.get("execution_profile") == "one_shot":
             self._validate_operation_continuation(transaction, data)
         else:
@@ -1607,6 +1653,97 @@ class AssignmentRepository:
         )
         if operation.owner_user_id != data["owner_id"]:
             _conflict("assignment_operation_conflict")
+
+    def put_action_for_execution(self, transaction, *, fence, binding, intent, authority=None):
+        """Prepare under current authority/both fences, rolling back a late refusal.
+
+        The savepoint protects even a caller that catches the exception and commits
+        other work. The caller still owns the enclosing transaction and must not
+        treat this detached result as committed before that transaction succeeds.
+        """
+        with transaction.savepoint("assignment_prepare_" + uuid.uuid4().hex):
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, authority=authority
+            )
+            result = self.put_action(transaction, fence=fence, intent=intent)
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, authority=authority
+            )
+        return result
+
+    def reserve_action_for_execution(
+        self,
+        transaction,
+        *,
+        fence,
+        binding,
+        action_id,
+        attempt_id,
+        expected_request_digest,
+        maximum,
+        quote_digest=None,
+        quote_expires_at=None,
+        authority=None,
+    ):
+        """Reserve atomically with current session/assignment/admission validation."""
+        with transaction.savepoint("assignment_reserve_" + uuid.uuid4().hex):
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
+            )
+            result = self.reserve_action(
+                transaction,
+                fence=fence,
+                action_id=action_id,
+                attempt_id=attempt_id,
+                expected_request_digest=expected_request_digest,
+                maximum=maximum,
+                quote_digest=quote_digest,
+                quote_expires_at=quote_expires_at,
+            )
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
+            )
+        return result
+
+    def start_action_for_execution(
+        self,
+        transaction,
+        *,
+        fence,
+        action_id,
+        attempt_id,
+        expected_request_digest,
+        current_permission_digest,
+        current_precondition_digest,
+        binding,
+        interactive_receipt_id=None,
+        authority=None,
+    ):
+        """Issue a permit only after the final authority check; commit precedes dispatch.
+
+        No provider or effect may observe the returned permit until the caller's
+        enclosing transaction commits. A final refusal rolls back even the token
+        and approval-consumption writes when the caller catches that refusal.
+        """
+        with transaction.savepoint("assignment_permit_" + uuid.uuid4().hex):
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
+            )
+            result = self.start_action(
+                transaction,
+                fence=fence,
+                action_id=action_id,
+                attempt_id=attempt_id,
+                expected_request_digest=expected_request_digest,
+                current_permission_digest=current_permission_digest,
+                current_precondition_digest=current_precondition_digest,
+                binding=binding,
+                interactive_receipt_id=interactive_receipt_id,
+            )
+            self.assert_current_assignment_execution(
+                transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
+            )
+        return result
 
     def _action(
         self, transaction, owner_id, assignment_id, action_id, *, required=True, inspect_only=False
@@ -2503,18 +2640,44 @@ class AssignmentRepository:
         outcome,
         result_fence=None,
         result_binding=None,
+        result_authority=None,
     ):
         owner_active = self._lock_operation_owner(transaction, owner_id)
+        selected = self._load(transaction, owner_id, assignment_id)
+        authority_current = (
+            owner_active and self._lock_execution_authority(transaction, selected, result_authority)
+            if selected.get("execution_profile") == "one_shot"
+            else owner_active
+        )
         data = self._load(transaction, owner_id, assignment_id, lock=True)
         one_shot = data.get("execution_profile") == "one_shot"
         current = not one_shot or self._result_context_current(
-            transaction, data, action_id, owner_active, result_fence, result_binding
+            transaction,
+            data,
+            action_id,
+            authority_current
+            and (
+                self._execution_authority_selection(data)
+                == self._execution_authority_selection(selected)
+            ),
+            result_fence,
+            result_binding,
+            result_authority,
         )
         action = self._action(transaction, owner_id, assignment_id, action_id)
         attempt = self._attempt(action, attempt_id)
         if one_shot:
             current = (
                 current
+                and self._result_context_current(
+                    transaction,
+                    data,
+                    action_id,
+                    True,
+                    result_fence,
+                    result_binding,
+                    result_authority,
+                )
                 and attempt.get("assignment_fence") == plain(result_fence)
                 and attempt["binding"] == plain(result_binding)
             )
@@ -2587,8 +2750,17 @@ class AssignmentRepository:
         self._save(transaction, data)
         return _action_record(action)
 
-    def _result_context_current(self, transaction, data, action_id, owner_active, fence, binding):
-        if not owner_active or fence is None or binding is None:
+    def _result_context_current(
+        self,
+        transaction,
+        data,
+        action_id,
+        authority_current,
+        fence,
+        binding,
+        authority,
+    ):
+        if not authority_current or fence is None or binding is None:
             return False
         if not isinstance(fence, AssignmentFence) or not isinstance(
             binding, AssignmentOperationBinding
@@ -2605,7 +2777,7 @@ class AssignmentRepository:
             # Re-sample database time and local lineage after the admission lock wait.
             self._fenced(transaction, fence, action_id=action_id)
             self._validate_operation_continuation(transaction, data)
-            return True
+            return self._lock_execution_authority(transaction, data, authority)
         except (RepositoryConflictError, RepositoryNotFoundError):
             return False
 

@@ -362,11 +362,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "fe6e8509fd87ef3d3827aa7eac8967cfa2d2873fb2aa5bc97cf7a17047f23069"
+          "sha256": "8dd0ecfd2f738dd0273a7aa41c63929b75ebee0671605c1a00a5e529529b440e"
         }
       ],
       "task": "T078",
-      "reason": "Extracted conversation and message persistence without presentation or orchestration logic."
+      "reason": "Extracted conversation and message persistence without presentation or orchestration logic. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned."
     },
     {
       "sourcePath": "backend/orchestrator/knowledge_synthesis.py",
@@ -441,11 +441,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "fe6e8509fd87ef3d3827aa7eac8967cfa2d2873fb2aa5bc97cf7a17047f23069"
+          "sha256": "8dd0ecfd2f738dd0273a7aa41c63929b75ebee0671605c1a00a5e529529b440e"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-scoped session persistence without API or authentication policy."
+      "reason": "Extracted owner-scoped session persistence without API or authentication policy. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned."
     },
     {
       "sourcePath": "backend/orchestrator/voice_sessions.py",

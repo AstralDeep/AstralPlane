@@ -16,6 +16,7 @@ from test_assignments_postgres import (
     finish,
     independent_database,
     parallel_transactions,
+    session_observation,
     uid,
 )
 from test_assignments_postgres import database as database
@@ -87,7 +88,9 @@ def claimed(repo, tx, *, profile="interactive", admission_owner="owner"):
 def test_current_execution_guard_preserves_supported_profiles_without_mutation(tx, repo, profile):
     record, claim, _, _, binding = claimed(repo, tx, profile=profile)
     before = repo.get_assignment(tx, owner_id="owner", assignment_id=record.assignment_id)
-    guarded = repo.assert_current_assignment_execution(tx, fence=claim.fence, binding=binding)
+    guarded = repo.assert_current_assignment_execution(
+        tx, fence=claim.fence, binding=binding, authority=session_observation(tx)
+    )
     assert guarded == before
     assert repo.get_assignment(tx, owner_id="owner", assignment_id=record.assignment_id) == before
     assert binding.execution_lease_token not in str(plain(guarded))
@@ -132,7 +135,9 @@ def test_guard_refuses_each_lost_fence_before_any_following_write(tx, repo, loss
     else:
         repo.retire_operations_for_owner(tx, owner_id="owner")
     with pytest.raises(RepositoryConflictError):
-        repo.assert_current_assignment_execution(tx, fence=fence, binding=binding)
+        repo.assert_current_assignment_execution(
+            tx, fence=fence, binding=binding, authority=session_observation(tx)
+        )
 
 
 @pytest.mark.parametrize(
@@ -151,7 +156,7 @@ def test_guard_rejects_malformed_or_misbound_execution_context(tx, repo, kind):
     _, claim, _, _, binding = claimed(
         repo, tx, admission_owner="other" if kind == "admission_owner" else "owner"
     )
-    values = {"fence": claim.fence, "binding": binding}
+    values = {"fence": claim.fence, "binding": binding, "authority": session_observation(tx)}
     if kind == "fence_type":
         values["fence"] = plain(claim.fence)
     elif kind == "binding_type":
@@ -190,7 +195,9 @@ class ObservedTransaction:
 def test_guard_acquires_authority_assignment_admission_locks_in_declared_order(tx, repo):
     _, claim, _, _, binding = claimed(repo, tx, profile="scheduled")
     observed = ObservedTransaction(tx)
-    repo.assert_current_assignment_execution(observed, fence=claim.fence, binding=binding)
+    repo.assert_current_assignment_execution(
+        observed, fence=claim.fence, binding=binding, authority=session_observation(tx)
+    )
     locked = [
         query
         for query in observed.statements
@@ -237,7 +244,7 @@ def test_grant_revocation_committed_during_lock_wait_refuses_guard(database, rep
             waiting.set()
             try:
                 return repo.assert_current_assignment_execution(
-                    tx, fence=claim.fence, binding=binding
+                    tx, fence=claim.fence, binding=binding, authority=session_observation(tx)
                 )
             except RepositoryConflictError as error:
                 return error
@@ -264,12 +271,14 @@ def test_guard_contends_with_existing_owner_mutations_without_deadlock(database,
 
     def guard(tx):
         tx.execute("SET LOCAL lock_timeout='2s'")
-        return repo.assert_current_assignment_execution(tx, fence=claim.fence, binding=binding)
+        return repo.assert_current_assignment_execution(
+            tx, fence=claim.fence, binding=binding, authority=session_observation(tx)
+        )
 
     def other(tx):
         tx.execute("SET LOCAL lock_timeout='2s'")
         if competitor == "settlement":
-            return repo.record_action_outcome(tx, **settle_args(record, claim, binding, permit))
+            return repo.record_action_outcome(tx, **settle_args(tx, record, claim, binding, permit))
         if competitor == "retirement":
             return repo.retire_operations_for_owner(tx, owner_id="owner")
         return control(repo, tx, current(repo, tx, record), "pause")
@@ -320,7 +329,7 @@ def test_guard_resamples_database_time_after_admission_lock_wait(database, repo,
             waiting.set()
             try:
                 return repo.assert_current_assignment_execution(
-                    tx, fence=claim.fence, binding=binding
+                    tx, fence=claim.fence, binding=binding, authority=session_observation(tx)
                 )
             except RepositoryConflictError as error:
                 return error
@@ -393,11 +402,19 @@ def test_approved_claim_guard_requires_exact_action_and_keeps_legacy_flow(tx, re
     for action_id in (None, uid()):
         with pytest.raises(RepositoryConflictError, match="assignment_action_claim_restricted"):
             repo.assert_current_assignment_execution(
-                tx, fence=approved.fence, binding=binding, action_id=action_id
+                tx,
+                fence=approved.fence,
+                binding=binding,
+                action_id=action_id,
+                authority=session_observation(tx),
             )
     assert (
         repo.assert_current_assignment_execution(
-            tx, fence=approved.fence, binding=binding, action_id=created.action_id
+            tx,
+            fence=approved.fence,
+            binding=binding,
+            action_id=created.action_id,
+            authority=session_observation(tx),
         ).assignment_id
         == record.assignment_id
     )
@@ -439,4 +456,6 @@ def test_guard_refuses_unverified_or_replaced_local_authority(tx, repo, case):
 
         tx = ReplaceSelectedGrant(tx)
     with pytest.raises(RepositoryConflictError):
-        repo.assert_current_assignment_execution(tx, fence=claim.fence, binding=binding)
+        repo.assert_current_assignment_execution(
+            tx, fence=claim.fence, binding=binding, authority=session_observation(tx)
+        )
