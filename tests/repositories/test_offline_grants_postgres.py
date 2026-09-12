@@ -51,17 +51,39 @@ def test_session_rotation_and_deletion_return_the_final_credential(catalog_datab
     sid = uuid.uuid4().hex
     initial = SessionRecord(sid, "owner", "access-old", "refresh-old", 1, 1000, 1, False, 1)
     with database.transaction() as tx:
-        repo.put(tx, initial)
+        initial = repo.put(tx, initial)
     with database.transaction() as tx:
         latest = repo.compare_and_set_refresh(
-            tx, replace(initial, refresh_token_ciphertext="refresh-new", last_refresh_at=2),
-            expected_last_refresh_at=1)
+            tx,
+            replace(initial, refresh_token_ciphertext="refresh-new", last_refresh_at=2),
+            expected_last_refresh_at=1,
+        )
     with database.transaction() as tx:
-        assert repo.delete_and_return(tx, owner_id="other", session_id=sid) is None
+        assert (
+            repo.delete_and_return(
+                tx, owner_id="other", session_id=sid, expected_incarnation_id=initial.incarnation_id
+            )
+            is None
+        )
     with pytest.raises(RuntimeError, match="rollback"), database.transaction() as tx:
-        assert repo.delete_and_return(tx, owner_id="owner", session_id=sid) == latest
+        assert (
+            repo.delete_and_return(
+                tx, owner_id="owner", session_id=sid, expected_incarnation_id=initial.incarnation_id
+            )
+            == latest
+        )
         raise RuntimeError("rollback")
     with database.transaction() as tx:
-        assert repo.delete_and_return(tx, owner_id="owner", session_id=sid) == latest
+        assert (
+            repo.delete_and_return(
+                tx, owner_id="owner", session_id=sid, expected_incarnation_id=initial.incarnation_id
+            )
+            == latest
+        )
     with database.transaction() as tx:
-        assert repo.delete_and_return(tx, owner_id="owner", session_id=sid) is None
+        assert (
+            repo.delete_and_return(
+                tx, owner_id="owner", session_id=sid, expected_incarnation_id=initial.incarnation_id
+            )
+            is None
+        )

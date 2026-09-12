@@ -68,11 +68,11 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "57381ed175f3124263bb7aa6a31596f6bf58ceab3ebbcdd7f0e66be0db44951c"
+          "sha256": "d527922af557b8bc0e4028e798685f6005717a28d3c66f0d78635357e8b5f4e6"
         }
       ],
       "task": "T075/T085",
-      "reason": "Preserved append-only and chain invariants through migration and repository regressions. The 088 assignment foundation extends registry lineage regression coverage through schema 088.001."
+      "reason": "Preserved append-only and chain invariants through migration and repository regressions. The 088 assignment foundation extends registry lineage regression coverage through schema 088.001. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/audit/tests/test_repository_filters.py",
@@ -362,11 +362,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "89444c84f6ea0dcf665c580fc99e96579030b7bf6129162fca6438282c8e9279"
+          "sha256": "18d640f5caa0f2dd1e91229f4ed694e26ad1b770fd20dd4172608b5684ca66dd"
         }
       ],
       "task": "T078",
-      "reason": "Extracted conversation and message persistence without presentation or orchestration logic. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned. Request execution may opt into transaction-local SQL wait caps without changing ordinary session defaults."
+      "reason": "Extracted owner-isolated history and encrypted session persistence. Added exact credential-generation CAS, bounded request SQL waits, and database-clock execution guards. Revision088.002 issues immutable session incarnations, fences refresh/resume/delete, and supplies distinct ordinary-consent observations. Imported extraction identities and prior migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/knowledge_synthesis.py",
@@ -441,11 +441,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "89444c84f6ea0dcf665c580fc99e96579030b7bf6129162fca6438282c8e9279"
+          "sha256": "18d640f5caa0f2dd1e91229f4ed694e26ad1b770fd20dd4172608b5684ca66dd"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-scoped session persistence without API or authentication policy. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned. Request execution may opt into transaction-local SQL wait caps without changing ordinary session defaults."
+      "reason": "Extracted owner-isolated history and encrypted session persistence. Added exact credential-generation CAS, bounded request SQL waits, and database-clock execution guards. Revision088.002 issues immutable session incarnations, fences refresh/resume/delete, and supplies distinct ordinary-consent observations. Imported extraction identities and prior migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/voice_sessions.py",
@@ -531,7 +531,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
         },
         {
           "path": "tests/repositories/test_scheduler.py",
@@ -543,7 +543,7 @@
         }
       ],
       "task": "T078/T079/T082",
-      "reason": "Preserved zero-based atomic publication and fenced scheduler behavior across focused tests."
+      "reason": "Preserved zero-based atomic publication and fenced scheduler behavior across focused tests. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/scheduler/tests/test_occurrence_claims_060.py",
@@ -611,7 +611,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "7f83317ab5447a44a70b5b810206ef23037096b405e95eef4addbf651a7a1f19"
+          "sha256": "164a113951c1c9ac4b71c57e15c452203ca0b1623e0a07596f0af96c5c119a22"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -623,7 +623,7 @@
         }
       ],
       "task": "T068/T069/T075",
-      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state. The 088 assignment foundation adds the guarded 079.001-to-088.001 operation-schema migration while preserving predecessor digests."
+      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state. The 088 assignment foundation adds the guarded 079.001-to-088.001 operation-schema migration while preserving predecessor digests. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/attachments/test_account_deletion.py",
@@ -774,11 +774,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
         }
       ],
       "task": "T078",
-      "reason": "Retained owner-scoped history persistence tests while leaving preview shaping outside Plane."
+      "reason": "Retained owner-scoped history persistence tests while leaving preview shaping outside Plane. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/test_remote_jobs_063.py",
@@ -804,11 +804,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
         }
       ],
       "task": "T078",
-      "reason": "Preserved owner-scoped session refresh, replay, and conflict coverage."
+      "reason": "Preserved owner-scoped session refresh, replay, and conflict coverage. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/test_voice_session_api_065.py",

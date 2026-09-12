@@ -3,7 +3,7 @@
 This repository slice exposes the durable mechanics required to remove identity/agent SQL from
 AstralDeep without moving identity or authorization policy into AstralPlane. It uses tables already
 present in the schema-only `066.001` compatibility baseline, so this slice itself adds no migration
-edge. The current Plane schema is `074.004`; its registry digest includes later independent durable
+edge. The current Plane schema is `088.002`; its registry digest includes later independent durable
 changes.
 
 ## Public composition
@@ -56,3 +56,39 @@ unchanged schema and rows in place. No destructive DDL or data rewrite is requir
 
 The administrative policy reconciliation has live PostgreSQL evidence for concurrent starters,
 idempotent replay, exact affected-row reporting, owner-neutral selection, and caller-owned rollback.
+
+
+## Web-session incarnation (`088.002`)
+
+`runtime.repositories.history.sessions` is the public `SessionRepository`. New
+`put(transaction, SessionRecord(..., incarnation_id=None))` inputs receive a PostgreSQL-generated
+canonical UUID4. Callers must retain the returned record. An identical no-ID retry returns the
+original incarnation; a supplied ID may replay only the exact existing record, never insert or
+resurrect it. Rotation and resume retain this identity. Deleting and recreating the same SID,
+including identical encrypted bytes and timestamps, issues a different identity.
+
+`get_by_incarnation(query, *, owner_id, incarnation_id)` resolves exactly one owner and incarnation.
+A caller also holding a SID must compare it with the returned row; no latest-owner fallback is an
+execution reference. `compare_and_set_refresh` requires the observed incarnation on its input record;
+`mark_resumed`, `delete` and `delete_and_return` require `expected_incarnation_id`. Refresh
+cannot change the original creation time, interactive anchor or hard expiry, even when the optional
+exact ciphertext fence is omitted. Conditional stale
+cleanup never returns or deletes a replacement credential. Deliberate `delete_owner` and named
+expired-session administration retain their existing owner-wide/time-wide scope.
+
+`SessionCredentialFence` version 2 includes the incarnation and exact encrypted generation.
+`get_execution_state` captures the row and database time. `SessionExecutionObservation` still
+requires host forced-refresh/current-IAM verification outside Plane. The distinct
+`SessionConsentObservation(credential, started_at, valid_until, version=1)` represents ordinary
+host-authenticated consent, and is refused by execution guards. Its public
+`assert_current_consent(transaction, *, observation)` must run before grant locks/writes and again
+after any waits, before commit. Both guards lock owner then session, reject retirement/deletion or
+rotation, and sample database time after locking. Observations must retain the original start time,
+expire within 15 seconds, and remain within the exact session hard lifetime. They contain no tokens
+or durable IAM claim. Exceptions must propagate out of the enclosing transaction so all grant
+writes roll back; the method itself does not create a grant or own a transaction.
+
+The host must preserve the originally issued incarnation across every await, continuation and
+consent operation. This storage change alone does not upgrade old SID-only assignment authority,
+legacy offline grants, ingress or runners. Matching host/operation-version integration and denial
+qualification remain required before those execution paths can use incarnation authority.

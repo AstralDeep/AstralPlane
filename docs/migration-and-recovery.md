@@ -21,6 +21,18 @@ is not declared compatible with the new schema merely because its rows remain pr
 The populated predecessor, repeat-upgrade and new-catalog corruption cases are exercised
 in `tests/repositories/test_assignments_postgres.py`.
 
+Revision `088.002` adds `web_session.incarnation_id` using PostgreSQL `gen_random_uuid()`,
+with non-null, uniqueness and canonical UUID4 constraints. It requires the exact `088.001`
+catalog and registry digest `b6eaa819e9bd471350e48e431686c1ed6922e206608f1b673e0544c14014552d`.
+The immutable `088.001` statements are unchanged. Existing session columns, grant envelopes,
+assignment JSON, usage and unresolved effects are preserved; existing sessions receive an identity
+once in the guarded transaction. Repeat startup verifies the complete catalog and never replaces
+identities or retires sessions. A catalog collision/corruption aborts rather than adopting supplied
+identities. `tests/integration/test_session_incarnation_upgrade.py` exercises populated upgrade (including
+real synthetic v1 issued and uncertain action ledgers, operation receipts, usage and grant bindings),
+repeat and constraint corruption. New writes must use the matching incarnation-aware repository
+and host contract; an older binary is not qualified against this schema.
+
 1. Close admission and quiesce all writers.
 2. Record the exact AstralDeep composition, AstralPlane commit, contract version, schema revision,
    migration digest, blob-layout version, and configured durable roots.
@@ -54,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -257,7 +269,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
    `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
    pinned predecessor catalog shape; `079.001` must match its pinned predecessor catalog
-   and `088.001` must pass the current structural verifier.
+   and `088.001` must match its pinned predecessor catalog. `088.002` must pass the current
+   structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the
@@ -289,3 +302,26 @@ Chat-step, conversation-file, and saved-component public repository extraction a
 publication-aware Canvas repository rather than duplicating its SQL. Rollback is composition-only;
 leave `chat_steps`, `messages.step_count`, `chat_files`, and `saved_components` untouched. See
 `conversation-extended-state.md`.
+
+
+### `088.002` session identities after a joint restore
+
+A backup restores session and grant identities together, so row incarnation alone cannot prove
+that a restored session was not retired after the backup. Keep admission, scheduling, assignments
+and all other writers closed. Recovery must deliberately retire every restored web session before
+reopening IAM-backed work, require fresh login and new consent, and preserve outstanding assignment
+usage, issued permits, uncertain effects and reconciliation records. Do not rebind a restored grant
+or operation to a new session. No startup migration or normal process restart performs retirement.
+
+The existing facade can delete sessions for an explicitly known owner using
+`runtime.repositories.history.sessions.delete_owner(transaction, owner_id=...)`; this touches no
+assignment liability rows. It does not provide a complete global owner inventory. This storage
+slice does not implement or qualify a complete restore-retirement tool: governed inventory,
+complete retirement, stale-grant/execution denial and interrupted-recovery qualification remain
+release prerequisites. Do not infer coverage by enumerating latest sessions or only active owners.
+No operator SQL outside the guarded registry/repository is authorized by this procedure.
+
+For recovery from a failed upgrade, preserve the failed database, keep writers closed, and restore
+the verified pre-upgrade PostgreSQL and paired durable-root snapshot as one unit. Do not drop the
+new column/constraints or alter revision markers to simulate a downgrade. Forward retry is allowed
+only after the original predecessor/current catalog and exact composition have passed verification.

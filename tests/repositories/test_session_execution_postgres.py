@@ -48,7 +48,7 @@ def seed(tx, *, owner="owner", sid=None):
         False,
         now,
     )
-    sessions.put(tx, record)
+    record = sessions.put(tx, replace(record, incarnation_id=None))
     state = sessions.get_execution_state(tx, owner_id=owner, session_id=record.session_id)
     observation = SessionExecutionObservation(
         state.credential, state.observed_at, state.observed_at + timedelta(seconds=15)
@@ -190,6 +190,7 @@ def test_caught_final_authority_refusal_rolls_back_only_the_guarded_operation(
             tx,
             owner_id="owner",
             session_id=values[1].session_id,
+            expected_incarnation_id=values[1].incarnation_id,
             expected_resumed=False,
             resumed=True,
         )
@@ -222,7 +223,7 @@ def test_exact_owner_scoped_observation_is_ephemeral_and_does_not_modify_session
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("version", 2),
+        ("version", 3),
         ("version", True),
         ("owner_id", ""),
         ("session_id", ""),
@@ -300,7 +301,15 @@ def test_old_or_future_database_observation_is_unavailable(tx, offset):
 @pytest.mark.parametrize("operation_name", ["guard", "refresh"])
 def test_deleted_and_recreated_same_sid_refuses_previous_generation(tx, field, operation_name):
     sessions, record, observation = seed(tx)
-    assert sessions.delete_and_return(tx, owner_id="owner", session_id=record.session_id) == record
+    assert (
+        sessions.delete_and_return(
+            tx,
+            owner_id="owner",
+            session_id=record.session_id,
+            expected_incarnation_id=record.incarnation_id,
+        )
+        == record
+    )
     value = getattr(record, field)
     replacement = replace(
         record, **{field: value + "-replacement" if isinstance(value, str) else value + 1}
@@ -313,7 +322,7 @@ def test_deleted_and_recreated_same_sid_refuses_previous_generation(tx, field, o
             interactive_anchor=record.interactive_anchor + 1,
             last_refresh_at=record.last_refresh_at + 1,
         )
-    sessions.put(tx, replacement)
+    replacement = sessions.put(tx, replace(replacement, incarnation_id=None))
     with pytest.raises(RepositoryConflictError):
         if operation_name == "guard":
             sessions.assert_current_execution(tx, observation=observation)
@@ -330,7 +339,12 @@ def test_deleted_and_recreated_same_sid_refuses_previous_generation(tx, field, o
 @pytest.mark.parametrize("lifetime", ["expired", "future", "generation_ahead", "resumed"])
 def test_session_lifetime_uses_db_time_but_generation_is_not_a_wall_clock(tx, lifetime):
     sessions, record, _ = seed(tx)
-    sessions.delete(tx, owner_id="owner", session_id=record.session_id)
+    sessions.delete(
+        tx,
+        owner_id="owner",
+        session_id=record.session_id,
+        expected_incarnation_id=record.incarnation_id,
+    )
     if lifetime == "expired":
         record = replace(
             record,
@@ -349,7 +363,7 @@ def test_session_lifetime_uses_db_time_but_generation_is_not_a_wall_clock(tx, li
         record = replace(record, last_refresh_at=record.last_refresh_at + 1000)
     else:
         record = replace(record, resumed=True)
-    sessions.put(tx, record)
+    record = sessions.put(tx, replace(record, incarnation_id=None))
     state = sessions.get_execution_state(tx, owner_id="owner", session_id=record.session_id)
     observation = SessionExecutionObservation(
         state.credential, state.observed_at, state.observed_at + timedelta(seconds=15)
@@ -367,9 +381,14 @@ def test_session_lifetime_uses_db_time_but_generation_is_not_a_wall_clock(tx, li
 def test_new_observation_after_same_sid_replacement_requires_host_incarnation_binding(tx, repo):
     values = operation(tx, repo)
     sessions, record, old_observation = values[:3]
-    sessions.delete(tx, owner_id="owner", session_id=record.session_id)
+    sessions.delete(
+        tx,
+        owner_id="owner",
+        session_id=record.session_id,
+        expected_incarnation_id=record.incarnation_id,
+    )
     replacement = replace(record, access_token_ciphertext="encrypted-new-incarnation")
-    sessions.put(tx, replacement)
+    replacement = sessions.put(tx, replace(replacement, incarnation_id=None))
     with pytest.raises(RepositoryConflictError):
         guard(tx, repo, values, old_observation)
     current = sessions.get_execution_state(tx, owner_id="owner", session_id=record.session_id)
@@ -470,7 +489,12 @@ def test_guard_refuses_session_authority_loss_before_mutation(tx, repo, loss):
     elif loss == "malformed":
         observed = replace(observed, credential={"token": "PRIVATE"})
     elif loss == "deleted":
-        sessions.delete(tx, owner_id="owner", session_id=session.session_id)
+        sessions.delete(
+            tx,
+            owner_id="owner",
+            session_id=session.session_id,
+            expected_incarnation_id=session.incarnation_id,
+        )
     elif loss == "rotated":
         sessions.compare_and_set_refresh(
             tx,
@@ -521,7 +545,12 @@ def test_authentic_late_consumption_charged_once_without_stale_result_or_wake(
     if loss == "missing":
         observation = None
     elif loss == "deleted":
-        sessions.delete(tx, owner_id="owner", session_id=session.session_id)
+        sessions.delete(
+            tx,
+            owner_id="owner",
+            session_id=session.session_id,
+            expected_incarnation_id=session.incarnation_id,
+        )
     elif loss == "rotated":
         sessions.compare_and_set_refresh(
             tx,
@@ -602,7 +631,12 @@ def test_database_time_and_logout_rechecked_after_real_lock_wait(database, repo,
         with database.transaction() as tx:
             pid = tx.fetch_one("SELECT pg_backend_pid() AS pid")["pid"]
             if blocker == "logout":
-                values[0].delete_and_return(tx, owner_id="owner", session_id=values[1].session_id)
+                values[0].delete_and_return(
+                    tx,
+                    owner_id="owner",
+                    session_id=values[1].session_id,
+                    expected_incarnation_id=values[1].incarnation_id,
+                )
             elif blocker == "session":
                 tx.fetch_one(
                     "SELECT sid FROM web_session WHERE sid=%s FOR UPDATE", (values[1].session_id,)
@@ -659,6 +693,7 @@ def test_action_lock_wait_expiry_rolls_back_guarded_writes_even_when_caught(data
                 tx,
                 owner_id="owner",
                 session_id=values[1].session_id,
+                expected_incarnation_id=values[1].incarnation_id,
                 expected_resumed=False,
                 resumed=True,
             )
@@ -698,7 +733,10 @@ def test_guard_holds_exact_session_until_commit_before_logout_or_rotation(
             waiting.set()
             if operation_name == "logout":
                 return values[0].delete_and_return(
-                    tx, owner_id="owner", session_id=values[1].session_id
+                    tx,
+                    owner_id="owner",
+                    session_id=values[1].session_id,
+                    expected_incarnation_id=values[1].incarnation_id,
                 )
             return values[0].compare_and_set_refresh(
                 tx,
