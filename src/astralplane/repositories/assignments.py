@@ -898,7 +898,9 @@ class AssignmentRepository:
         """Inspect accepted client semantics before recapturing server-owned grants."""
         _uuid(submission_id)
         _digest(submission_digest)
-        data = self._load(query, owner_id, assignment_id, required=False)
+        data = self._load(
+            query, owner_id, assignment_id, required=False, allow_unknown=command == "stop"
+        )
         if data is None:
             return None
         if data["submission_id"] == submission_id:
@@ -1117,7 +1119,9 @@ class AssignmentRepository:
             if min(_time(operation.authority.expires_at), _time(operation.deadline_at)) <= due:
                 _conflict("assignment_deadline_exceeded")
             data["next_wake_at"] = plain(due)
-        invalidated, begun = self._invalidate_actions(transaction, data)
+        invalidated, begun = self._invalidate_actions(
+            transaction, data, conservative=control == AssignmentControl.STOP
+        )
         for task in data["tasks"]:
             if task["state"] in {"pending", "running"}:
                 task["state"] = "cancelled" if control in {"stop", "revise"} else "pending"
@@ -1404,20 +1408,229 @@ class AssignmentRepository:
         )
         return _action_record(data)
 
-    def _invalidate_actions(self, transaction, assignment):
+    def _known_action(self, transaction, owner_id, assignment_id, action_id):
+        """Decode only today's action envelope before cancellation or physical purge.
+
+        A future/malformed envelope is an unresolved liability, even when its
+        indexed state looks settled. Never follow its proposal or reservation IDs.
+        """
+        try:
+            action = self._action(transaction, owner_id, assignment_id, action_id)
+            required = {
+                "action_id",
+                "assignment_id",
+                "owner_id",
+                "intent",
+                "intent_digest",
+                "instruction_revision",
+                "control_epoch",
+                "state",
+                "result",
+                "attempts",
+                "decision",
+                "foreground_admission",
+                "reconciliation",
+            }
+            if not required <= action.keys() or action.keys() - required - {
+                "interactive_proposal_id",
+                "approval_consumed_at",
+            }:
+                return None
+            if action["intent_digest"] != digest(action["intent"]):
+                return None
+            _integer(action["instruction_revision"], 1)
+            _integer(action["control_epoch"], 1)
+            self._amount(AssignmentResourceAmount(**action["intent"]["maximum"]))
+            for key, model in (
+                ("decision", AssignmentActionDecision),
+                ("reconciliation", AssignmentActionReconciliation),
+            ):
+                if action[key] is not None:
+                    decision = model(**action[key])
+                    _uuid(decision.submission_id)
+                    _digest(decision.submission_digest)
+                    if key == "decision":
+                        if decision.decision not in {"approve", "decline"}:
+                            return None
+                        for value in (
+                            decision.proposal_digest,
+                            decision.permission_digest,
+                            decision.precondition_digest,
+                        ):
+                            _digest(value)
+                    else:
+                        if decision.decision not in {"confirmed_applied", "confirmed_not_applied"}:
+                            return None
+                        _digest(decision.prior_result_digest)
+                        _text(decision.evidence_reference, 2048)
+            if action["result"] is not None and (
+                not isinstance(action["result"], dict)
+                or action["result"].keys()
+                - {
+                    "outcome",
+                    "result_digest",
+                    "result",
+                    "evidence_reference",
+                    "actual",
+                    "result_available",
+                    "reconciliation",
+                }
+            ):
+                return None
+            if action.get("interactive_proposal_id") is not None:
+                _text(action["interactive_proposal_id"], 128)
+            _time(action.get("approval_consumed_at"))
+            if action["foreground_admission"] is not None and set(
+                action["foreground_admission"]
+            ) != {"submission_id", "submission_digest", "receipt_id", "claim_generation"}:
+                return None
+            for attempt in action["attempts"]:
+                required_attempt = {
+                    "attempt_id",
+                    "state",
+                    "maximum",
+                    "quote_digest",
+                    "quote_expires_at",
+                    "dispatch_token",
+                    "binding",
+                    "outcome",
+                }
+                if not required_attempt <= attempt.keys() or (
+                    attempt.keys() - required_attempt - {"uncertain_observation"}
+                ):
+                    return None
+                _uuid(attempt["attempt_id"])
+                if attempt["state"] not in {
+                    "reserved",
+                    "started",
+                    "uncertain",
+                    "succeeded",
+                    "failed",
+                    "failed_not_started",
+                }:
+                    return None
+                self._amount(AssignmentResourceAmount(**attempt["maximum"]))
+                _time(attempt["quote_expires_at"])
+                if attempt["binding"] is not None:
+                    AssignmentOperationBinding(**attempt["binding"])
+                if attempt["dispatch_token"] is not None:
+                    _uuid(attempt["dispatch_token"])
+                    if attempt["binding"] is None:
+                        return None
+                    if (
+                        attempt["state"] not in {"started", "uncertain"}
+                        and attempt["outcome"] is None
+                        and action["reconciliation"] is None
+                    ):
+                        return None
+                for key in ("outcome", "uncertain_observation"):
+                    if attempt.get(key) is not None:
+                        result = AssignmentActionOutcome(**attempt[key])
+                        if result.actual is not None:
+                            self._amount(AssignmentResourceAmount(**result.actual))
+                        if result.outcome not in {
+                            "succeeded",
+                            "failed",
+                            "failed_not_started",
+                            "uncertain",
+                        }:
+                            return None
+                observed = attempt["outcome"]
+                if attempt["dispatch_token"] is None and (
+                    observed is not None or attempt["state"] in {"succeeded", "failed"}
+                ):
+                    return None
+                if observed is not None and observed["outcome"] != attempt["state"]:
+                    if observed["outcome"] != "uncertain" or not self._reconciled_attempt(
+                        action, attempt, observed["result_digest"]
+                    ):
+                        return None
+                elif (
+                    observed is None
+                    and attempt["dispatch_token"] is not None
+                    and attempt["state"] not in {"started", "uncertain"}
+                    and not self._reconciled_attempt(
+                        action, attempt, digest([action_id, "lease_expired"])
+                    )
+                ):
+                    return None
+            attempts = action["attempts"]
+            if action["state"] in {"succeeded", "failed"} or (
+                action["state"] == "failed_not_started"
+                and attempts
+                and attempts[-1]["dispatch_token"] is not None
+            ):
+                if not attempts:
+                    return None
+                final = attempts[-1]
+                if action["state"] != final["state"] or action["result"] != final["outcome"]:
+                    prior = (final["outcome"] or {}).get(
+                        "result_digest", digest([action_id, "lease_expired"])
+                    )
+                    if not self._reconciled_attempt(action, final, prior):
+                        return None
+            return action
+        except (
+            RepositoryDataError,
+            RepositoryValidationError,
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+        ):
+            return None
+
+    @staticmethod
+    def _reconciled_attempt(action, attempt, prior_digest):
+        """A retained uncertain observation is settled only by its exact receipt."""
+        decision = action["reconciliation"]
+        if decision is None or attempt is not action["attempts"][-1]:
+            return False
+        expected = (
+            "succeeded" if decision["decision"] == "confirmed_applied" else "failed_not_started"
+        )
+        return (
+            decision["prior_result_digest"] == prior_digest
+            and action["state"] == attempt["state"] == expected
+            and action["result"]
+            == {
+                "outcome": "reconciled_applied"
+                if expected == "succeeded"
+                else "reconciled_not_applied",
+                "result_digest": digest(["reconciliation", decision]),
+                "result": {},
+                "result_available": False,
+                "evidence_reference": decision["evidence_reference"],
+                "reconciliation": {
+                    "decision": decision["decision"],
+                    "prior_result_digest": prior_digest,
+                },
+            }
+        )
+
+    def _invalidate_actions(self, transaction, assignment, *, conservative=False):
         rows = transaction.fetch_all(
             "SELECT id FROM persistent_assignment_action WHERE assignment_id=%s "
-            "AND owner_user_id=%s AND state IN ('ready','proposed','approved','reserved','started',"
-            "'uncertain') ORDER BY id FOR UPDATE",
-            (assignment["assignment_id"], assignment["owner_id"]),
+            "AND owner_user_id=%s AND (%s OR state IN "
+            "('ready','proposed','approved','reserved','started','uncertain')) "
+            "ORDER BY id FOR UPDATE",
+            (assignment["assignment_id"], assignment["owner_id"], conservative),
         )
         invalidated, begun = [], []
         for row in rows:
-            action = self._action(
+            action = (self._known_action if conservative else self._action)(
                 transaction, assignment["owner_id"], assignment["assignment_id"], str(row["id"])
             )
-            if action["state"] in {"started", "uncertain"}:
-                begun.append(action["action_id"])
+            if (
+                action is None
+                or action["state"] in {"started", "uncertain"}
+                or any(
+                    attempt["state"] in {"started", "uncertain"} for attempt in action["attempts"]
+                )
+            ):
+                begun.append(str(row["id"]))
+                continue
+            if action["state"] not in {"ready", "proposed", "approved", "reserved"}:
                 continue
             for attempt in action["attempts"]:
                 if attempt["state"] == "reserved":
@@ -1739,8 +1952,13 @@ class AssignmentRepository:
         expected_instruction_revision,
         expected_control_epoch,
         decision,
+        expected_state_version=None,
     ):
+        owner_active = self._lock_operation_owner(transaction, owner_id)
         data = self._load(transaction, owner_id, assignment_id, lock=True)
+        one_shot = data.get("execution_profile") == "one_shot"
+        if one_shot:
+            _integer(expected_state_version, 1)
         _version(data, expected_instruction_revision, expected_control_epoch)
         action = self._action(transaction, owner_id, assignment_id, action_id)
         _uuid(decision.submission_id)
@@ -1749,6 +1967,11 @@ class AssignmentRepository:
             if action["decision"] != plain(decision):
                 _conflict("assignment_approval_invalid")
             return _action_record(action)
+        if one_shot:
+            _state_version(data, expected_state_version)
+            if not owner_active:
+                _conflict("assignment_owner_retired")
+            self._validate_operation_continuation(transaction, data)
         self._approve_conditions(
             transaction,
             data,
@@ -2072,8 +2295,13 @@ class AssignmentRepository:
         expected_instruction_revision,
         expected_control_epoch,
         decision,
+        expected_state_version=None,
     ):
+        owner_active = self._lock_operation_owner(transaction, owner_id)
         data = self._load(transaction, owner_id, assignment_id, lock=True)
+        one_shot = data.get("execution_profile") == "one_shot"
+        if one_shot:
+            _integer(expected_state_version, 1)
         _version(data, expected_instruction_revision, expected_control_epoch)
         action = self._action(transaction, owner_id, assignment_id, action_id)
         _uuid(decision.submission_id)
@@ -2083,6 +2311,8 @@ class AssignmentRepository:
             if action["reconciliation"] != plain(decision):
                 _conflict("assignment_idempotency_conflict")
             return _action_record(action)
+        if one_shot:
+            _state_version(data, expected_state_version)
         if (
             action["state"] != "uncertain"
             or decision.decision not in {"confirmed_applied", "confirmed_not_applied"}
@@ -2118,12 +2348,39 @@ class AssignmentRepository:
         }
         self._save_action(transaction, action)
         if data["lifecycle"] == "active":
-            data.update(
-                phase="waiting",
-                next_wake_at=plain(_now(transaction)),
-                wake_reason="reconciled",
-                wake_generation=data["wake_generation"] + 1,
-            )
+            continuation = True
+            if one_shot:
+                # Settlement is factual even after authority expires. It cannot
+                # manufacture a new wake under expired or retired authority.
+                try:
+                    if _time(data["operation"]["deadline_at"]) <= _now(transaction):
+                        _conflict("assignment_deadline_exceeded")
+                    if not owner_active:
+                        _conflict("assignment_owner_retired")
+                    self._validate_operation_continuation(transaction, data)
+                except RepositoryConflictError as exc:
+                    continuation = False
+                    data.update(
+                        phase="failed"
+                        if exc.code == "assignment_deadline_exceeded"
+                        else "waiting_authorization",
+                        next_wake_at=None,
+                        next_retry_at=None,
+                        safe_error_code=exc.code,
+                    )
+                    if exc.code == "assignment_deadline_exceeded":
+                        self._terminal_operation_failure(transaction, data)
+                        if data["lifecycle"] == "completed":
+                            # Issued attempts retain their exact binding receipts;
+                            # a terminal controller cannot retain an executable lease.
+                            self._clear_claim(data)
+            if continuation:
+                data.update(
+                    phase="waiting",
+                    next_wake_at=plain(_now(transaction)),
+                    wake_reason="reconciled",
+                    wake_generation=data["wake_generation"] + 1,
+                )
         self._save(transaction, data)
         return _action_record(action)
 
@@ -2478,16 +2735,11 @@ class AssignmentRepository:
             if completion.phase == "failed":
                 data["next_retry_at"] = plain(due)
 
-    @staticmethod
-    def _terminal_operation_failure(transaction, data):
+    def _terminal_operation_failure(self, transaction, data):
         if data["phase"] != "failed" or data["next_wake_at"] is not None:
             return
-        unresolved = transaction.fetch_one(
-            "SELECT count(*) AS n FROM persistent_assignment_action WHERE assignment_id=%s "
-            "AND state IN ('reserved','started','uncertain','proposed','approved')",
-            (data["assignment_id"],),
-        )["n"]
-        if unresolved or any(t["state"] == "reconciliation" for t in data["tasks"]):
+        actions, _, held = self._purge_blockers(transaction, data)
+        if held or any(action["state"] in {"proposed", "approved"} for action in actions):
             data["phase"] = "reconciliation"
             return
         data["lifecycle"] = "completed"
@@ -2807,19 +3059,21 @@ class AssignmentRepository:
                 if profile == "one_shot" and not held:
                     operation = self._operation_spec(data["operation"], data["owner_id"])
                     retry_at = now + timedelta(seconds=backoff)
-                    if _time(operation.authority.expires_at) <= retry_at:
+                    if _time(operation.deadline_at) <= retry_at:
+                        data.update(
+                            safe_error_code="assignment_deadline_exceeded", next_wake_at=None
+                        )
+                    elif _time(operation.authority.expires_at) <= retry_at:
                         data.update(
                             phase="waiting_authorization",
                             safe_error_code="assignment_authorization_unavailable",
                             next_wake_at=None,
                         )
-                    elif _time(operation.deadline_at) <= retry_at:
-                        data.update(
-                            safe_error_code="assignment_deadline_exceeded", next_wake_at=None
-                        )
                     elif exhausted:
                         data.update(safe_error_code="assignment_retry_exhausted")
                 data["next_retry_at"] = data["next_wake_at"]
+                if profile == "one_shot":
+                    self._terminal_operation_failure(transaction, data)
             self._clear_claim(data)
             self._save(transaction, data)
         return AssignmentRecoveryResult(tuple(reclaimed), tuple(bindings), tuple(uncertain))
@@ -2945,30 +3199,66 @@ class AssignmentRepository:
             )
         return AssignmentRetentionResult(activity_removals=len(rows))
 
-    def delete_for_owner(self, transaction, *, owner_id, assignment_id, expected_control_epoch):
-        data = self._load(transaction, owner_id, assignment_id, lock=True, required=False)
+    def _purge_blockers(self, transaction, data):
+        actions, unresolved = [], []
+        for row in transaction.fetch_all(
+            "SELECT id FROM persistent_assignment_action WHERE assignment_id=%s "
+            "AND owner_user_id=%s ORDER BY id FOR UPDATE",
+            (data["assignment_id"], data["owner_id"]),
+        ):
+            action_id = str(row["id"])
+            action = self._known_action(
+                transaction, data["owner_id"], data["assignment_id"], action_id
+            )
+            if action is not None:
+                actions.append(action)
+            if (
+                action is None
+                or action["state"] in {"reserved", "started", "uncertain"}
+                or any(
+                    attempt["state"] in {"reserved", "started", "uncertain"}
+                    for attempt in action["attempts"]
+                )
+            ):
+                unresolved.append(action_id)
+        retained = (
+            bool(unresolved)
+            or any(data["usage"]["outstanding"].values())
+            or any(task["state"] == "reconciliation" for task in data["tasks"])
+        )
+        return actions, unresolved, retained
+
+    def delete_for_owner(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_control_epoch,
+        expected_state_version=None,
+    ):
+        data = self._load(
+            transaction, owner_id, assignment_id, lock=True, required=False, allow_unknown=True
+        )
         if data is None:
             return False
+        if data.get("execution_profile") == "one_shot":
+            _integer(expected_control_epoch, 1)
+            _state_version(data, expected_state_version)
         if (
             data["lifecycle"] not in _TERMINAL
             or data["control_epoch"] != expected_control_epoch
             or data["lease_expires_at"] is not None
         ):
             _conflict("assignment_not_terminal")
-        pending = transaction.fetch_one(
-            "SELECT count(*) AS n FROM persistent_assignment_action "
-            "WHERE assignment_id=%s AND state IN ('started','uncertain','reserved')",
-            (assignment_id,),
-        )["n"]
-        if pending:
+        actions, _, retained = self._purge_blockers(transaction, data)
+        if retained:
             _conflict("assignment_action_uncertain")
-        for row in transaction.fetch_all(
-            "SELECT data->>'interactive_proposal_id' AS proposal_id "
-            "FROM persistent_assignment_action WHERE assignment_id=%s AND owner_user_id=%s "
-            "AND data->>'interactive_proposal_id' IS NOT NULL",
-            (assignment_id, owner_id),
-        ):
-            self._expire_interactive_proposal(transaction, owner_id, row["proposal_id"])
+        for action in actions:
+            if action.get("interactive_proposal_id"):
+                self._expire_interactive_proposal(
+                    transaction, owner_id, action["interactive_proposal_id"]
+                )
         transaction.execute(
             "DELETE FROM persistent_assignment WHERE id=%s AND owner_user_id=%s",
             (assignment_id, owner_id),
@@ -2976,10 +3266,30 @@ class AssignmentRepository:
         return True
 
     def retire_owner(self, transaction, *, owner_id):
+        """Legacy persistent-only adapter; unsupported cleanup must fail closed.
+
+        Existing callers inspect only unresolved_action_ids. They cannot safely
+        consume one-shot/orphan reconciliation holds: adopt the explicit adapter
+        and inspect retained_assignment_ids before scheduling physical cleanup.
+        """
+        self._lock_operation_owner(transaction, owner_id)
+        if transaction.fetch_one(
+            "SELECT id FROM persistent_assignment WHERE owner_user_id=%s "
+            "AND execution_profile!='persistent' LIMIT 1",
+            (owner_id,),
+        ):
+            _conflict("assignment_operation_required")
+        result = self.retire_operations_for_owner(transaction, owner_id=owner_id)
+        if result.retained_assignment_ids and not result.unresolved_action_ids:
+            _conflict("assignment_action_uncertain")
+        return result
+
+    def retire_operations_for_owner(self, transaction, *, owner_id):
         """Fence account work before purge; unresolved effects require a later retry.
 
-        The caller must commit a result with unresolved IDs, defer physical purge,
-        and request reconciliation. Raising inside this transaction undoes fencing.
+        This atomically includes both persistent and one-shot profiles. The caller
+        must commit a result with retained_assignment_ids, defer physical purge,
+        and reconcile. Raising inside this transaction undoes owner/stop fencing.
         """
         _text(owner_id)
         transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
@@ -2998,10 +3308,10 @@ class AssignmentRepository:
             "SELECT id FROM persistent_assignment WHERE owner_user_id=%s ORDER BY id FOR UPDATE",
             (owner_id,),
         )
-        stopped, deleted, unresolved = [], [], []
+        stopped, deleted, unresolved, retained = [], [], [], []
         for row in rows:
             assignment_id = str(row["id"])
-            data = self._load(transaction, owner_id, assignment_id, lock=True)
+            data = self._load(transaction, owner_id, assignment_id, lock=True, allow_unknown=True)
             if data["lifecycle"] not in _TERMINAL:
                 self.apply_control(
                     transaction,
@@ -3014,33 +3324,33 @@ class AssignmentRepository:
                     submission_digest=digest(["account_retirement", owner_id, assignment_id]),
                     control="stop",
                 )
-                data = self._load(transaction, owner_id, assignment_id, lock=True)
+                data = self._load(
+                    transaction, owner_id, assignment_id, lock=True, allow_unknown=True
+                )
                 stopped.append(assignment_id)
-            pending = transaction.fetch_all(
-                "SELECT id FROM persistent_assignment_action WHERE assignment_id=%s "
-                "AND state IN ('started','uncertain','reserved')",
-                (assignment_id,),
-            )
-            for item in transaction.fetch_all(
-                "SELECT data->>'interactive_proposal_id' AS proposal_id "
-                "FROM persistent_assignment_action "
-                "WHERE assignment_id=%s AND data->>'interactive_proposal_id' IS NOT NULL",
-                (assignment_id,),
-            ):
-                self._expire_interactive_proposal(transaction, owner_id, item["proposal_id"])
-            if pending:
-                unresolved.extend(str(item["id"]) for item in pending)
+            actions, pending, held = self._purge_blockers(transaction, data)
+            for action in actions:
+                if action.get("interactive_proposal_id"):
+                    self._expire_interactive_proposal(
+                        transaction, owner_id, action["interactive_proposal_id"]
+                    )
+            if held:
+                unresolved.extend(pending)
+                retained.append(assignment_id)
             else:
                 self.delete_for_owner(
                     transaction,
                     owner_id=owner_id,
                     assignment_id=assignment_id,
                     expected_control_epoch=data["control_epoch"],
+                    expected_state_version=data["state_version"],
                 )
                 deleted.append(assignment_id)
-        if not unresolved:
+        if not retained:
             transaction.execute(
                 "DELETE FROM assignment_operation_receipt WHERE owner_id=%s",
                 (owner_id,),
             )
-        return AssignmentOwnerRetirementResult(tuple(stopped), tuple(deleted), tuple(unresolved))
+        return AssignmentOwnerRetirementResult(
+            tuple(stopped), tuple(deleted), tuple(unresolved), tuple(retained)
+        )

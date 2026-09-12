@@ -398,6 +398,7 @@ def test_one_shot_deleted_receipt_cannot_admit_a_second_effect(tx, repo):
         owner_id="owner",
         assignment_id=record.assignment_id,
         expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
     )
     receipt = tx.fetch_one(
         "SELECT assignment_id,live_assignment_id FROM assignment_operation_receipt"
@@ -419,6 +420,7 @@ def test_deleted_operation_receipt_never_follows_reused_assignment_uuid(tx, repo
         owner_id="owner",
         assignment_id=first.assignment_id,
         expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
     )
     if new_profile == "one_shot":
         replacement = create_operation(
@@ -455,7 +457,7 @@ def test_one_shot_capacity_and_retirement_are_separate_current_gates(tx, repo):
 
 def test_one_shot_owner_retirement_removes_receipts_but_cannot_resume(tx, repo):
     create_operation(repo, tx)
-    assert not repo.retire_owner(tx, owner_id="owner").unresolved_action_ids
+    assert not repo.retire_operations_for_owner(tx, owner_id="owner").retained_assignment_ids
     assert tx.fetch_one("SELECT count(*) AS n FROM assignment_operation_receipt")["n"] == 0
     with pytest.raises(RepositoryConflictError, match="assignment_owner_retired"):
         create_operation(repo, tx)
@@ -515,11 +517,16 @@ def test_one_shot_recovery_exhausts_finite_backoff_without_recurring(tx, repo):
         now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
         if delay is None:
             assert recovered.next_wake_at is None
-            assert tx.fetch_one(
-                "SELECT data->>'next_retry_at' AS retry FROM persistent_assignment WHERE id=%s",
-                (operation.assignment_id,),
-            )["retry"] is None
+            assert (
+                tx.fetch_one(
+                    "SELECT data->>'next_retry_at' AS retry FROM persistent_assignment WHERE id=%s",
+                    (operation.assignment_id,),
+                )["retry"]
+                is None
+            )
             assert recovered.safe_error_code == "assignment_retry_exhausted"
+            assert recovered.lifecycle == "completed"
+            assert recovered.operation["terminal_outcome"] == "failed"
         else:
             assert now + timedelta(seconds=delay - 1) <= recovered.next_wake_at
             assert recovered.next_wake_at <= now + timedelta(seconds=delay + 1)
@@ -577,6 +584,12 @@ def test_one_shot_recovery_cannot_renew_expired_authority_or_deadline(
     recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
     assert recovered.next_wake_at is None
     assert recovered.safe_error_code == expected
+    if expected == "assignment_deadline_exceeded":
+        assert recovered.lifecycle == "completed"
+        assert recovered.operation["terminal_outcome"] == "failed"
+    else:
+        assert recovered.lifecycle == "active"
+        assert recovered.operation.get("terminal_outcome") is None
     assert repo.claim_operations_for_administration(tx, worker_id="again") == ()
 
 
@@ -797,6 +810,7 @@ def test_operation_receipt_and_target_are_read_in_one_snapshot(database, repo):
                         owner_id="owner",
                         assignment_id=first.assignment_id,
                         expected_control_epoch=stopped.control_epoch,
+                        expected_state_version=stopped.state_version,
                     )
                     create_operation(
                         repo,
@@ -1204,6 +1218,7 @@ def test_unreplayable_recovery_retains_liability_and_late_receipt(tx, repo):
             owner_id="owner",
             assignment_id=record.assignment_id,
             expected_control_epoch=stopped.control_epoch,
+            expected_state_version=stopped.state_version,
         )
     assert outcome(repo, tx, permit, record.assignment_id).state == "succeeded"
 
@@ -2233,6 +2248,7 @@ def test_terminal_retirement_expires_remote_capability_before_removing_link(tx, 
         owner_id="owner",
         assignment_id=record.assignment_id,
         expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
     )
     assert (
         repo.get_action_for_interactive_proposal(

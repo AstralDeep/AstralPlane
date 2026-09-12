@@ -121,6 +121,37 @@ pause/stop/revocation. Terminal stopped or completed deletion requires the exact
 and no unresolved effect. Account `retire_owner` returns stopped/deleted assignment IDs and any
 unresolved action IDs; commit the stop before reporting pending reconciliation and defer purge.
 
+For one-shot `decide_action`, `reconcile_action`, and `delete_for_owner`, pass the
+observed strict integer `expected_state_version`. The persistent signatures remain
+compatible. An exact prior action decision/reconciliation acknowledges its receipt
+without applying a second transition; a genuinely new command must match the current
+state version and instruction/control vector. Reconciliation can settle an issued
+liability after stop or expiry, but cannot schedule new work under expired, revoked,
+or retired authority. Once the immutable task deadline expires, a fully settled
+reconciliation becomes terminal failed; any remaining liability/task reconciliation
+keeps the operation held. Renewable authority loss with a live deadline remains an
+authority hold. No result is incorporated or published by settlement.
+
+One-shot and mixed-profile account cleanup must explicitly adopt
+`retire_operations_for_owner`. It fences the owner and stops every owned profile in
+one transaction, returning `retained_assignment_ids` as well as actual
+`unresolved_action_ids`. Commit that result and defer physical account/blob purge
+while **either** collection is nonempty. Outstanding usage or reconciliation tasks
+can retain an assignment even without an action ID. The legacy `retire_owner`
+refuses one-shot profiles and orphan holds, so older hosts that inspect only action
+IDs cannot silently purge them. Deep must update its cleanup adapter when adopting
+this Plane revision; the repository change alone is not that integration.
+
+Unknown operation/control/checkpoint versions allow safe stop receipts and owner
+inspection. Stop changes only understood outer fences and preserves unknown nested
+bytes. Cancellation and deletion conservatively decode the current action envelope;
+future/malformed actions remain unresolved even if their indexed state says they
+settled. Their attempt, reservation, binding and proposal metadata is never followed
+or rewritten. Physical deletion requires every action to be understood and all
+issued/reserved/uncertain liabilities, outstanding usage and reconciliation tasks
+to be settled. Supported neighboring assignments can still retire without waiting
+for those unknown records.
+
 ## Claims, durable memory and bounded tasks
 
 `claim_due_for_administration` uses PostgreSQL time and `FOR UPDATE SKIP LOCKED`. Claims carry
@@ -184,6 +215,9 @@ reservations, conservatively charges interrupted read-only calls and holds uncer
 the batch limit so expired work in one profile cannot block the other's recovery. Persistent
 episodes retain their bounded exponential retry deadlines. One-shot recovery uses 5/15/45-second
 delays, at most its original retry allowance, and never schedules beyond the original authority
-expiry or task deadline. Resume,
+expiry or task deadline.
+Supported one-shot recovery exhaustion or a deadline without unresolved liabilities
+records terminal `failed`; expired authorization remains an explicit authority hold,
+and uncertain effects remain in reconciliation. Resume,
 restart and owner check do not reset lifetime spending or turn an uncertain effect into retryable
 work. Refer to [migration and recovery](migration-and-recovery.md) for deployment/restore policy.

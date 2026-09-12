@@ -337,3 +337,4 @@ class AssignmentOwnerRetirementResult(_Record):
     stopped_assignment_ids: tuple[str, ...] = ()
     deleted_assignment_ids: tuple[str, ...] = ()
     unresolved_action_ids: tuple[str, ...] = ()
+    retained_assignment_ids: tuple[str, ...] = ()
