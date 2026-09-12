@@ -155,11 +155,15 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_secrets.py",
-          "sha256": "0e1e0024e077b7c5ed09009d8f47c36156747c373b905124dacee845f014c7c9"
+          "sha256": "24a424060a567e7d1580abb185d527692ae2d86ed73ca2496a1f7fd85f62c8a0"
+        },
+        {
+          "path": "tests/repositories/test_secrets_lock_postgres.py",
+          "sha256": "c73fcbcc8e1d4e872610ce25f3d35f5abf0f74e9853370f325e38c27b3baf6ea"
         }
       ],
       "task": "T081",
-      "reason": "Replaced provider-store tests with ciphertext-only owner and system configuration tests."
+      "reason": "Replaced provider-store tests with ciphertext-only owner/system configuration tests and actual PostgreSQL row-lock exclusion, commit/rollback release, and distinct-owner independence."
     },
     {
       "sourcePath": "backend/llm_config/user_store.py",
@@ -170,11 +174,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/secrets.py",
-          "sha256": "42f25cb1bf708b3ac4ecc5dd41704d33ee9e0bed94bb1121024fb84388c96025"
+          "sha256": "ca9a03b18c76f15e380fb8e25477dd7e8f6a086312d8776e49e0b29931cadb5a"
         }
       ],
       "task": "T081",
-      "reason": "Extracted ciphertext-only provider configuration persistence without product policy."
+      "reason": "Extracted ciphertext-only provider configuration persistence without product policy. The explicit owner-scoped locked getter holds the existing opaque selection through a caller-owned dependent transaction; ordinary reads and writes remain unchanged."
     },
     {
       "sourcePath": "backend/onboarding/repository.py",

@@ -3,6 +3,24 @@
 This schema-neutral slice exposes the `066.001` credential and grant tables through three
 typed, caller-transaction-owned repositories. It does not move rows or introduce a migration.
 
+## User provider configuration selection
+
+`EncryptedLLMConfigRepository.get_user_for_update(transaction, *, owner_id)`
+returns the same opaque `EncryptedLLMConfigRecord | None` as the existing user
+getter, while holding an existing row with `SELECT ... FOR UPDATE` until the
+caller transaction commits or rolls back. Ordinary user upserts and deletions
+must wait for that row lock, including delete-and-recreate operations; another
+owner's row remains independently writable. The existing unlocked getters,
+setters, and deletion behavior are unchanged.
+
+The trusted host must set bounded SQL waits, retain the same transaction through
+its dependent permit write, and compare the returned record to its original
+opaque selection. A writer that committed before lock acquisition may cause the
+getter to return changed state; the getter does not authorize that replacement.
+Missing or wrong-owner rows return `None` without a gap lock, so the host must
+refuse that selection rather than adopt a later insertion. No provider request,
+decryption, new credential field, schema change, or admission policy is added.
+
 ## Public composition
 
 - `create_credential_repository()` returns opaque user-agent and remote-machine credential
