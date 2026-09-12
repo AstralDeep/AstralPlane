@@ -362,7 +362,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "18d640f5caa0f2dd1e91229f4ed694e26ad1b770fd20dd4172608b5684ca66dd"
+          "sha256": "9f4f45f4f2ec727e2522978740b8f8574afa58fd8571d5b3b41b4b31d5571f0a"
         }
       ],
       "task": "T078",
@@ -441,7 +441,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "18d640f5caa0f2dd1e91229f4ed694e26ad1b770fd20dd4172608b5684ca66dd"
+          "sha256": "9f4f45f4f2ec727e2522978740b8f8574afa58fd8571d5b3b41b4b31d5571f0a"
         }
       ],
       "task": "T078",

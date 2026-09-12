@@ -313,13 +313,43 @@ reopening IAM-backed work, require fresh login and new consent, and preserve out
 usage, issued permits, uncertain effects and reconciliation records. Do not rebind a restored grant
 or operation to a new session. No startup migration or normal process restart performs retirement.
 
-The existing facade can delete sessions for an explicitly known owner using
-`runtime.repositories.history.sessions.delete_owner(transaction, owner_id=...)`; this touches no
-assignment liability rows. It does not provide a complete global owner inventory. This storage
-slice does not implement or qualify a complete restore-retirement tool: governed inventory,
-complete retirement, stale-grant/execution denial and interrupted-recovery qualification remain
-release prerequisites. Do not infer coverage by enumerating latest sessions or only active owners.
-No operator SQL outside the guarded registry/repository is authorized by this procedure.
+The explicit public `astralplane.retire_restored_sessions` recovery entry retires the entire
+restored `web_session` table in one transaction. It requires `database_url`, `expected_database`,
+`expected_schema`, `expected_schema_revision` and `expected_migration_digest` as keyword inputs;
+there is no implicit application environment or target fallback. Supply connection material only
+through the embedding operator's private configuration, never command-line arguments or receipts.
+The current revision and digest must match the installed Plane code. The connected database and
+first selected schema must match the explicit target. Before reading application metadata, a
+qualified-builtin bootstrap gives `pg_catalog` implicit precedence, the existing migration advisory
+lock coordinates maintenance, and relation locks retain `schema_meta` and `web_session` while the
+complete current catalog is verified. Unknown/predecessor schemas, corrupted metadata and catalog
+namesakes are refused; no initializer, migration or product reconciliation hook is called.
+
+The entry then calls `SessionRepository.retire_all_for_recovery(transaction)`, which locks and deletes
+every session and verifies emptiness without decoding credentials or joining an owner inventory.
+Expired, resumed, inactive-owner and unknown-owner rows cannot be missed. It returns a frozen
+`RestoredSessionRetirement(retired_sessions: int)` only after commit and private pool closure. It
+does not return or log owners, session identities, credentials or ciphertext. Session retirement
+does not alter grants, assignments, receipts, audit, blobs or accounting liabilities. Existing
+grants keep their old binding and require fresh consent; no new session can revive that binding.
+
+SQL retains the existing transaction-local lock/statement upper bounds of 100/1000 milliseconds;
+stricter configured nonzero limits remain effective. The private pool bounds checkout to one second
+and connection establishment to five seconds. These are separate limits, not a total network or
+physical worker deadline. Contention, timeout and interruption roll back uncommitted retirement.
+`SessionRetirementError` is data-free; any failure after a possible commit remains unconfirmed.
+Keep admission closed, inspect or repeat explicitly, and never compensate by restoring credentials.
+A completed repeat returns zero. A later restore must run retirement again even if its snapshot
+contains old completion markers. No existing reconciliation marker can skip this operation.
+
+This API neither verifies the joint backup nor proves that writers are stopped. It never changes
+admission, invokes IAM, clears another process's memory or reopens services. The operator must verify
+those external preconditions, retain a private recovery record, discard every application process
+and cache, and require fresh institutional sign-in before reopening. The embedding Deep operator
+tool, private-database end-to-end qualification and final staging remain separate requirements;
+this API is not an independently authorized operational procedure. Ordinary startup/restart and
+owner retirement keep their existing behavior. No operator SQL outside the Plane recovery facade
+is authorized by this procedure.
 
 For recovery from a failed upgrade, preserve the failed database, keep writers closed, and restore
 the verified pre-upgrade PostgreSQL and paired durable-root snapshot as one unit. Do not drop the

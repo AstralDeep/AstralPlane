@@ -1487,6 +1487,31 @@ class SessionRepository:
             )
         return result.rowcount
 
+    def retire_all_for_recovery(self, transaction: Transaction) -> int:
+        """Retire every restored session in one externally governed transaction.
+
+        Admission and all writers must already be quiescent. This method neither
+        proves that precondition nor reopens traffic. No owner inventory or row
+        decoding can omit an inactive, unknown, expired or malformed session.
+        Callers must verify the exact current schema before this mutation, and
+        discard every application session cache before reopening admission.
+        Grants, work, audit and outstanding liabilities remain untouched.
+        """
+        self.bound_request_execution_waits(transaction)
+        transaction.execute("LOCK TABLE web_session IN ACCESS EXCLUSIVE MODE")
+        result = transaction.execute("DELETE FROM web_session")
+        if type(result.rowcount) is not int or result.rowcount < 0:
+            raise PlaneError(
+                "restored session retirement returned an invalid count",
+                code="session_retirement_invalid",
+            )
+        remaining = transaction.fetch_one("SELECT EXISTS(SELECT 1 FROM web_session) AS remaining")
+        if remaining is None or remaining["remaining"] is not False:
+            raise PlaneError(
+                "restored session retirement was incomplete", code="session_retirement_incomplete"
+            )
+        return result.rowcount
+
     def delete_expired_for_administration(
         self,
         transaction: Transaction,
