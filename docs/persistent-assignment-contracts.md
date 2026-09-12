@@ -159,6 +159,37 @@ owner, instruction revision, control epoch, generation and an opaque token. Bind
 `AssignmentOperationBinding` before any dispatch; validate its separate work-admission fence at
 each use. `renew_claim` and `assert_current_claim` never revive invalidated authority.
 
+Before a host transaction performs a write requiring both execution fences, call
+`assert_current_assignment_execution(transaction, fence=AssignmentFence(...),
+binding=AssignmentOperationBinding(...), action_id=None)`. This strict public guard
+locks the owner retirement domain, the selected owner-scoped offline grant when
+present, the logical assignment, then the work-admission execution. It discovers
+the grant reference without an assignment row lock and refuses any changed
+selection when it reloads the assignment under lock. It never reads encrypted
+refresh-token bytes. Grant revocation contends on that same grant row. After the
+admission lock wait it rechecks the current assignment lease, revision/control
+vector, local authority/deadline, grant expiry/revocation and admission ownership.
+An approved-action claim requires its exact `action_id`; omission cannot widen it.
+
+The returned detached `AssignmentRecord` does not renew either lease or authorize
+a later transaction. Perform the subsequent bounded repository mutation in this
+same transaction and still satisfy its action/state/request checks. No network,
+provider callback or second pool belongs inside the transaction. The host must
+refresh institutional session/delegation authority before opening it and perform
+any required audit/outbox writes before commit. A missing, stale or unsupported
+local context refuses the guarded write. Source-less interactive one-shot,
+scheduled one-shot and persistent granted profiles are supported. Framework origin
+is explicitly refused until the dedicated current issuer-lineage contract is
+bound; its stored credential reference alone is insufficient.
+
+The guard shares admission-fence validation with result settlement without changing
+the latter's contract: authentic old permits can still settle usage when execution
+authority has ended. Do not put that settlement-only path behind a strict current
+execution guard. Existing `assert_current_claim` and persistent signatures remain
+compatible. Deep must adopt this guard through its bounded transaction adapter
+before enabling one-shot runner dispatch; this Plane addition does not wire or
+enable those callers, and introduces no migration.
+
 Source batches atomically insert stable provider/item/revision identities and advance the
 checkpoint cursor under compare-and-set. Reserved checkpoint keys are `cursor`,
 `source_configuration_digest`, and `last_batch_key`. Source context is bounded and untrusted.

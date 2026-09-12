@@ -1537,6 +1537,77 @@ class AssignmentRepository:
     def assert_current_claim(self, query, *, fence):
         return _record(self._fenced(query, fence, action_id=self._foreground_action(query, fence)))
 
+    def assert_current_assignment_execution(self, transaction, *, fence, binding, action_id=None):
+        """Lock local authority, assignment and admission before a host mutation.
+
+        The host refreshes remote authorization before opening this transaction.
+        Keep any following repository writes in this same transaction; this
+        detached record is not a reusable authorization or dispatch permit.
+        """
+        if not isinstance(fence, AssignmentFence) or not isinstance(
+            binding, AssignmentOperationBinding
+        ):
+            raise RepositoryValidationError("typed execution fences required")
+        _text(fence.owner_id)
+        _uuid(fence.assignment_id)
+        _uuid(fence.claim_token)
+        _integer(fence.instruction_revision, 1)
+        _integer(fence.control_epoch, 1)
+        _integer(fence.claim_generation, 1)
+        if action_id is not None:
+            _uuid(action_id)
+        if not self._lock_operation_owner(transaction, fence.owner_id):
+            _conflict("assignment_owner_retired")
+        # Discover the selected authority without taking the assignment lock
+        # before its grant. Revisions are revalidated under the later row lock.
+        selected = self._load(transaction, fence.owner_id, fence.assignment_id)
+        if selected.get("execution_profile") == "one_shot" and (
+            selected["operation"]["authority"]["origin"] == "framework"
+        ):
+            # Current framework issuer lineage has a separate, not-yet-bound
+            # repository contract. A stored reference alone proves no authority.
+            _conflict("assignment_authorization_unavailable")
+        grant_id = selected["definition"]["offline_grant_id"]
+        if (
+            grant_id is not None
+            and transaction.fetch_one(
+                "SELECT id FROM user_offline_grant WHERE id=%s AND user_id=%s FOR UPDATE",
+                (grant_id, fence.owner_id),
+            )
+            is None
+        ):
+            _conflict("assignment_authorization_unavailable")
+        data = self._fenced(transaction, fence, action_id=action_id)
+        if data["definition"]["offline_grant_id"] != grant_id:
+            _conflict("assignment_authorization_unavailable")
+        self._assert_bound_admission(transaction, data, binding)
+        # A lock wait can cross either local lease/authority deadline. Never
+        # authorize with the timestamp sampled before the admission lock.
+        data = self._fenced(transaction, fence, action_id=action_id)
+        if data.get("execution_profile") == "one_shot":
+            self._validate_operation_continuation(transaction, data)
+        else:
+            self._validate_references(transaction, fence.owner_id, _definition(data["definition"]))
+        return _record(data)
+
+    @staticmethod
+    def _assert_bound_admission(transaction, data, binding):
+        if data["operation_binding"] != plain(binding):
+            _conflict("assignment_operation_conflict")
+        _uuid(binding.operation_id)
+        _uuid(binding.execution_lease_token)
+        _integer(binding.execution_generation, 1)
+        operation = WorkAdmissionRepository().assert_current_execution(
+            transaction,
+            ExecutionFence(
+                uuid.UUID(binding.operation_id),
+                binding.execution_generation,
+                uuid.UUID(binding.execution_lease_token),
+            ),
+        )
+        if operation.owner_user_id != data["owner_id"]:
+            _conflict("assignment_operation_conflict")
+
     def _action(
         self, transaction, owner_id, assignment_id, action_id, *, required=True, inspect_only=False
     ):
@@ -2529,20 +2600,8 @@ class AssignmentRepository:
             or data["operation_binding"] != plain(binding)
         ):
             return False
-        _uuid(binding.operation_id)
-        _uuid(binding.execution_lease_token)
-        _integer(binding.execution_generation, 1)
         try:
-            operation = WorkAdmissionRepository().assert_current_execution(
-                transaction,
-                ExecutionFence(
-                    uuid.UUID(binding.operation_id),
-                    binding.execution_generation,
-                    uuid.UUID(binding.execution_lease_token),
-                ),
-            )
-            if operation.owner_user_id != data["owner_id"]:
-                return False
+            self._assert_bound_admission(transaction, data, binding)
             # Re-sample database time and local lineage after the admission lock wait.
             self._fenced(transaction, fence, action_id=action_id)
             self._validate_operation_continuation(transaction, data)
