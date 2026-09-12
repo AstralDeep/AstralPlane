@@ -239,6 +239,8 @@ def control(repo, tx, record, value="pause", **changes):
         submission_digest=digest(value),
         control=value,
     )
+    if record.execution_profile == "one_shot":
+        values["expected_state_version"] = record.state_version
     values.update(changes)
     return repo.apply_control(tx, **values)
 

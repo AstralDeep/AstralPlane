@@ -123,6 +123,17 @@ class AssignmentControlResult(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentOperationRead(_Record):
+    """Owner-scoped controller snapshot; never a dispatch/authority grant."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    disposition: str
+    continuation_supported: bool
+    result_reference: str | None = field(default=None, repr=False)
+    terminal_outcome: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentSourceEvent(_Record):
     event_id: str
     source_key: str
@@ -302,6 +313,9 @@ class AssignmentEpisodeCompletion(_Record):
     activity: AssignmentActivityRecord | None = None
     safe_error_code: str | None = None
     completed: bool = False
+    terminal_outcome: str | None = None
+    result_reference: str | None = field(default=None, repr=False)
+    event_wait: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

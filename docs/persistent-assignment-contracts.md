@@ -46,6 +46,64 @@ unresolved effects are settled; the owner retirement fence still prevents new ad
 This storage admission contract does not itself install a host execution handler, add
 new effect authority or replace the existing ordinary chat dispatcher.
 
+### One-shot wait, wake and controller projection
+
+`set_event_wait` is an episode completion, not an unfenced owner-ID write. It takes
+the current `AssignmentFence`, observed `state_version`, checkpoint and completion
+digest plus a bounded event key and strict integer source observation revision.
+The source revision is a monotonic watermark, never an ordered opaque revision string.
+The existing completion transaction rejects in-flight or unresolved effects, releases
+unused reservations, saves the checkpoint and clears the claim. The phase becomes
+`awaiting_event` with no due time; neither worker profile treats it as cadence work.
+
+`accept_wake` takes the owner/assignment, observed state/instruction/control vector,
+original event ID, event key, source revision and host-computed event-content binding.
+The host still authenticates the caller and validates current authority and the source;
+these strings and digests are not permission. Owner retirement locks precede the
+assignment lock. First acceptance requires the current active wait, matching key and
+a strictly greater watermark, then advances the existing wake generation once and
+sets database-time eligibility. Wrong-owner and missing assignment both return absent.
+
+`operation.control` version 1 stores the current wait, at most 64 source-key watermarks
+and at most 128 wake receipts keyed by the original event ID (128 UTF-8 bytes each).
+A receipt binds key, source revision and content binding. Exact replay acknowledges
+the prior acceptance before stale version/phase/expiry checks, without another state
+change; mismatched event-ID reuse conflicts. Receipts are never evicted during the
+retained operation lifetime. Capacity refuses new events while retaining inspection
+and cancellation. The control envelope is at most 64 KiB and the complete assignment
+remains at most 256 KiB. This uses existing private JSON; no migration bytes change.
+
+One-shot `apply_control` requires strict `expected_state_version` in addition to the
+instruction/control vector. Persistent callers and their receipt signatures retain
+their existing contract. Replays of foundation one-shot receipts also remain valid.
+Pause/resume preserves event waits, approval/reconciliation/authority holds and an
+already scheduled retry. Source-less interactive resume validates its operation
+authority and references without inventing an offline grant. Revocation cannot be
+undone by pausing and resuming. Cancellation preserves started/uncertain liabilities.
+
+One-shot `finish_episode` requires explicit due time for a nonterminal queued yield;
+it never reads persistent cadence. Transient failures use 5/15/45-second bounded
+retries inside the original deadline/authority lifetime and configured retry ceiling.
+Exhaustion becomes an explicit terminal failure only when unresolved work permits it.
+Explicit terminal completion may carry `terminal_outcome` (`completed` or `failed`)
+and a bounded canonical result reference. The host remains responsible for result
+ownership and approved publication. Cancellation records `cancelled`. New optional
+completion fields are omitted at default when computing old receipt signatures.
+
+`get_operation` and bounded UUID-keyset `list_operations` return an
+`AssignmentOperationRead` with the existing assignment revision vector, disposition,
+continuation support and explicit terminal/result metadata. They filter the profile
+before pagination. Unknown positive operation/control/checkpoint versions remain
+readable but non-dispatchable; claim selection excludes them before applying its
+limit, so they cannot starve later supported rows. A safe stop preserves unknown
+nested metadata and retires the known outer fence. Invalid identities, malformed
+versions or inconsistent indexed fields remain data errors, not compatibility cases.
+
+These are repository/controller contracts. The Deep operation service, external
+owner-command adapters, current-authority stream delivery and transient action-input
+disposition still require their separate integration work; they are not installed
+by adding these methods.
+
 ## Owner commands and receipts
 
 Create takes an owner, UUID4 assignment/submission IDs, a semantic submission SHA-256 and an

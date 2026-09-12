@@ -39,6 +39,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentFence,
     AssignmentOperationAuthority,
     AssignmentOperationBinding,
+    AssignmentOperationRead,
     AssignmentOperationSpec,
     AssignmentOwnerRetirementResult,
     AssignmentRecord,
@@ -54,6 +55,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
 
 _DIMENSIONS = ("model_calls", "tool_calls", "tokens", "elapsed_ms")
 _PHASES = {
+    "awaiting_event",
     "waiting",
     "checking",
     "investigating",
@@ -65,6 +67,7 @@ _PHASES = {
     "failed",
 }
 _TERMINAL = {"stopped", "completed"}
+_OPERATION_STATE_KEYS = {"control", "terminal_outcome", "result_reference"}
 
 
 def plain(value: Any) -> Any:
@@ -148,6 +151,29 @@ def _version(data, revision, epoch):
     _integer(epoch, 1)
     if data["instruction_revision"] != revision or data["control_epoch"] != epoch:
         _conflict("assignment_revision_conflict")
+
+
+def _state_version(data, expected):
+    _integer(expected, 1)
+    if data["state_version"] != expected:
+        _conflict("assignment_revision_conflict")
+
+
+def _supported(data):
+    if data.get("execution_profile") != "one_shot":
+        return True
+    operation = data["operation"]
+    return (
+        operation["version"] == 1
+        and data["checkpoint"].get("schema_version", 1) == 1
+        and operation.get("control", {}).get("version", 1) == 1
+    )
+
+
+def _operation_control(operation):
+    return operation.setdefault(
+        "control", {"version": 1, "wait": None, "watermarks": {}, "wake_receipts": {}}
+    )
 
 
 def _definition(value):
@@ -278,7 +304,9 @@ class AssignmentRepository:
             raise RepositoryValidationError("currency requires an explicit monetary cap")
         canonical(definition, 32768)
 
-    def _load(self, query, owner_id, assignment_id, *, lock=False, required=True):
+    def _load(
+        self, query, owner_id, assignment_id, *, lock=False, required=True, allow_unknown=False
+    ):
         _text(owner_id)
         _uuid(assignment_id)
         row = query.fetch_one(
@@ -290,7 +318,10 @@ class AssignmentRepository:
             if required:
                 raise RepositoryNotFoundError("assignment_not_found", code="assignment_not_found")
             return None
-        return self._validated_assignment_row(row, owner_id, assignment_id)
+        data = self._validated_assignment_row(row, owner_id, assignment_id)
+        if not allow_unknown and not _supported(data):
+            _conflict("assignment_version_unsupported")
+        return data
 
     def _validated_assignment_row(self, row, owner_id, assignment_id):
         try:
@@ -309,7 +340,7 @@ class AssignmentRepository:
                 raise ValueError
             if profile == "one_shot":
                 self.validate_operation_definition(_definition(data["definition"]))
-                self._operation_spec(data["operation"], owner_id)
+                self._validate_operation_state(data["operation"], owner_id)
             elif profile == "persistent":
                 self.validate_definition(_definition(data["definition"]))
             else:
@@ -318,6 +349,8 @@ class AssignmentRepository:
                 raise ValueError
             if len(data["tasks"]) > 32 or not isinstance(data["checkpoint"], dict):
                 raise ValueError
+            if profile == "one_shot":
+                _integer(data["checkpoint"].get("schema_version", 1), 1)
             for key in ("instruction_revision", "control_epoch", "state_version"):
                 _integer(data[key], 1)
             for bucket in ("spent", "daily", "outstanding"):
@@ -553,7 +586,7 @@ class AssignmentRepository:
     def _operation_spec(value, owner_id):
         try:
             if isinstance(value, Mapping):
-                value = dict(value)
+                value = {k: v for k, v in value.items() if k not in _OPERATION_STATE_KEYS}
                 value["authority"] = AssignmentOperationAuthority(**value["authority"])
                 value = AssignmentOperationSpec(**value)
             if not isinstance(value, AssignmentOperationSpec) or not isinstance(
@@ -589,6 +622,51 @@ class AssignmentRepository:
             raise RepositoryValidationError(
                 "invalid one-shot authority reference or profile"
             ) from exc
+
+    def _validate_operation_state(self, operation, owner_id):
+        """Validate understood envelopes; preserve future nested versions for inspection."""
+        if not isinstance(operation, dict):
+            raise RepositoryValidationError("operation object required")
+        _integer(operation.get("version"), 1)
+        canonical(operation, 73728)
+        if operation["version"] != 1:
+            return
+        self._operation_spec(operation, owner_id)
+        outcome = operation.get("terminal_outcome")
+        if outcome is not None and outcome not in {"completed", "failed", "cancelled"}:
+            raise RepositoryValidationError("invalid terminal outcome")
+        if operation.get("result_reference") is not None:
+            _text(operation["result_reference"], 512)
+        control = operation.get("control")
+        if control is None:
+            if "control" in operation:
+                raise RepositoryValidationError("control object required")
+            return
+        if not isinstance(control, dict):
+            raise RepositoryValidationError("control object required")
+        _integer(control.get("version"), 1)
+        canonical(control, 65536)
+        if control["version"] != 1:
+            return
+        if set(control) != {"version", "wait", "watermarks", "wake_receipts"}:
+            raise RepositoryValidationError("invalid operation control fields")
+        wait = control["wait"]
+        if wait is not None:
+            if not isinstance(wait, dict) or set(wait) != {"event_key", "source_revision"}:
+                raise RepositoryValidationError("invalid event wait")
+            _text(wait["event_key"], 128)
+            _integer(wait["source_revision"])
+        watermarks, receipts = control["watermarks"], control["wake_receipts"]
+        if not isinstance(watermarks, dict) or len(watermarks) > 64:
+            raise RepositoryValidationError("invalid event watermarks")
+        for key, revision in watermarks.items():
+            _text(key, 128)
+            _integer(revision)
+        if not isinstance(receipts, dict) or len(receipts) > 128:
+            raise RepositoryValidationError("invalid wake receipts")
+        for event_id, signature in receipts.items():
+            _text(event_id, 128)
+            _digest(signature)
 
     @staticmethod
     def _check_operation_time(transaction, operation):
@@ -670,6 +748,8 @@ class AssignmentRepository:
         if replay is not None:
             return replay
         self.validate_operation_definition(definition)
+        if isinstance(operation, Mapping) and set(operation) & _OPERATION_STATE_KEYS:
+            raise RepositoryValidationError("operation control is repository-owned")
         operation = self._operation_spec(operation, owner_id)
         if (
             operation.authority.reference_id if operation.authority.origin == "framework" else None
@@ -757,8 +837,60 @@ class AssignmentRepository:
             _conflict("assignment_cost_bound_unavailable")
 
     def get_assignment(self, query, *, owner_id, assignment_id):
-        data = self._load(query, owner_id, assignment_id, required=False)
+        data = self._load(query, owner_id, assignment_id, required=False, allow_unknown=True)
         return _record(data) if data else None
+
+    def get_operation(self, query, *, owner_id, assignment_id):
+        data = self._load(query, owner_id, assignment_id, required=False, allow_unknown=True)
+        if data is None or data.get("execution_profile") != "one_shot":
+            return None
+        return self._operation_read(data)
+
+    @staticmethod
+    def _operation_read(data):
+        supported = _supported(data)
+        operation = data["operation"]
+        terminal = operation.get("terminal_outcome") if supported else None
+        if data["lifecycle"] == "stopped":
+            disposition = "cancelled"
+        elif not supported:
+            disposition = "unsupported_version"
+        elif data["lifecycle"] == "paused":
+            disposition = "paused"
+        elif data["lifecycle"] == "completed":
+            disposition = terminal or "completed"
+        else:
+            disposition = {
+                "awaiting_event": "awaiting_event",
+                "waiting_approval": "awaiting_approval",
+                "waiting_authorization": "awaiting_authority",
+                "budget_exhausted": "budget_blocked",
+                "reconciliation": "reconciliation_required",
+                "failed": "retry_eligible" if data["next_wake_at"] else "failed",
+            }.get(data["phase"], "active" if data["claim_token"] else "queued")
+        return AssignmentOperationRead(
+            _record(data),
+            disposition,
+            supported,
+            operation.get("result_reference") if supported else None,
+            terminal,
+        )
+
+    def list_operations(self, query, *, owner_id, limit=50, after_id=None):
+        _text(owner_id)
+        _integer(limit, 1, 100)
+        if after_id is not None:
+            _uuid(after_id)
+        rows = query.fetch_all(
+            "SELECT * FROM persistent_assignment WHERE owner_user_id=%s "
+            "AND execution_profile='one_shot' "
+            "AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
+            (owner_id, after_id, after_id, limit),
+        )
+        return tuple(
+            self._operation_read(self._validated_assignment_row(row, owner_id, str(row["id"])))
+            for row in rows
+        )
 
     def get_submission_receipt(
         self, query, *, owner_id, assignment_id, submission_id, submission_digest, command
@@ -813,26 +945,47 @@ class AssignmentRepository:
         submission_digest,
         control,
         replacement=None,
+        expected_state_version=None,
     ):
         _uuid(submission_id)
         _digest(submission_digest)
         control = AssignmentControl(control)
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        request = digest(
-            [
-                str(control),
-                replacement,
-                expected_instruction_revision,
-                expected_control_epoch,
-                submission_digest,
-            ]
+        owner_active = True
+        if control in {AssignmentControl.RESUME, AssignmentControl.REVISE}:
+            owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(
+            transaction,
+            owner_id,
+            assignment_id,
+            lock=True,
+            allow_unknown=control == AssignmentControl.STOP,
         )
+        one_shot = data.get("execution_profile") == "one_shot"
+        signature_values = [
+            str(control),
+            replacement,
+            expected_instruction_revision,
+            expected_control_epoch,
+            submission_digest,
+        ]
+        if one_shot:
+            _integer(expected_state_version, 1)
+            signature_values.append(expected_state_version)
+        request = digest(signature_values)
         old = data["controls"].get(submission_id)
         if old:
-            if old["signature"] != request:
+            accepted_signatures = {request}
+            if one_shot:
+                # Foundation receipts predate the required state-version field.
+                accepted_signatures.add(digest(signature_values[:-1]))
+            if old["signature"] not in accepted_signatures:
                 _conflict("assignment_idempotency_conflict")
             return AssignmentControlResult(_record(data), False)
         _version(data, expected_instruction_revision, expected_control_epoch)
+        if one_shot:
+            _state_version(data, expected_state_version)
+            if not owner_active:
+                _conflict("assignment_owner_retired")
         if data["lifecycle"] in _TERMINAL:
             if control == AssignmentControl.STOP and data["lifecycle"] == "stopped":
                 return AssignmentControlResult(_record(data), False)
@@ -844,8 +997,12 @@ class AssignmentRepository:
         if control == AssignmentControl.REVISE:
             if replacement is None:
                 raise RepositoryValidationError("replacement definition required")
-            self.validate_definition(replacement)
-            self._validate_references(transaction, owner_id, replacement)
+            if one_shot:
+                self.validate_operation_definition(replacement)
+                self._validate_operation_continuation(transaction, data, replacement)
+            else:
+                self.validate_definition(replacement)
+                self._validate_references(transaction, owner_id, replacement)
             old_limits = data["definition"]["limits"]
             if old_limits.get("currency") != replacement.limits.get("currency") and (
                 any(data["usage"]["spent"].values()) or any(data["usage"]["outstanding"].values())
@@ -913,11 +1070,21 @@ class AssignmentRepository:
                     (canonical(event), row["id"]),
                 )
             data["phase"] = "waiting"
+            if one_shot:
+                _operation_control(data["operation"])["wait"] = None
         elif control == AssignmentControl.RESUME:
             if data["lifecycle"] != "paused":
                 _conflict("assignment_not_paused")
-            self._validate_references(transaction, owner_id, _definition(data["definition"]))
-            data.update(lifecycle="active", phase="waiting")
+            if one_shot:
+                self._validate_operation_continuation(transaction, data)
+                # A pause cannot erase an event wait, approval or reconciliation hold.
+                phase = data["phase"]
+                if phase in {"checking", "investigating", "delegating"}:
+                    phase = "waiting"
+                data.update(lifecycle="active", phase=phase)
+            else:
+                self._validate_references(transaction, owner_id, _definition(data["definition"]))
+                data.update(lifecycle="active", phase="waiting")
         elif control == AssignmentControl.REVOKE:
             data["definition"]["offline_grant_id"] = None
             data.update(phase="waiting_authorization")
@@ -925,6 +1092,8 @@ class AssignmentRepository:
             data["lifecycle"] = "paused"
         else:
             data["lifecycle"] = "stopped"
+            if one_shot and _supported(data):
+                data["operation"]["terminal_outcome"] = "cancelled"
         data["control_epoch"] += 1
         data["controls"][submission_id] = {
             "signature": request,
@@ -937,6 +1106,17 @@ class AssignmentRepository:
             if data["lifecycle"] == "active" and data["phase"] == "waiting"
             else None
         )
+        if (
+            one_shot
+            and control == AssignmentControl.RESUME
+            and data["phase"] == "failed"
+            and data["next_retry_at"] is not None
+        ):
+            due = max(_now(transaction), _time(data["next_retry_at"]))
+            operation = self._operation_spec(data["operation"], owner_id)
+            if min(_time(operation.authority.expires_at), _time(operation.deadline_at)) <= due:
+                _conflict("assignment_deadline_exceeded")
+            data["next_wake_at"] = plain(due)
         invalidated, begun = self._invalidate_actions(transaction, data)
         for task in data["tasks"]:
             if task["state"] in {"pending", "running"}:
@@ -953,6 +1133,132 @@ class AssignmentRepository:
         return AssignmentControlResult(
             self._save(transaction, data), True, tuple(invalidated), tuple(begun)
         )
+
+    def _validate_operation_continuation(self, transaction, data, definition=None):
+        """Local lineage checks supplement, never replace, current host authentication."""
+        if data["phase"] == "waiting_authorization":
+            _conflict("assignment_authorization_unavailable")
+        operation = self._operation_spec(data["operation"], data["owner_id"])
+        self._check_operation_time(transaction, operation)
+        definition = definition or _definition(data["definition"])
+        if operation.kind == "research" and not definition.source:
+            raise RepositoryValidationError("research requires a source plan")
+        if operation.authority.origin == "scheduled" or definition.offline_grant_id:
+            if (
+                operation.authority.origin == "scheduled"
+                and definition.offline_grant_id != operation.authority.reference_id
+            ):
+                _conflict("assignment_authorization_unavailable")
+            self._validate_references(transaction, data["owner_id"], definition)
+        else:
+            self._validate_non_grant_references(transaction, data["owner_id"], definition)
+
+    @staticmethod
+    def _lock_operation_owner(transaction, owner_id):
+        _text(owner_id)
+        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
+        retired = transaction.fetch_one(
+            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+            (owner_id,),
+        )
+        return not retired or retired["state"] == "active"
+
+    def set_event_wait(
+        self,
+        transaction,
+        *,
+        fence,
+        expected_state_version,
+        checkpoint,
+        completion_digest,
+        event_key,
+        source_revision,
+        control_version=1,
+    ):
+        """Atomically checkpoint a claimed operation and retire its execution lease.
+
+        source_revision is a strict monotonic source observation watermark, not an
+        opaque revision string. The host validates source identity and authority.
+        """
+        _integer(control_version, 1, 1)
+        _text(event_key, 128)
+        _integer(source_revision)
+        return self.finish_episode(
+            transaction,
+            fence=fence,
+            completion=AssignmentEpisodeCompletion(
+                expected_state_version=expected_state_version,
+                checkpoint=checkpoint,
+                completion_digest=completion_digest,
+                phase="awaiting_event",
+                wake_reason="event_wait",
+                event_wait={"event_key": event_key, "source_revision": source_revision},
+            ),
+        )
+
+    def accept_wake(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        expected_instruction_revision,
+        expected_control_epoch,
+        event_id,
+        event_key,
+        source_revision,
+        event_digest,
+        control_version=1,
+    ):
+        """Acknowledge one host-authorized source event, with durable bounded replay.
+
+        Authentication and current remote authority belong to the host. A receipt
+        replay acknowledges prior acceptance only; it grants no new continuation.
+        """
+        _integer(control_version, 1, 1)
+        _integer(expected_state_version, 1)
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _text(event_id, 128)
+        _text(event_key, 128)
+        _integer(source_revision)
+        _digest(event_digest)
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        state = _operation_control(data["operation"])
+        signature = digest([event_key, source_revision, event_digest])
+        prior = state["wake_receipts"].get(event_id)
+        if prior is not None:
+            if prior != signature:
+                _conflict("assignment_idempotency_conflict")
+            return AssignmentControlResult(_record(data), False)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if data["lifecycle"] != "active" or data["phase"] != "awaiting_event":
+            _conflict("assignment_not_waiting")
+        if not owner_active:
+            _conflict("assignment_owner_retired")
+        self._validate_operation_continuation(transaction, data)
+        wait = state["wait"]
+        if wait is None or wait["event_key"] != event_key:
+            _conflict("assignment_event_key_conflict")
+        if source_revision <= max(wait["source_revision"], state["watermarks"].get(event_key, 0)):
+            _conflict("assignment_event_revision_conflict")
+        if len(state["wake_receipts"]) >= 128:
+            _conflict("assignment_history_capacity_exhausted")
+        state["wake_receipts"][event_id] = signature
+        state["watermarks"][event_key] = source_revision
+        state["wait"] = None
+        data.update(
+            phase="waiting",
+            wake_reason="event",
+            next_wake_at=plain(_now(transaction)),
+            wake_generation=data["wake_generation"] + 1,
+        )
+        return AssignmentControlResult(self._save(transaction, data), True)
 
     def request_check(
         self,
@@ -1014,6 +1320,9 @@ class AssignmentRepository:
             "SELECT id,owner_user_id FROM persistent_assignment WHERE lifecycle='active' "
             "AND next_wake_at<=clock_timestamp() AND lease_expires_at IS NULL "
             "AND data->>'phase' IN ('waiting','failed') AND execution_profile=%s "
+            "AND (execution_profile='persistent' OR (data->'operation'->'version'='1'::jsonb "
+            "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
+            "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
             "ORDER BY next_wake_at,id LIMIT %s FOR UPDATE SKIP LOCKED",
             (profile, limit),
         )
@@ -2089,11 +2398,115 @@ class AssignmentRepository:
         data["wake_generation"] += 1
         return self._save(transaction, data)
 
+    @staticmethod
+    def _validate_operation_completion(data, completion):
+        if not isinstance(completion.checkpoint, Mapping):
+            raise RepositoryValidationError("checkpoint object required")
+        _integer(completion.checkpoint.get("schema_version", 1), 1, 1)
+        if type(completion.completed) is not bool:
+            raise RepositoryValidationError("completed must be boolean")
+        if completion.terminal_outcome is not None and (
+            not isinstance(completion.terminal_outcome, str)
+            or completion.terminal_outcome not in {"completed", "failed"}
+        ):
+            raise RepositoryValidationError("invalid terminal outcome")
+        if (
+            completion.terminal_outcome is not None or completion.result_reference is not None
+        ) and not completion.completed:
+            raise RepositoryValidationError("result requires terminal completion")
+        if completion.result_reference is not None:
+            _text(completion.result_reference, 512)
+        if completion.event_wait is not None:
+            wait = plain(completion.event_wait)
+            if (
+                completion.completed
+                or completion.phase != "awaiting_event"
+                or not isinstance(wait, dict)
+                or set(wait) != {"event_key", "source_revision"}
+            ):
+                raise RepositoryValidationError("invalid event wait completion")
+            _text(wait["event_key"], 128)
+            _integer(wait["source_revision"])
+            state = _operation_control(data["operation"])
+            if wait["source_revision"] < state["watermarks"].get(wait["event_key"], 0):
+                _conflict("assignment_event_revision_conflict")
+            if wait["event_key"] not in state["watermarks"] and len(state["watermarks"]) >= 64:
+                _conflict("assignment_history_capacity_exhausted")
+        elif completion.phase == "awaiting_event":
+            raise RepositoryValidationError("event wait required")
+        if (
+            not completion.completed
+            and completion.phase == "waiting"
+            and completion.next_wake_at is None
+        ):
+            raise RepositoryValidationError("one-shot yield requires an explicit due time")
+        if completion.wake_reason == "cadence" and not completion.completed:
+            raise RepositoryValidationError("one-shot completion cannot recur")
+
+    @staticmethod
+    def _schedule_operation_completion(data, completion, now):
+        operation = data["operation"]
+        data.update(next_wake_at=None, next_retry_at=None)
+        if completion.completed:
+            return
+        if completion.event_wait is not None:
+            state = _operation_control(operation)
+            state["wait"] = plain(completion.event_wait)
+            state["watermarks"].setdefault(state["wait"]["event_key"], 0)
+        if completion.phase == "failed":
+            data["consecutive_failures"] += 1
+            if data["consecutive_failures"] > data["definition"]["limits"]["max_retries"]:
+                data["safe_error_code"] = "assignment_retry_exhausted"
+                return
+            due = now + timedelta(seconds=(5, 15, 45)[data["consecutive_failures"] - 1])
+            if completion.next_wake_at is not None:
+                due = max(due, _time(completion.next_wake_at))
+        elif completion.phase == "waiting":
+            # A yield/claim cycle cannot renew a one-shot's finite retry allowance.
+            due = max(now, _time(completion.next_wake_at))
+        else:
+            return
+        if _time(operation["authority"]["expires_at"]) <= due:
+            data.update(
+                phase="waiting_authorization",
+                safe_error_code="assignment_authorization_unavailable",
+            )
+        elif _time(operation["deadline_at"]) <= due:
+            data.update(phase="failed", safe_error_code="assignment_deadline_exceeded")
+        else:
+            data["next_wake_at"] = plain(due)
+            if completion.phase == "failed":
+                data["next_retry_at"] = plain(due)
+
+    @staticmethod
+    def _terminal_operation_failure(transaction, data):
+        if data["phase"] != "failed" or data["next_wake_at"] is not None:
+            return
+        unresolved = transaction.fetch_one(
+            "SELECT count(*) AS n FROM persistent_assignment_action WHERE assignment_id=%s "
+            "AND state IN ('reserved','started','uncertain','proposed','approved')",
+            (data["assignment_id"],),
+        )["n"]
+        if unresolved or any(t["state"] == "reconciliation" for t in data["tasks"]):
+            data["phase"] = "reconciliation"
+            return
+        data["lifecycle"] = "completed"
+        data["operation"]["terminal_outcome"] = "failed"
+        for task in data["tasks"]:
+            if task["state"] in {"pending", "running"}:
+                task["state"] = "cancelled"
+                task["task_generation"] += 1
+
     def finish_episode(self, transaction, *, fence, completion):
         raw = self._load(transaction, fence.owner_id, fence.assignment_id, lock=True)
         _digest(completion.completion_digest)
         last = raw.get("last_completion")
-        signature = digest(completion)
+        signature_value = plain(completion)
+        # Preserve receipts written before the optional one-shot completion fields.
+        for key in ("terminal_outcome", "result_reference", "event_wait"):
+            if signature_value[key] is None:
+                signature_value.pop(key)
+        signature = digest(signature_value)
         if last and last["claim_generation"] == fence.claim_generation:
             if (
                 last["signature"] != signature
@@ -2103,16 +2516,41 @@ class AssignmentRepository:
                 _conflict("assignment_result_conflict")
             return _record(raw)
         data = self._fenced(transaction, fence, action_id=raw.get("approved_action_id"))
-        if data["state_version"] != completion.expected_state_version:
-            _conflict("assignment_revision_conflict")
+        _state_version(data, completion.expected_state_version)
         if completion.phase not in _PHASES:
             raise RepositoryValidationError("invalid assignment phase")
+        one_shot = data.get("execution_profile") == "one_shot"
+        if not one_shot and (
+            completion.phase == "awaiting_event"
+            or any(
+                value is not None
+                for value in (
+                    completion.event_wait,
+                    completion.terminal_outcome,
+                    completion.result_reference,
+                )
+            )
+        ):
+            raise RepositoryValidationError("one-shot completion required")
+        if one_shot:
+            self._validate_operation_completion(data, completion)
         if transaction.fetch_one(
             "SELECT count(*) AS n FROM persistent_assignment_action "
             "WHERE assignment_id=%s AND state='started'",
             (fence.assignment_id,),
         )["n"]:
             _conflict("assignment_action_in_flight")
+        if (
+            one_shot
+            and not completion.completed
+            and completion.phase in {"waiting", "failed", "awaiting_event"}
+            and transaction.fetch_one(
+                "SELECT count(*) AS n FROM persistent_assignment_action WHERE assignment_id=%s "
+                "AND state IN ('uncertain','proposed','approved')",
+                (fence.assignment_id,),
+            )["n"]
+        ):
+            _conflict("assignment_unfinished_work")
         canonical(completion.checkpoint, 65536)
         for key in ("cursor", "source_configuration_digest", "last_batch_key"):
             if (
@@ -2180,6 +2618,10 @@ class AssignmentRepository:
             ):
                 _conflict("assignment_unfinished_work")
             data["lifecycle"] = "completed"
+            if one_shot:
+                data["operation"]["terminal_outcome"] = completion.terminal_outcome or "completed"
+                if completion.result_reference is not None:
+                    data["operation"]["result_reference"] = completion.result_reference
         now = _now(transaction)
         data.update(
             checkpoint=plain(completion.checkpoint),
@@ -2192,7 +2634,9 @@ class AssignmentRepository:
                 "signature": signature,
             },
         )
-        if completion.phase in {"waiting", "failed"} and not completion.completed:
+        if one_shot:
+            self._schedule_operation_completion(data, completion, now)
+        elif completion.phase in {"waiting", "failed"} and not completion.completed:
             due = _time(completion.next_wake_at) or now + timedelta(
                 seconds=data["definition"]["limits"]["cadence_seconds"]
             )
@@ -2209,7 +2653,7 @@ class AssignmentRepository:
             data["next_wake_at"] = plain(max(due, now))
         else:
             data["next_wake_at"] = None
-        if completion.phase == "failed":
+        if not one_shot and completion.phase == "failed":
             data["consecutive_failures"] += 1
             if data["consecutive_failures"] > data["definition"]["limits"]["max_retries"]:
                 data.update(next_wake_at=None, safe_error_code="assignment_retry_exhausted")
@@ -2223,7 +2667,7 @@ class AssignmentRepository:
                     max(_time(data["next_wake_at"]), now + timedelta(seconds=backoff))
                 )
             data["next_retry_at"] = data["next_wake_at"]
-        else:
+        elif not one_shot:
             data.update(consecutive_failures=0, next_retry_at=None)
         if completion.activity is not None:
             self._activity(
@@ -2258,6 +2702,8 @@ class AssignmentRepository:
                 )
                 task["task_generation"] += 1
         self._clear_claim(data)
+        if one_shot and not completion.completed:
+            self._terminal_operation_failure(transaction, data)
         return self._save(transaction, data)
 
     def recover_expired_for_administration(self, transaction, *, limit=100):
@@ -2273,6 +2719,9 @@ class AssignmentRepository:
         rows = transaction.fetch_all(
             "SELECT id,owner_user_id FROM persistent_assignment "
             "WHERE execution_profile=%s AND lease_expires_at<=clock_timestamp() "
+            "AND (execution_profile='persistent' OR (data->'operation'->'version'='1'::jsonb "
+            "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
+            "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
             "ORDER BY lease_expires_at,id "
             "LIMIT %s FOR UPDATE SKIP LOCKED",
             (profile, limit),
@@ -2560,6 +3009,7 @@ class AssignmentRepository:
                     assignment_id=assignment_id,
                     expected_instruction_revision=data["instruction_revision"],
                     expected_control_epoch=data["control_epoch"],
+                    expected_state_version=data["state_version"],
                     submission_id=str(uuid.uuid4()),
                     submission_digest=digest(["account_retirement", owner_id, assignment_id]),
                     control="stop",
