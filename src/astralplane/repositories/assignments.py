@@ -12,7 +12,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -37,6 +37,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentDispatchPermit,
     AssignmentEpisodeCompletion,
     AssignmentFence,
+    AssignmentInputReference,
     AssignmentOperationAuthority,
     AssignmentOperationBinding,
     AssignmentOperationRead,
@@ -45,13 +46,16 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentRecord,
     AssignmentRecoveryResult,
     AssignmentResourceAmount,
+    AssignmentResultDisposition,
     AssignmentRetentionResult,
     AssignmentSourceBatch,
     AssignmentSourceEvent,
     AssignmentTask,
     AssignmentTaskClaim,
     AssignmentTaskResult,
+    AssignmentTransientInput,
 )
+from astralplane.repositories.work_admission import ExecutionFence, WorkAdmissionRepository
 
 _DIMENSIONS = ("model_calls", "tool_calls", "tokens", "elapsed_ms")
 _PHASES = {
@@ -73,7 +77,15 @@ _OPERATION_STATE_KEYS = {"control", "terminal_outcome", "result_reference"}
 def plain(value: Any) -> Any:
     """Canonical JSON-compatible copy of detached values (no driver objects)."""
     if is_dataclass(value):
-        return {f.name: plain(getattr(value, f.name)) for f in fields(value)}
+        result = {f.name: plain(getattr(value, f.name)) for f in fields(value)}
+        # Existing durable action/receipt signatures must remain byte compatible.
+        for model, key in (
+            (AssignmentActionIntent, "transient_input"),
+            (AssignmentActionOutcome, "result_disposition"),
+        ):
+            if isinstance(value, model) and result[key] is None:
+                result.pop(key)
+        return result
     if isinstance(value, Mapping):
         return {str(k): plain(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
@@ -201,7 +213,159 @@ def _intent(data):
     values["maximum"] = AssignmentResourceAmount(**values["maximum"])
     for key in ("quote_expires_at", "approval_expires_at"):
         values[key] = _time(values[key])
+    if values.get("transient_input") is not None:
+        values["transient_input"] = _payload_record(
+            values["transient_input"], AssignmentTransientInput
+        )
     return AssignmentActionIntent(**values)
+
+
+def _payload_record(value, model):
+    """Future positive versions are opaque on inspection, never interpreted."""
+    value = plain(value)
+    if not isinstance(value, dict):
+        raise RepositoryValidationError("invalid payload disposition")
+    _integer(value.get("version"), 1)
+    if value["version"] != 1:
+        return value
+    try:
+        value["references"] = tuple(
+            AssignmentInputReference(**item) for item in value["references"]
+        )
+        return model(**value)
+    except (KeyError, TypeError, ValueError):
+        # Constructor errors can include caller-controlled field names.
+        raise RepositoryValidationError("invalid payload disposition") from None
+
+
+def _input_references(references):
+    if not isinstance(references, (tuple, list)) or len(references) > 60:
+        raise RepositoryValidationError("invalid reconstruction references")
+    counts, seen = {}, set()
+    for item in references:
+        if (
+            not isinstance(item, AssignmentInputReference)
+            or type(item.kind) is not str
+            or item.kind
+            not in {
+                "source",
+                "note",
+                "skill",
+            }
+        ):
+            raise RepositoryValidationError("invalid reconstruction reference")
+        _text(item.resource_id, 256)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]*", item.resource_id):
+            raise RepositoryValidationError("invalid reconstruction reference")
+        if item.kind == "note":
+            _uuid(item.resource_id)
+        _integer(item.revision, 1)
+        identity = (item.kind, item.resource_id)
+        if identity in seen:
+            raise RepositoryValidationError("duplicate reconstruction reference")
+        seen.add(identity)
+        counts[item.kind] = counts.get(item.kind, 0) + 1
+        if counts[item.kind] > {"source": 32, "note": 8, "skill": 20}[item.kind]:
+            raise RepositoryValidationError("reconstruction reference bound exceeded")
+    canonical(references, 8192)
+
+
+def _payload_identifier(value, maximum):
+    _text(value, maximum)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]*", value):
+        raise RepositoryValidationError("invalid payload identifier")
+
+
+def _transient_input(value, request, request_digest):
+    value = _payload_record(value, AssignmentTransientInput)
+    if not isinstance(value, AssignmentTransientInput):
+        _conflict("assignment_payload_version_unsupported")
+    _payload_identifier(value.binding_key_id, 64)
+    _digest(value.payload_binding)
+    if (
+        value.reconstruction_kind != "model_messages"
+        or type(value.source_retention) is not str
+        or value.source_retention
+        not in {
+            "none",
+            "operation",
+        }
+    ):
+        raise RepositoryValidationError("invalid reconstruction disposition")
+    _input_references(value.references)
+    if (
+        not isinstance(request, Mapping)
+        or request.get("kind") != "model"
+        or set(request)
+        - {"kind", "model", "provider", "max_output_tokens", "reasoning_effort", "response_format"}
+    ):
+        raise RepositoryValidationError("transient request requires routing metadata only")
+    _integer(request.get("max_output_tokens"), 1, 1_000_000)
+    for key in ("model", "provider"):
+        if key in request:
+            _payload_identifier(request[key], 128)
+    if (
+        request.get("reasoning_effort") is not None
+        and type(request.get("reasoning_effort")) is not str
+    ) or request.get("reasoning_effort") not in {
+        None,
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    }:
+        raise RepositoryValidationError("invalid reasoning disposition")
+    if "response_format" in request and request["response_format"] not in (
+        {"type": "text"},
+        {"type": "json_object"},
+    ):
+        raise RepositoryValidationError("invalid response disposition")
+    if request_digest != value.payload_binding:
+        raise RepositoryValidationError("transient payload binding mismatch")
+    canonical(value, 12288)
+    return value
+
+
+def _result_disposition(value, result):
+    value = _payload_record(value, AssignmentResultDisposition)
+    if not isinstance(value, AssignmentResultDisposition):
+        _conflict("assignment_payload_version_unsupported")
+    if type(value.available) is not bool:
+        raise RepositoryValidationError("result availability must be boolean")
+    _input_references(value.references)
+    if value.binding_key_id is not None:
+        _payload_identifier(value.binding_key_id, 64)
+    if value.available:
+        if value.reason is not None or value.references:
+            raise RepositoryValidationError("available result cannot request reacquisition")
+    elif (
+        type(value.reason) is not str
+        or value.reason not in {"retention_discarded", "stale_execution", "reconstruction_required"}
+        or result
+    ):
+        raise RepositoryValidationError("unavailable result must contain no payload bytes")
+    canonical(value, 12288)
+    return value
+
+
+def _outcome_projection(outcome):
+    value = plain(outcome)
+    disposition = value.get("result_disposition")
+    if disposition is not None:
+        value["result_available"] = disposition["available"]
+        if not disposition["available"]:
+            value["reacquisition_reason"] = disposition["reason"]
+    return value
+
+
+def _transient_receipt(disposition, evidence_reference):
+    if disposition is None or disposition.binding_key_id is None:
+        raise RepositoryValidationError("transient result requires a keyed receipt binding")
+    if evidence_reference is not None:
+        _payload_identifier(evidence_reference, 256)
 
 
 def _action_record(data):
@@ -215,7 +379,12 @@ def _action_record(data):
         data["state"],
         data.get("result"),
         tuple(
-            {k: v for k, v in item.items() if k not in {"dispatch_token", "binding"}}
+            {
+                k: v
+                for k, v in item.items()
+                if k
+                not in {"dispatch_token", "binding", "assignment_fence", "settlement_signature"}
+            }
             for item in data["attempts"]
         ),
         data.get("interactive_proposal_id"),
@@ -1368,7 +1537,9 @@ class AssignmentRepository:
     def assert_current_claim(self, query, *, fence):
         return _record(self._fenced(query, fence, action_id=self._foreground_action(query, fence)))
 
-    def _action(self, transaction, owner_id, assignment_id, action_id, *, required=True):
+    def _action(
+        self, transaction, owner_id, assignment_id, action_id, *, required=True, inspect_only=False
+    ):
         _uuid(action_id)
         row = transaction.fetch_one(
             "SELECT data,state FROM persistent_assignment_action "
@@ -1389,9 +1560,29 @@ class AssignmentRepository:
             ):
                 raise ValueError
             _action_record(data)
+            if not inspect_only:
+                self._validate_action_payloads(data)
             return data
         except (KeyError, TypeError, ValueError) as exc:
             raise RepositoryDataError("invalid persisted action") from exc
+
+    @staticmethod
+    def _validate_action_payloads(action):
+        intent = action["intent"]
+        transient = intent.get("transient_input")
+        if transient is not None:
+            _transient_input(transient, intent["request"], intent["request_digest"])
+        for attempt in action["attempts"]:
+            for key in ("outcome", "uncertain_observation"):
+                outcome = attempt.get(key)
+                if outcome is not None:
+                    disposition = None
+                    if outcome.get("result_disposition") is not None:
+                        disposition = _result_disposition(
+                            outcome["result_disposition"], outcome["result"]
+                        )
+                    if transient is not None:
+                        _transient_receipt(disposition, outcome.get("evidence_reference"))
 
     @staticmethod
     def _save_action(transaction, data):
@@ -1474,6 +1665,8 @@ class AssignmentRepository:
                     "actual",
                     "result_available",
                     "reconciliation",
+                    "result_disposition",
+                    "reacquisition_reason",
                 }
             ):
                 return None
@@ -1496,10 +1689,21 @@ class AssignmentRepository:
                     "outcome",
                 }
                 if not required_attempt <= attempt.keys() or (
-                    attempt.keys() - required_attempt - {"uncertain_observation"}
+                    attempt.keys()
+                    - required_attempt
+                    - {"uncertain_observation", "assignment_fence", "settlement_signature"}
                 ):
                     return None
                 _uuid(attempt["attempt_id"])
+                if "assignment_fence" in attempt:
+                    issued = AssignmentFence(**attempt["assignment_fence"])
+                    if issued.owner_id != owner_id or issued.assignment_id != assignment_id:
+                        return None
+                    _version(action, issued.instruction_revision, issued.control_epoch)
+                    _integer(issued.claim_generation, 1)
+                    _uuid(issued.claim_token)
+                if "settlement_signature" in attempt:
+                    _digest(attempt["settlement_signature"])
                 if attempt["state"] not in {
                     "reserved",
                     "started",
@@ -1563,7 +1767,9 @@ class AssignmentRepository:
                 if not attempts:
                     return None
                 final = attempts[-1]
-                if action["state"] != final["state"] or action["result"] != final["outcome"]:
+                if action["state"] != final["state"] or action["result"] != (
+                    _outcome_projection(final["outcome"]) if final["outcome"] is not None else None
+                ):
                     prior = (final["outcome"] or {}).get(
                         "result_digest", digest([action_id, "lease_expired"])
                     )
@@ -1572,6 +1778,7 @@ class AssignmentRepository:
             return action
         except (
             RepositoryDataError,
+            RepositoryConflictError,
             RepositoryValidationError,
             KeyError,
             TypeError,
@@ -1713,7 +1920,19 @@ class AssignmentRepository:
         _digest(intent.permission_digest)
         _digest(intent.precondition_digest)
         canonical(intent.request, 8192)
-        if digest(intent.request) != intent.request_digest:
+        if intent.transient_input is not None:
+            transient = _transient_input(
+                intent.transient_input, intent.request, intent.request_digest
+            )
+            if (
+                data.get("execution_profile") != "one_shot"
+                or transient.source_retention != data["operation"]["source_retention"]
+                or intent.sensitivity != "ordinary"
+                or intent.interactive_only
+                or intent.boundary != "unreplayable"
+            ):
+                raise RepositoryValidationError("transient model disposition is not supported here")
+        elif digest(intent.request) != intent.request_digest:
             raise RepositoryValidationError("action request digest mismatch")
         self._amount(intent.maximum)
         if intent.sensitivity not in {"ordinary", "sensitive"}:
@@ -1804,7 +2023,9 @@ class AssignmentRepository:
 
     def get_action(self, query, *, owner_id, assignment_id, action_id):
         self._load(query, owner_id, assignment_id)
-        data = self._action(query, owner_id, assignment_id, action_id, required=False)
+        data = self._action(
+            query, owner_id, assignment_id, action_id, required=False, inspect_only=True
+        )
         return _action_record(data) if data else None
 
     def get_action_by_key(self, query, *, owner_id, assignment_id, action_key):
@@ -2183,6 +2404,8 @@ class AssignmentRepository:
         if needs_approval:
             action["approval_consumed_at"] = plain(_now(transaction))
         attempt.update(state="started", dispatch_token=token, binding=plain(binding))
+        if data.get("execution_profile") == "one_shot":
+            attempt["assignment_fence"] = plain(fence)
         action["state"] = "started"
         self._save_action(transaction, action)
         return AssignmentDispatchPermit(
@@ -2207,10 +2430,23 @@ class AssignmentRepository:
         dispatch_token,
         expected_request_digest,
         outcome,
+        result_fence=None,
+        result_binding=None,
     ):
+        owner_active = self._lock_operation_owner(transaction, owner_id)
         data = self._load(transaction, owner_id, assignment_id, lock=True)
+        one_shot = data.get("execution_profile") == "one_shot"
+        current = not one_shot or self._result_context_current(
+            transaction, data, action_id, owner_active, result_fence, result_binding
+        )
         action = self._action(transaction, owner_id, assignment_id, action_id)
         attempt = self._attempt(action, attempt_id)
+        if one_shot:
+            current = (
+                current
+                and attempt.get("assignment_fence") == plain(result_fence)
+                and attempt["binding"] == plain(result_binding)
+            )
         if (
             not dispatch_token
             or attempt["dispatch_token"] != dispatch_token
@@ -2221,6 +2457,27 @@ class AssignmentRepository:
             raise RepositoryValidationError("invalid action outcome")
         _digest(outcome.result_digest)
         canonical(outcome.result, 8192)
+        disposition = None
+        if outcome.result_disposition is not None:
+            disposition = _result_disposition(outcome.result_disposition, outcome.result)
+        transient = action["intent"].get("transient_input")
+        if transient is not None:
+            _transient_receipt(disposition, outcome.evidence_reference)
+        signature_value = plain(outcome)
+        signature_value.pop("result")
+        signature = digest(signature_value)
+        if one_shot and attempt.get("settlement_signature") == signature:
+            return self._settlement_record(action, current)
+        if one_shot and not current:
+            outcome = replace(
+                outcome,
+                result={},
+                result_disposition=AssignmentResultDisposition(
+                    available=False,
+                    reason="stale_execution",
+                    binding_key_id=disposition.binding_key_id if disposition else None,
+                ),
+            )
         if attempt["outcome"] is not None:
             if attempt["outcome"] == plain(outcome):
                 return _action_record(action)
@@ -2248,13 +2505,70 @@ class AssignmentRepository:
             if actual["spend_micro_units"] is not None:
                 data["usage"]["money_status"] = "reported"
         attempt.update(state=outcome.outcome, outcome=plain(outcome))
-        action.update(state=outcome.outcome, result=plain(outcome))
-        if outcome.outcome == "uncertain":
+        if one_shot:
+            attempt["settlement_signature"] = signature
+        action.update(state=outcome.outcome, result=_outcome_projection(outcome))
+        if current and outcome.outcome == "uncertain":
             data["phase"] = "reconciliation"
-        elif data["lifecycle"] == "active":
+        elif current and data["lifecycle"] == "active":
             data["wake_generation"] += 1
         self._save_action(transaction, action)
         self._save(transaction, data)
+        return _action_record(action)
+
+    def _result_context_current(self, transaction, data, action_id, owner_active, fence, binding):
+        if not owner_active or fence is None or binding is None:
+            return False
+        if not isinstance(fence, AssignmentFence) or not isinstance(
+            binding, AssignmentOperationBinding
+        ):
+            raise RepositoryValidationError("typed result fences required")
+        if (
+            fence.owner_id != data["owner_id"]
+            or fence.assignment_id != data["assignment_id"]
+            or data["operation_binding"] != plain(binding)
+        ):
+            return False
+        _uuid(binding.operation_id)
+        _uuid(binding.execution_lease_token)
+        _integer(binding.execution_generation, 1)
+        try:
+            operation = WorkAdmissionRepository().assert_current_execution(
+                transaction,
+                ExecutionFence(
+                    uuid.UUID(binding.operation_id),
+                    binding.execution_generation,
+                    uuid.UUID(binding.execution_lease_token),
+                ),
+            )
+            if operation.owner_user_id != data["owner_id"]:
+                return False
+            # Re-sample database time and local lineage after the admission lock wait.
+            self._fenced(transaction, fence, action_id=action_id)
+            self._validate_operation_continuation(transaction, data)
+            return True
+        except (RepositoryConflictError, RepositoryNotFoundError):
+            return False
+
+    @staticmethod
+    def _settlement_record(action, current):
+        if current or action["result"] is None:
+            return _action_record(action)
+        action = plain(action)
+        result = action["result"]
+        prior = result.get("result_disposition") or {}
+        result.update(
+            result={},
+            result_available=False,
+            reacquisition_reason="stale_execution",
+            result_disposition=plain(
+                AssignmentResultDisposition(
+                    available=False,
+                    reason="stale_execution",
+                    binding_key_id=prior.get("binding_key_id"),
+                )
+            ),
+        )
         return _action_record(action)
 
     def release_unstarted_action(
@@ -2986,14 +3300,21 @@ class AssignmentRepository:
                 bindings.append(data["operation_binding"])
             pending = transaction.fetch_all(
                 "SELECT id FROM persistent_assignment_action "
-                "WHERE assignment_id=%s AND state IN ('reserved','started')",
-                (data["assignment_id"],),
+                "WHERE assignment_id=%s AND owner_user_id=%s "
+                "AND (%s OR state IN ('reserved','started')) ORDER BY id FOR UPDATE",
+                (data["assignment_id"], data["owner_id"], profile == "one_shot"),
             )
             held = False
             for item in pending:
-                action = self._action(
+                action = (self._known_action if profile == "one_shot" else self._action)(
                     transaction, data["owner_id"], data["assignment_id"], str(item["id"])
                 )
+                if action is None or action["state"] == "uncertain":
+                    held = True
+                    uncertain.append(str(item["id"]))
+                    continue
+                if action["state"] not in {"reserved", "started"}:
+                    continue
                 attempt = action["attempts"][-1]
                 if action["state"] == "reserved":
                     self._release(data, attempt["maximum"])

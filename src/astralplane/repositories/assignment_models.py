@@ -209,6 +209,32 @@ class AssignmentResourceAmount(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentInputReference(_Record):
+    kind: str
+    resource_id: str = field(repr=False)
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentTransientInput(_Record):
+    binding_key_id: str
+    payload_binding: str = field(repr=False)
+    source_retention: str
+    references: tuple[AssignmentInputReference, ...] = field(default=(), repr=False)
+    reconstruction_kind: str = "model_messages"
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentResultDisposition(_Record):
+    available: bool
+    reason: str | None = None
+    references: tuple[AssignmentInputReference, ...] = field(default=(), repr=False)
+    binding_key_id: str | None = None
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentActionIntent(_Record):
     action_key: str
     request: Mapping[str, Any] = field(repr=False)
@@ -225,6 +251,9 @@ class AssignmentActionIntent(_Record):
     quote_digest: str | None = None
     quote_expires_at: datetime | None = None
     approval_expires_at: datetime | None = None
+    transient_input: AssignmentTransientInput | Mapping[str, Any] | None = field(
+        default=None, repr=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +295,7 @@ class AssignmentActionOutcome(_Record):
     result: Mapping[str, Any] = field(default_factory=dict, repr=False)
     evidence_reference: str | None = None
     actual: AssignmentResourceAmount | None = None
+    result_disposition: AssignmentResultDisposition | Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

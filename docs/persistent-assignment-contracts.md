@@ -100,8 +100,8 @@ nested metadata and retires the known outer fence. Invalid identities, malformed
 versions or inconsistent indexed fields remain data errors, not compatibility cases.
 
 These are repository/controller contracts. The Deep operation service, external
-owner-command adapters, current-authority stream delivery and transient action-input
-disposition still require their separate integration work; they are not installed
+owner-command adapters and current-authority stream delivery still require their
+separate integration work; they are not installed
 by adding these methods.
 
 ## Owner commands and receipts
@@ -207,6 +207,77 @@ the external response: the public result has `result_available: false` and an em
 Even when the effect ledger is classified as succeeded, a consumer requiring that response must
 hold for reconciliation until usable evidence or revised owner instructions permit continuation.
 Never substitute an empty result for a completed investigation or manufacture a finding.
+
+### Transient model input and unavailable results
+
+`AssignmentActionIntent.transient_input=None` preserves the existing durable request
+contract and canonical receipt bytes. One-shot ordinary model actions may instead
+provide `AssignmentTransientInput` version 1 with `binding_key_id`, `payload_binding`,
+`source_retention`, `references`, and `reconstruction_kind="model_messages"`.
+`payload_binding` is a host-produced keyed attestation over the exact transient model
+request; `request_digest` must equal that attestation. Plane receives neither its key
+nor private messages. Never substitute an unkeyed digest of private text. The bounded
+key ID is diagnostic metadata, not a key or authority token.
+
+In this mode `request` contains only `kind="model"`, required finite
+`max_output_tokens`, and optional bounded model/provider identifiers, a closed
+`reasoning_effort`, or `response_format` of `{"type":"text"}` or
+`{"type":"json_object"}`. Arbitrary messages, arguments, schema text and custom
+fields are refused. The operation's retention policy must match the disposition;
+consequential or interactive approval requests retain the existing durable reviewed
+intent contract. A reconstruction reference contains only `kind` (`source`, `note`,
+or `skill`), `resource_id`, and positive `revision`. Note IDs are canonical UUID4;
+other IDs are bounded identifiers. References are unique by kind/ID and bounded to
+32 sources, 8 notes and 20 skills, with an 8 KiB serialized ceiling. No reference
+contains expanded guidance or source text.
+
+`AssignmentActionOutcome.result_disposition` is optional for durable legacy calls.
+Version 1 carries `available`, optional `reason`, `references`, and `binding_key_id`.
+Unavailable results require an empty `result` and one of `retention_discarded`,
+`stale_execution`, or `reconstruction_required`; available results carry neither a
+reacquisition reason nor references. Transient model outcomes require a diagnostic
+key ID and a host-produced keyed `result_digest`, so retained receipts cannot expose
+an unkeyed hash of private output. Plane validates the envelope, not the secret-key
+attestation itself. The public result projects `result_available` and, when false,
+`reacquisition_reason` beside the typed disposition.
+For transient outcomes, non-null `evidence_reference` is an opaque identifier of at
+most 256 UTF-8 bytes, starting with an ASCII letter/digit and using only letters,
+digits, `.`, `_`, `:`, `/`, `@`, or `-`. It must identify retained evidence, never
+contain private excerpts or prose. Both writes and known-envelope decoding enforce
+this bound; legacy durable evidence references keep their existing contract.
+
+A successful read whose source bytes were discarded remains `succeeded` and charged.
+It cannot be reserved again under the same action identity. A consumer that still
+needs those bytes must resolve current owner-authorized references and perform a new
+budgeted read with a new action key. The old receipt is preserved; empty content is
+never a successful substitute. Deep owns retention enforcement at extraction, private
+guidance expansion, attestation generation/verification, current revision resolution,
+and reconstructing each new request after retry or restart. Those caller changes and
+guidance storage are separate integration work.
+
+For one-shot `record_action_outcome`, pass both `result_fence: AssignmentFence` and
+`result_binding: AssignmentOperationBinding`. Result usability requires the exact
+issued assignment fence and admission binding, the current assignment lease/control
+and instruction revisions, a current owner-scoped work-admission execution, live
+local authority, and an active owner. Lock order is owner, assignment, admission,
+action, with database time sampled after the admission lock. The host must refresh
+external authority before this transaction and fence subsequent result incorporation
+and publication. A valid old dispatch token can still settle factual usage after
+either lease or owner authority is lost, even when these optional result arguments
+are absent. That path discards returned payload bytes, projects `stale_execution`,
+and cannot advance phase, wake generation, checkpoints or continuation. Exact replay
+does not charge twice; a replay made after authority loss returns an unavailable
+projection without rewriting previously accepted result bytes. Inspection of an old
+receipt is not permission to incorporate it.
+
+Unknown positive input/result disposition versions remain inspectable and are refused
+for execution. Safe cancellation and owner retirement retain their opaque actions and
+liabilities. One-shot lease recovery holds these rows without interpreting nested
+bindings, releasing reservations or rewriting action bytes, while supported neighbors
+continue recovery. Resolve the hold through a qualified decoder upgrade or established
+reconciliation procedure; never clear it with manual payload edits. Persistent recovery
+retains its existing behavior. This addition uses the existing private JSON envelopes
+and does not allocate a schema revision or change migration bytes.
 
 Lease recovery returns stale operation bindings, preserves completed results, releases unstarted
 reservations, conservatively charges interrupted read-only calls and holds uncertain effects.
