@@ -3,7 +3,7 @@
 This repository slice exposes the durable mechanics required to remove identity/agent SQL from
 AstralDeep without moving identity or authorization policy into AstralPlane. It uses tables already
 present in the schema-only `066.001` compatibility baseline, so this slice itself adds no migration
-edge. The current Plane schema is `088.002`; its registry digest includes later independent durable
+edge. The current Plane schema is `088.003`; its registry digest includes later independent durable
 changes.
 
 ## Public composition
@@ -92,3 +92,73 @@ The host must preserve the originally issued incarnation across every await, con
 consent operation. This storage change alone does not upgrade old SID-only assignment authority,
 legacy offline grants, ingress or runners. Matching host/operation-version integration and denial
 qualification remain required before those execution paths can use incarnation authority.
+
+
+## Session issuing identity (`088.003`)
+
+`SessionRecord` appends nullable `issuing_issuer` and `issuing_client_id` fields. Both
+null means legacy unknown binding; both present means an exact host-supplied pair.
+Plane accepts nonempty strings of at most 2048 and 256 Unicode code points,
+respectively, without leading/trailing whitespace, control characters or surrogate
+code points. Strings are neither trimmed nor normalized. Plane does not interpret
+an issuer URL, discover endpoints, authenticate a client, validate a JWT or grant
+execution permission. The trusted host must establish all those facts before
+supplying a bound issuance. Ciphertext is never decoded or inspected for metadata.
+
+Only a genuinely new database-issued incarnation can select a new pair. Same-SID
+issuance replay must match the complete original record. Refresh cannot add,
+remove or change either field, including when the optional credential fence is
+absent: the update matches both fields with null-safe equality and never assigns
+them. Resume and reads preserve them. A stale reference cannot adopt a replacement
+incarnation, even if the owner, SID, timestamps and ciphertext are otherwise equal.
+
+`SessionCredentialFence` retains version 2 and appends the same nullable pair. For
+null/null, its encrypted-state digest remains the exact legacy canonical JSON
+array of the two opaque ciphertext strings. A bound pair extends that array with
+one canonical object containing exactly `issuing_issuer` and `issuing_client_id`;
+no plaintext token is hashed. The digest and explicit pair both participate in
+execution and consent equality checks. Positional callers retain their old field
+positions and defaults. Neither the new pair nor its digest is bearer authority.
+
+Legacy null/null sessions remain eligible under the existing Plane execution
+policy. This prerequisite does not silently tighten host authentication, enable a
+native broker or convert stored Work/grant authority. The later coherent host
+integration must decide where a verified bound issuer/client is required, while
+preserving ordinary session compatibility. The additive schema still requires a
+matching exact Plane/host composition; old binaries are not declared compatible.
+
+Deferred revocation records append optional `issuing_issuer` after their existing
+fields. The trusted host can enqueue the exact original issuer and client for a
+bound session. A present issuer requires a nonempty exact client with the same
+structural bounds as session metadata. Legacy records keep their null issuer,
+with or without an existing client ID. Reading, retrying, and incrementing an
+attempt preserve the pair; there is no relabel operation. The host must select
+only a trusted configured issuer before network revocation and retain unavailable
+work without guessing a realm.
+
+The additive, schema-neutral
+`RevocationQueueRepository.page_for_administration(query, *, limit=20, after=None,
+ceiling=None)` supports finite retry cycles without changing the existing
+`pending_for_administration` peek. Its immutable `RevocationQueuePage` contains
+`records`, `next_cursor`, and `ceiling`. The cursor is an immutable
+`RevocationQueueCursor(enqueued_at, queue_id)`, ordered by that exact pair.
+These types are public in `astralplane.repositories.revocations`.
+
+An initial request captures the maximum queue ID and its first page in one SQL
+snapshot. Continuations retain that ID ceiling and use an exclusive cursor;
+later IDs are excluded even if their enqueue timestamps are equal or backdated.
+A null next cursor ends the cycle, including when other workers deleted its
+remainder. Reset both cursor and ceiling to begin another cycle. An initially
+empty queue also returns a null ceiling. Limit is an exact integer from 1 through
+200; timestamp is an exact nonnegative signed-bigint value, and IDs/ceilings are
+positive signed-bigint values. Boolean, string, fractional, malformed, or
+unenclosed continuation inputs are refused before SQL.
+
+The host can retain one cursor and ceiling per drainer and process one bounded
+page per pass, wrapping at cycle end. Retained unavailable work therefore cannot
+permanently occupy the first page, and continuous new enqueues cannot extend an
+already captured cycle. These traversal fields grant no authority and are not a
+queue claim or a transaction spanning passes. Concurrent workers may inspect
+the same row; ordinary owner/attempt fences still govern mutation. Reads never
+remove work, increment attempts, or alter issuer metadata. This successor adds
+no schema, migration, dependency, or automatic retry policy.

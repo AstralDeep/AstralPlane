@@ -3403,6 +3403,55 @@ def _apply_plane_schema_088_002(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+PLANE_SCHEMA_088_003_STATEMENTS: Final = (
+    "ALTER TABLE web_session ADD COLUMN issuing_issuer TEXT",
+    "ALTER TABLE web_session ADD COLUMN issuing_client_id TEXT",
+    r"""
+ALTER TABLE web_session ADD CONSTRAINT web_session_issuing_metadata CHECK (
+    (issuing_issuer IS NULL AND issuing_client_id IS NULL)
+    OR (
+        issuing_issuer IS NOT NULL AND issuing_client_id IS NOT NULL
+        AND char_length(issuing_issuer) BETWEEN 1 AND 2048
+        AND char_length(issuing_client_id) BETWEEN 1 AND 256
+        AND issuing_issuer = btrim(issuing_issuer,
+            U&'\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006'
+            || U&'\2007\2008\2009\200A\2028\2029\202F\205F\3000')
+        AND issuing_client_id = btrim(issuing_client_id,
+            U&'\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006'
+            || U&'\2007\2008\2009\200A\2028\2029\202F\205F\3000')
+        AND issuing_issuer !~ U&'[\0001-\001F\007F-\009F]'
+        AND issuing_client_id !~ U&'[\0001-\001F\007F-\009F]'
+    )
+)
+""".strip(),
+    "ALTER TABLE auth_revocation_queue ADD COLUMN issuing_issuer TEXT",
+    r"""
+ALTER TABLE auth_revocation_queue ADD CONSTRAINT auth_revocation_queue_issuing_metadata CHECK (
+    issuing_issuer IS NULL
+    OR (
+        issuing_issuer IS NOT NULL AND client_id IS NOT NULL
+        AND char_length(issuing_issuer) BETWEEN 1 AND 2048
+        AND char_length(client_id) BETWEEN 1 AND 256
+        AND issuing_issuer = btrim(issuing_issuer,
+            U&'\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006'
+            || U&'\2007\2008\2009\200A\2028\2029\202F\205F\3000')
+        AND client_id = btrim(client_id,
+            U&'\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006'
+            || U&'\2007\2008\2009\200A\2028\2029\202F\205F\3000')
+        AND issuing_issuer !~ U&'[\0001-\001F\007F-\009F]'
+        AND client_id !~ U&'[\0001-\001F\007F-\009F]'
+    )
+)
+""".strip(),
+)
+
+
+def _apply_plane_schema_088_003(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "088.002")
+    for statement in PLANE_SCHEMA_088_003_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
@@ -4383,10 +4432,10 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 # SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
-# This is generated only from a fresh canonical 088.002 schema and changes
+# This is generated only from a fresh canonical 088.003 schema and changes
 # whenever the structural verifier's expected catalog state changes.
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "e04e5d0b8984e89208cefb0321636dde3b85a25679849ba00fe95f99577d0a71"
+    "aedb36a4c2ee25925158b5a3f04303b46c71b391a0fe6a4d25dbb3fd395c127b"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4483,6 +4532,10 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     (
         "088.001",
         ("674a7463c1075a43be94155cb5eb44734a1adea5a1cffe2a3d8ac30899208975",),
+    ),
+    (
+        "088.002",
+        ("e04e5d0b8984e89208cefb0321636dde3b85a25679849ba00fe95f99577d0a71",),
     ),
 )
 
@@ -4813,6 +4866,39 @@ PLANE_SCHEMA_088_002_MIGRATION: Final = Migration(
     checksum=_statements_checksum(PLANE_SCHEMA_088_002_STATEMENTS),
     operation=_apply_plane_schema_088_002,
 )
+PLANE_SCHEMA_088_002_REGISTRY_DIGEST: Final = (
+    "22d086ef60c5e73f124f3569268c4b48138871b1614ac538ab7f685a1b313afc"
+)
+if (
+    MigrationRegistry(
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+            PLANE_SCHEMA_074_003_MIGRATION,
+            PLANE_SCHEMA_074_004_MIGRATION,
+            PLANE_SCHEMA_075_MIGRATION,
+            PLANE_SCHEMA_079_MIGRATION,
+            PLANE_SCHEMA_088_MIGRATION,
+            PLANE_SCHEMA_088_002_MIGRATION,
+        ),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum="c9321dc01e0196b626c68c7be653f7c89329cd779f90cbd86776c9843730aae0",
+        predecessor_schema_verifier=_verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum="ff709a4f975d23dcf10cf27ebd4d7e66d97f213b9f028409cb54cefa0d5fc291",
+    ).digest
+    != PLANE_SCHEMA_088_002_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError(
+        "historical 088.002 registry no longer matches its pinned digest"
+    )
+PLANE_SCHEMA_088_003_MIGRATION: Final = Migration(
+    name="astralplane-088-session-issuer",
+    source_revisions=("088.002",),
+    target_revision="088.003",
+    checksum=_statements_checksum(PLANE_SCHEMA_088_003_STATEMENTS),
+    operation=_apply_plane_schema_088_003,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -4824,6 +4910,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_079_MIGRATION,
         PLANE_SCHEMA_088_MIGRATION,
         PLANE_SCHEMA_088_002_MIGRATION,
+        PLANE_SCHEMA_088_003_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -4832,7 +4919,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="088.002",
+    schema_revision="088.003",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -4843,6 +4930,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "075.001",
         "079.001",
         "088.001",
+        "088.002",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -4854,6 +4942,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("075.001", PLANE_SCHEMA_075_REGISTRY_DIGEST),
         ("079.001", PLANE_SCHEMA_079_REGISTRY_DIGEST),
         ("088.001", PLANE_SCHEMA_088_REGISTRY_DIGEST),
+        ("088.002", PLANE_SCHEMA_088_002_REGISTRY_DIGEST),
     ),
 )
 
@@ -4887,7 +4976,10 @@ __all__ = (
     "PLANE_SCHEMA_079_REGISTRY_DIGEST",
     "PLANE_SCHEMA_079_STATEMENTS",
     "PLANE_SCHEMA_088_002_MIGRATION",
+    "PLANE_SCHEMA_088_002_REGISTRY_DIGEST",
     "PLANE_SCHEMA_088_002_STATEMENTS",
+    "PLANE_SCHEMA_088_003_MIGRATION",
+    "PLANE_SCHEMA_088_003_STATEMENTS",
     "PLANE_SCHEMA_088_MIGRATION",
     "PLANE_SCHEMA_088_REGISTRY_DIGEST",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",

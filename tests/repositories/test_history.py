@@ -98,6 +98,8 @@ def session_row(**changes: Any) -> dict[str, Any]:
     row = {
         "sid": "session-1",
         "incarnation_id": INCARNATION,
+        "issuing_issuer": None,
+        "issuing_client_id": None,
         "user_id": "owner-1",
         "access_token_enc": "cipher-a",
         "refresh_token_enc": "cipher-r",
@@ -798,7 +800,7 @@ def test_session_refresh_requires_an_exact_monotonic_generation() -> None:
         == refreshed
     )
     assert "last_refresh_at = %s" in transaction.calls[0][1]
-    assert transaction.calls[0][2][-2:] == (20, INCARNATION)
+    assert transaction.calls[0][2][-4:] == (20, INCARNATION, None, None)
 
     stale = FakeTransaction()
     stale.execute_results.append(Result(rowcount=0))

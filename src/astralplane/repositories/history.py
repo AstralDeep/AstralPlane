@@ -25,6 +25,7 @@ from astralplane.repositories import (
     _row_value,
     _single_returned,
 )
+from astralplane.repositories._issuing_identity import _issuing_pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +90,8 @@ class SessionRecord:
     resumed: bool
     created_at: int
     incarnation_id: str | None = field(default=None, repr=False)
+    issuing_issuer: str | None = None
+    issuing_client_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +107,8 @@ class SessionCredentialFence:
     encrypted_state_binding: str = field(repr=False)
     incarnation_id: str = field(repr=False)
     version: int = 2
+    issuing_issuer: str | None = None
+    issuing_client_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +169,7 @@ def _session_fence(value: object) -> SessionCredentialFence:
     if value.version != 2:
         raise RepositoryValidationError("unsupported session credential fence")
     _incarnation(value.incarnation_id)
+    _issuing_pair(value.issuing_issuer, value.issuing_client_id)
     _required_id(value.owner_id, "owner_id")
     _required_id(value.session_id, "session_id")
     for name in ("created_at", "interactive_anchor", "hard_expires_at", "refresh_generation"):
@@ -281,8 +287,9 @@ def _message(row: Any) -> MessageRecord:
 def _session(row: Any) -> SessionRecord:
     try:
         incarnation = _incarnation(str(row["incarnation_id"]))
+        issuer, client_id = _issuing_pair(row["issuing_issuer"], row["issuing_client_id"])
     except (KeyError, RepositoryValidationError):
-        raise RepositoryDataError("stored session incarnation is invalid") from None
+        raise RepositoryDataError("stored session identity is invalid") from None
     return SessionRecord(
         session_id=str(_row_value(row, "sid")),
         owner_id=str(_row_value(row, "user_id")),
@@ -294,6 +301,8 @@ def _session(row: Any) -> SessionRecord:
         resumed=bool(row.get("resumed")),
         created_at=int(_row_value(row, "created_at")),
         incarnation_id=incarnation,
+        issuing_issuer=issuer,
+        issuing_client_id=client_id,
     )
 
 
@@ -984,7 +993,7 @@ class SessionRepository:
     _SELECT = """
         SELECT sid, user_id, access_token_enc, refresh_token_enc,
                interactive_anchor, hard_expires_at, last_refresh_at,
-               resumed, created_at, incarnation_id
+               resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
         FROM web_session
     """
 
@@ -1027,8 +1036,16 @@ class SessionRepository:
         encrypted = []
         for value in (record.access_token_ciphertext, record.refresh_token_ciphertext):
             encrypted.append(_bounded_text(value, "encrypted credential", maximum=131072))
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
+        # Keep legacy v2 fence bytes exact. The extra canonical object cannot be
+        # confused with the legacy two-string domain and contains no credential.
+        bound_state = (
+            encrypted
+            if issuer is None
+            else [*encrypted, {"issuing_issuer": issuer, "issuing_client_id": client_id}]
+        )
         binding = hashlib.sha256(
-            _canonical_json(encrypted, "encrypted state").encode("utf-8")
+            _canonical_json(bound_state, "encrypted state").encode("utf-8")
         ).hexdigest()
         return _session_fence(
             SessionCredentialFence(
@@ -1040,6 +1057,8 @@ class SessionRepository:
                 refresh_generation=record.last_refresh_at,
                 encrypted_state_binding=binding,
                 incarnation_id=record.incarnation_id,
+                issuing_issuer=issuer,
+                issuing_client_id=client_id,
             )
         )
 
@@ -1147,6 +1166,7 @@ class SessionRepository:
         Owner retirement serializes before issuance; no token or remote I/O runs
         in this transaction.
         """
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
         access = _bounded_text(
@@ -1179,12 +1199,12 @@ class SessionRepository:
             INSERT INTO web_session (
                 sid, user_id, access_token_enc, refresh_token_enc,
                 interactive_anchor, hard_expires_at, last_refresh_at,
-                resumed, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                resumed, created_at, issuing_issuer, issuing_client_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (sid) DO NOTHING
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at, incarnation_id
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
             (
                 session_id,
@@ -1196,6 +1216,8 @@ class SessionRepository:
                 last_refresh_at,
                 bool(record.resumed),
                 created_at,
+                issuer,
+                client_id,
             ),
         )
         row = _optional_returned(result, "session.put")
@@ -1225,6 +1247,7 @@ class SessionRepository:
     ) -> SessionRecord:
         """Replace encrypted tokens only from one exact older refresh generation."""
 
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
         access = _bounded_text(
@@ -1257,6 +1280,8 @@ class SessionRepository:
                 or expected_credential.hard_expires_at != hard_expires_at
                 or expected_credential.refresh_generation != expected
                 or expected_credential.incarnation_id != incarnation
+                or expected_credential.issuing_issuer != issuer
+                or expected_credential.issuing_client_id != client_id
             ):
                 raise RepositoryValidationError("refresh changed the bound session identity")
             self._assert_credential(transaction, expected_credential)
@@ -1270,9 +1295,11 @@ class SessionRepository:
             WHERE sid = %s AND user_id = %s AND created_at = %s
               AND interactive_anchor = %s AND hard_expires_at = %s
               AND last_refresh_at = %s AND incarnation_id = %s::uuid
+              AND issuing_issuer IS NOT DISTINCT FROM %s
+              AND issuing_client_id IS NOT DISTINCT FROM %s
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at, incarnation_id
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
             (
                 access,
@@ -1286,6 +1313,8 @@ class SessionRepository:
                 hard_expires_at,
                 expected,
                 incarnation,
+                issuer,
+                client_id,
             ),
         )
         row = _optional_returned(result, "session.compare_and_set_refresh")
@@ -1406,7 +1435,7 @@ class SessionRepository:
             WHERE sid = %s AND user_id = %s AND resumed = %s AND incarnation_id = %s::uuid
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at, incarnation_id
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
             (resumed, session_id, owner_id, expected_resumed, incarnation),
         )
@@ -1466,7 +1495,7 @@ class SessionRepository:
                AND incarnation_id = %s::uuid
                RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                          interactive_anchor, hard_expires_at, last_refresh_at,
-                         resumed, created_at, incarnation_id""",
+                         resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id""",
             (session, owner, incarnation),
         )
         return None if row is None else _session(row)

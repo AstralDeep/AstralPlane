@@ -16,7 +16,9 @@ from tests.integration.test_empty_database_startup import (
 
 def old_runner(database):
     registry = m.MigrationRegistry(
-        m.MIGRATION_REGISTRY.migrations[:-1],
+        tuple(
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "088.001"
+        ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "088.001"),
         current_schema_verifier_checksum="35bd630d2be86b48988d2fdbe16da54faea293aca68e80d6363db8fb41ded1de",
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -27,10 +29,14 @@ def old_runner(database):
         m.CURRENT_DATA_PLANE_REVISION,
         schema_revision="088.001",
         migration_digest=registry.digest,
-        read_compatible_from=m.CURRENT_DATA_PLANE_REVISION.read_compatible_from[:-1],
-        accepted_predecessor_digests=m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests[
-            :-1
-        ],
+        read_compatible_from=tuple(
+            r for r in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if r < "088.001"
+        ),
+        accepted_predecessor_digests=tuple(
+            pair
+            for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if pair[0] < "088.001"
+        ),
     )
     return m.MigrationRunner(database, revision=revision, registry=registry)
 
@@ -87,13 +93,19 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
             for table in tables
         }
     runner = current_runner(db)
-    assert runner.run(expected_revision="088.002").applied_steps == (
+    assert runner.run(expected_revision="088.003").applied_steps == (
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
         assert before == tuple(
-            {key: value for key, value in row.items() if key != "incarnation_id"} for row in after
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"incarnation_id", "issuing_issuer", "issuing_client_id"}
+            }
+            for row in after
         )
         identities = {str(row["incarnation_id"]) for row in after}
         assert len(identities) == 4
@@ -102,7 +114,7 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
             table: tuple(dict(row) for row in tx.fetch_all("SELECT * FROM " + table))
             for table in tables
         }
-    assert BaselineMigrationRunner(db, runner).run(expected_revision="088.002").already_current
+    assert BaselineMigrationRunner(db, runner).run(expected_revision="088.003").already_current
     with db.transaction() as tx:
         assert after == tuple(
             dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid")
@@ -121,11 +133,11 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
 def test_current_verifier_refuses_weakened_identity_catalog(empty_postgres_schema, corruption):
     db = empty_postgres_schema.database
     runner = current_runner(db)
-    BaselineMigrationRunner(db, runner).run(expected_revision="088.002")
+    BaselineMigrationRunner(db, runner).run(expected_revision="088.003")
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        runner.run(expected_revision="088.002")
+        runner.run(expected_revision="088.003")
 
 
 def test_predecessor_extra_identity_column_is_refused_without_adoption(empty_postgres_schema):
@@ -134,7 +146,7 @@ def test_predecessor_extra_identity_column_is_refused_without_adoption(empty_pos
     with db.transaction() as tx:
         tx.execute("ALTER TABLE web_session ADD COLUMN incarnation_id UUID")
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.002")
+        current_runner(db).run(expected_revision="088.003")
     with db.transaction() as tx:
         assert tx.fetch_one("SELECT count(*) AS n FROM web_session")["n"] == 0
 
@@ -154,9 +166,9 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
         raise RuntimeError("injected identity edge failure")
 
     registry = m.MigrationRegistry(
-        (
-            *m.MIGRATION_REGISTRY.migrations[:-1],
-            replace(m.PLANE_SCHEMA_088_002_MIGRATION, operation=fail),
+        tuple(
+            replace(edge, operation=fail) if edge.target_revision == "088.002" else edge
+            for edge in m.MIGRATION_REGISTRY.migrations
         ),
         current_schema_verifier=m._verify_current_plane_schema,
         current_schema_verifier_checksum=m.MIGRATION_REGISTRY.current_schema_verifier_checksum,
@@ -166,12 +178,13 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
     assert registry.digest == m.MIGRATION_REGISTRY.digest
     runner = m.MigrationRunner(db, revision=m.CURRENT_DATA_PLANE_REVISION, registry=registry)
     with pytest.raises(Exception, match=r"injected|migration"):
-        runner.run(expected_revision="088.002")
+        runner.run(expected_revision="088.003")
     with db.transaction() as tx:
         m._verify_predecessor_plane_schema(tx, "088.001")
         assert tx.fetch_one("SELECT count(*) AS n FROM web_session")["n"] == 1
-    assert current_runner(db).run(expected_revision="088.002").applied_steps == (
+    assert current_runner(db).run(expected_revision="088.003").applied_steps == (
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
 
 
@@ -212,6 +225,8 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
         if table == "web_session":
             for row in values:
                 row.pop("incarnation_id", None)
+                row.pop("issuing_issuer", None)
+                row.pop("issuing_client_id", None)
         return sorted(values, key=lambda row: json.dumps(row, sort_keys=True))
 
     db = empty_postgres_schema.database
@@ -275,8 +290,9 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
             assert attempt["dispatch_token"] == permit["dispatch_token"]
             assert row["data"]["intent"]["request_digest"] == permit["request_digest"]
     runner = current_runner(db)
-    assert runner.run(expected_revision="088.002").applied_steps == (
+    assert runner.run(expected_revision="088.003").applied_steps == (
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     for _ in range(2):
         with db.transaction() as tx:
@@ -286,4 +302,4 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
                 for row in tx.fetch_all("SELECT incarnation_id FROM web_session")
             ]
             assert all(UUID(value).version == 4 for value in identities)
-        assert runner.run(expected_revision="088.002").already_current
+        assert runner.run(expected_revision="088.003").already_current

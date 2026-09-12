@@ -20,6 +20,7 @@ def _row(**overrides: object) -> dict[str, object]:
         "enqueued_at": 42,
         "attempts": 0,
         "client_id": "astral-web",
+        "issuing_issuer": None,
     }
     row.update(overrides)
     return row
@@ -45,6 +46,7 @@ def test_enqueue_is_owner_attributed_and_redacts_ciphertext() -> None:
         "opaque-refresh-ciphertext",
         42,
         "astral-web",
+        None,
     )
 
 
@@ -175,3 +177,95 @@ def test_zero_queue_id_fails_closed() -> None:
             owner_id="owner-1",
             queue_id=0,
         )
+
+
+@pytest.mark.parametrize(
+    "issuer,client",
+    [
+        (None, None),
+        (None, "x" * 512),
+        ("https://iam.example.test/realms/Astral", "native-client"),
+        ("x" * 2048, "y" * 256),
+    ],
+)
+def test_queue_metadata_roundtrip_preserves_legacy_and_bound_forms(issuer, client):
+    row = _row(issuing_issuer=issuer, client_id=client)
+    tx = ScriptedTransaction(execute=[Result(returned_records=(row,))])
+    record = RevocationQueueRepository().enqueue(
+        tx,
+        owner_id="owner-1",
+        refresh_token_ciphertext="cipher",
+        enqueued_at=42,
+        client_id=client,
+        issuing_issuer=issuer,
+    )
+    assert (record.issuing_issuer, record.client_id) == (issuer, client)
+    assert tx.calls[0][2][-2:] == (client, issuer)
+
+
+@pytest.mark.parametrize(
+    "issuer,client",
+    [
+        ("", "valid"),
+        (True, "valid"),
+        ([], "valid"),
+        (" leading", "valid"),
+        ("trailing\u2003", "valid"),
+        ("line\nbreak", "valid"),
+        ("lone\ud800", "valid"),
+        ("x" * 2049, "valid"),
+        ("valid", None),
+        ("valid", ""),
+        ("valid", True),
+        ("valid", {}),
+        ("valid", "x" * 257),
+        ("valid", "\u0085"),
+    ],
+)
+def test_bound_queue_refuses_invalid_identity_before_sql(issuer, client):
+    tx = ScriptedTransaction()
+    with pytest.raises(RepositoryValidationError):
+        RevocationQueueRepository().enqueue(
+            tx,
+            owner_id="owner-1",
+            refresh_token_ciphertext="cipher",
+            enqueued_at=42,
+            client_id=client,
+            issuing_issuer=issuer,
+        )
+    assert tx.calls == []
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"issuing_issuer": "valid", "client_id": None},
+        {"issuing_issuer": "valid", "client_id": True},
+        {"issuing_issuer": True},
+        {"issuing_issuer": "valid", "client_id": "\ud800"},
+    ],
+)
+def test_malformed_stored_queue_identity_refuses_without_coercion(changes):
+    from astralplane.repositories import RepositoryDataError
+
+    tx = ScriptedTransaction(all_rows=[(_row(**changes),)])
+    with pytest.raises(RepositoryDataError):
+        RevocationQueueRepository().pending_for_administration(tx)
+
+
+def test_missing_queue_identity_column_is_not_adopted_as_legacy():
+    from astralplane.repositories import RepositoryDataError
+
+    row = _row()
+    del row["issuing_issuer"]
+    with pytest.raises(RepositoryDataError):
+        RevocationQueueRepository().pending_for_administration(
+            ScriptedTransaction(all_rows=[(row,)])
+        )
+
+
+def test_queue_record_new_field_preserves_existing_positional_contract():
+    from astralplane.repositories.revocations import RevocationQueueRecord
+
+    row = RevocationQueueRecord(1, "owner", "cipher", "client", 20, 3)
+    assert row.issuing_issuer is None and row.attempts == 3

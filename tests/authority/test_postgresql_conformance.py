@@ -475,7 +475,7 @@ def test_074_001_authority_ddl_is_repeat_safe_on_real_postgresql(
             assert "UNIQUE INDEX" in index["indexdef"]
             assert "WHERE" in index["indexdef"]
 
-    assert astralplane.SCHEMA_REVISION == "088.002"
+    assert astralplane.SCHEMA_REVISION == "088.003"
     assert astralplane.CURRENT_DATA_PLANE_REVISION.schema_revision == astralplane.SCHEMA_REVISION
 
 

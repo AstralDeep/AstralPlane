@@ -68,7 +68,7 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "d527922af557b8bc0e4028e798685f6005717a28d3c66f0d78635357e8b5f4e6"
+          "sha256": "4d8fd4ccd4acd1664e4ade51f0d142d2c7911f17dcdb86402ce67b599b28df6d"
         }
       ],
       "task": "T075/T085",
@@ -361,12 +361,16 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/_issuing_identity.py",
+          "sha256": "f15c3d0592dfc603fe8922a350a71a820b3e1f92ff9851b2760291b635ed9f23"
+        },
+        {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "9f4f45f4f2ec727e2522978740b8f8574afa58fd8571d5b3b41b4b31d5571f0a"
+          "sha256": "8a976c69b6b310ccca9f12fd8617a9ca67356f5db3ba255ab651b591922a5657"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-isolated history and encrypted session persistence. Added exact credential-generation CAS, bounded request SQL waits, and database-clock execution guards. Revision088.002 issues immutable session incarnations, fences refresh/resume/delete, and supplies distinct ordinary-consent observations. Imported extraction identities and prior migration bytes remain unchanged."
+      "reason": "Extracted owner-isolated history and encrypted session persistence with exact refresh CAS, bounded SQL waits and database-time guards. Revision088.002 provides immutable incarnations and separate consent observations. Revision088.003 binds exact issuer/client metadata while retaining legacy-null fence bytes; its shared validator serves deferred revocations. Imported source identities and historical migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/knowledge_synthesis.py",
@@ -440,12 +444,20 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/_issuing_identity.py",
+          "sha256": "f15c3d0592dfc603fe8922a350a71a820b3e1f92ff9851b2760291b635ed9f23"
+        },
+        {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "9f4f45f4f2ec727e2522978740b8f8574afa58fd8571d5b3b41b4b31d5571f0a"
+          "sha256": "8a976c69b6b310ccca9f12fd8617a9ca67356f5db3ba255ab651b591922a5657"
+        },
+        {
+          "path": "src/astralplane/repositories/revocations.py",
+          "sha256": "44285fba447ff32209920819dc80df2dbe06366596e74527e0e8f938b4440bcc"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-isolated history and encrypted session persistence. Added exact credential-generation CAS, bounded request SQL waits, and database-clock execution guards. Revision088.002 issues immutable session incarnations, fences refresh/resume/delete, and supplies distinct ordinary-consent observations. Imported extraction identities and prior migration bytes remain unchanged."
+      "reason": "Extracted owner-isolated session persistence and ciphertext-only revocations. Exact refresh CAS and bounded database-time guards retain immutable 088.002 incarnations and 088.003 issuer/client metadata with legacy-null fence bytes. The neutral revocation repository adds finite-cycle administrative pages while preserving owner mutation fences. Imported source identities and historical migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/voice_sessions.py",
@@ -531,7 +543,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         },
         {
           "path": "tests/repositories/test_scheduler.py",
@@ -611,7 +623,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "164a113951c1c9ac4b71c57e15c452203ca0b1623e0a07596f0af96c5c119a22"
+          "sha256": "c56f806ecd148789a5e12d22836714cb61f58a32f9c58d1b0d790bca54ba25d6"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -774,7 +786,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         }
       ],
       "task": "T078",
@@ -804,7 +816,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "37ce38aa1a5f44945edba07091cdc2d1ec99f8dc372fef69e1b0a87bcd739e2a"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         }
       ],
       "task": "T078",

@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -269,8 +269,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
    `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
    pinned predecessor catalog shape; `079.001` must match its pinned predecessor catalog
-   and `088.001` must match its pinned predecessor catalog. `088.002` must pass the current
-   structural verifier.
+   and `088.001` and `088.002` must match their pinned predecessor catalogs. `088.003` must
+   pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the
@@ -355,3 +355,39 @@ For recovery from a failed upgrade, preserve the failed database, keep writers c
 the verified pre-upgrade PostgreSQL and paired durable-root snapshot as one unit. Do not drop the
 new column/constraints or alter revision markers to simulate a downgrade. Forward retry is allowed
 only after the original predecessor/current catalog and exact composition have passed verification.
+
+
+### `088.003` issuing metadata upgrade and recovery
+
+The guarded `088.002 -> 088.003` edge requires the exact predecessor registry digest
+`22d086ef60c5e73f124f3569268c4b48138871b1614ac538ab7f685a1b313afc` and full catalog.
+It adds nullable `web_session.issuing_issuer` / `issuing_client_id` columns and a
+paired, bounded-text constraint. Existing rows receive null/null; no issuer or
+client is guessed from ciphertext, configuration or JWT claims. Session
+incarnations, credentials, lifetimes, grants, assignments, permits, usage, audit and
+blob records are not rewritten. Same-name columns or a weakened predecessor catalog
+are refused before the edge; partial failure rolls back columns and revision stamp.
+Repeated initialization verifies the complete current catalog and performs no
+metadata conversion. The immutable historical migration statements/digests remain
+pinned, including `088.002`.
+
+Before applying the edge, quiesce admission and all writers, retain the exact old
+composition, and verify the joint database/durable-root backup described above.
+Run the matched new composition's normal migration registry, then verify repeat
+startup and host compatibility before reopening. This storage prerequisite neither
+establishes new native credentials nor changes legacy execution eligibility.
+
+On failure, keep writers closed and preserve the failed state. Use verified forward
+retry or restore the paired pre-upgrade database/durable roots and matching
+composition. Do not drop fields or alter schema markers to simulate downgrade.
+After any joint restore, the explicit complete restored-session retirement procedure
+still applies: restart all process caches and obtain fresh institutional authority
+before reopening; preserve grants/operations and issued liabilities for refusal and
+settlement. The recovery API verifies the matching current revision/digest and will
+not operate against an old schema using new metadata assumptions.
+
+The same 088.003 edge adds nullable `auth_revocation_queue.issuing_issuer` and a
+conditional issuer/client structural constraint. Existing queue records retain
+their ciphertext, client (including null), timestamps, attempt count, and IDs;
+issuer remains unknown. This migration does not dispatch, resolve, or relabel
+queued revocations.

@@ -155,7 +155,7 @@ def test_malformed_stored_identity_refuses_decode_without_echoing_data(tx):
 
     for value in (None, "PRIVATE-invalid", 7):
         row["incarnation_id"] = value
-        with pytest.raises(RepositoryDataError, match="stored session incarnation is invalid"):
+        with pytest.raises(RepositoryDataError, match="stored session identity is invalid"):
             repo.get(Query(), owner_id="owner", session_id=stored.session_id)
     del row["incarnation_id"]
     with pytest.raises(RepositoryDataError):
@@ -477,7 +477,7 @@ def test_deliberate_owner_session_delete_preserves_issued_liabilities_and_startu
         assert before == after
     report = MigrationRunner(
         database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
-    ).run(expected_revision="088.002")
+    ).run(expected_revision="088.003")
     assert report.already_current
     with database.transaction() as tx:
         assert repo.get(tx, owner_id=session.owner_id, session_id=session.session_id) is None

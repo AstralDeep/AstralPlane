@@ -334,6 +334,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-079-persistent-assignments",
         "astralplane-088-one-shot-operations",
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -620,6 +621,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-079-persistent-assignments",
         "astralplane-088-one-shot-operations",
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     trial_count = 50
     migration_owner_violations = 0
@@ -1001,6 +1003,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-079-persistent-assignments",
         "astralplane-088-one-shot-operations",
         "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
 
     cursor = fixture.connection.cursor()

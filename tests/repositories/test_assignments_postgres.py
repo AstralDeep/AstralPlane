@@ -730,7 +730,7 @@ def test_profile_and_receipt_structure_repeat_verification(database):
     runner = MigrationRunner(
         database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
     )
-    assert runner.run(expected_revision="088.002").applied_steps == ()
+    assert runner.run(expected_revision="088.003").applied_steps == ()
     with database.transaction() as transaction:
         rows = transaction.fetch_all("SELECT execution_profile,data FROM persistent_assignment")
         for row in rows:
@@ -759,7 +759,9 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
     pool = ConnectionPool(Pool(connection))
     upgrade_database = PlaneDatabase(pool)
     old_registry = m.MigrationRegistry(
-        m.MIGRATION_REGISTRY.migrations[:-2],
+        tuple(
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "079.001"
+        ),
         current_schema_verifier=lambda transaction: m._verify_predecessor_plane_schema(
             transaction, "079.001"
         ),
@@ -773,12 +775,12 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
         schema_revision="079.001",
         migration_digest=old_registry.digest,
         read_compatible_from=tuple(
-            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v != "079.001"
+            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "079.001"
         ),
         accepted_predecessor_digests=tuple(
             v
             for v in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
-            if v[0] != "079.001"
+            if v[0] < "079.001"
         ),
     )
     try:
@@ -810,11 +812,12 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
         runner = m.MigrationRunner(
             upgrade_database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
         )
-        assert runner.run(expected_revision="088.002").applied_steps == (
+        assert runner.run(expected_revision="088.003").applied_steps == (
             "astralplane-088-one-shot-operations",
             "astralplane-088-session-incarnation",
+            "astralplane-088-session-issuer",
         )
-        assert runner.run(expected_revision="088.002").already_current
+        assert runner.run(expected_revision="088.003").already_current
         with upgrade_database.transaction() as transaction:
             migrated = transaction.fetch_one(
                 "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
@@ -827,7 +830,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
                 "DROP CONSTRAINT assignment_operation_receipt_pkey"
             )
         with pytest.raises(SchemaRevisionError):
-            runner.run(expected_revision="088.002")
+            runner.run(expected_revision="088.003")
     finally:
         pool.close()
         connection.rollback()
