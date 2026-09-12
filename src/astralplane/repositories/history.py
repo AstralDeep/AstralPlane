@@ -947,6 +947,33 @@ class SessionRepository:
     """
 
     @staticmethod
+    def bound_request_execution_waits(transaction: Transaction) -> None:
+        """Cap SQL waits for one request-authority transaction, not ordinary sessions.
+
+        Call immediately after opening the transaction, before session reads or
+        locks. Each lock waits at most 100 ms and each statement at most 1000 ms;
+        stricter configured nonzero limits remain in force. PostgreSQL restores
+        these local settings on commit or rollback. A timeout must escape the
+        transaction so its locks and pooled connection are released.
+
+        This does not bound pool checkout, connection establishment, total
+        transaction duration, or a nonresponsive server/network. It is not an
+        alternative to the original database-clock authority deadline.
+        """
+        transaction.execute(
+            """
+            SELECT set_config(
+                settings.name,
+                LEAST(NULLIF(settings.setting::bigint, 0), limits.milliseconds)::text,
+                true
+            )
+            FROM pg_settings AS settings
+            JOIN (VALUES ('lock_timeout', 100), ('statement_timeout', 1000))
+                AS limits(name, milliseconds) ON settings.name = limits.name
+            """
+        )
+
+    @staticmethod
     def execution_fence(record: SessionRecord) -> SessionCredentialFence:
         """Bind exact opaque ciphertext, including replacement with reused timestamps.
 

@@ -362,11 +362,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "8dd0ecfd2f738dd0273a7aa41c63929b75ebee0671605c1a00a5e529529b440e"
+          "sha256": "89444c84f6ea0dcf665c580fc99e96579030b7bf6129162fca6438282c8e9279"
         }
       ],
       "task": "T078",
-      "reason": "Extracted conversation and message persistence without presentation or orchestration logic. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned."
+      "reason": "Extracted conversation and message persistence without presentation or orchestration logic. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned. Request execution may opt into transaction-local SQL wait caps without changing ordinary session defaults."
     },
     {
       "sourcePath": "backend/orchestrator/knowledge_synthesis.py",
@@ -441,11 +441,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "8dd0ecfd2f738dd0273a7aa41c63929b75ebee0671605c1a00a5e529529b440e"
+          "sha256": "89444c84f6ea0dcf665c580fc99e96579030b7bf6129162fca6438282c8e9279"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-scoped session persistence without API or authentication policy. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned."
+      "reason": "Extracted owner-scoped session persistence without API or authentication policy. Added schema-neutral exact encrypted-generation session fences, bounded database-time execution observations, and optional refresh CAS binding; authentication policy remains host-owned. Request execution may opt into transaction-local SQL wait caps without changing ordinary session defaults."
     },
     {
       "sourcePath": "backend/orchestrator/voice_sessions.py",

@@ -337,6 +337,33 @@ after same-ID replacement is therefore locally indistinguishable here. The host
 must preserve and check the immutable issued-session reference before enabling
 continuation; this primitive alone does not close that integration requirement.
 
+Request-local forced-refresh adapters may call
+`SessionRepository.bound_request_execution_waits(transaction)` immediately after
+opening each transaction, before initial reads, refresh claims, settlement reads
+and compare-and-set, or final observation checks. It sets PostgreSQL transaction-local
+`lock_timeout` to at most 100 milliseconds and `statement_timeout` to at most 1000
+milliseconds, preserving stricter existing nonzero settings. These caps cover
+ordinary server-side lock waits and query execution. A timeout must leave the
+transaction through its failure path so rollback releases every acquired lock and
+the pooled connection; commit and rollback both restore the prior settings.
+Ordinary session operations do not opt in and retain their existing behavior.
+
+These are per-lock and per-statement limits, not a universal fifteen-second
+physical deadline. They do not replace the original database-clock authority
+sample or cancel a worker thread. Pool checkout retains its configured bound
+(30 seconds by default), and connection establishment retains its default ten-second
+bound. Neither is shortened by this API; a thread waiting for pool checkout has
+not acquired a connection or database locks. Server/OS/network failure can also
+outlive a server-side SQL timeout. An outer async timeout returns no authority;
+an already-running successful refresh settlement may still finish and preserve
+the exact rotated credential, but ordinary SQL contention cannot leave it holding
+locks indefinitely. This does not authorize replay of an uncertain refresh or
+enable session-backed one-shot ingress/continuation.
+
+The timeout semantics follow PostgreSQL's
+[client connection settings](https://www.postgresql.org/docs/15/runtime-config-client.html)
+and [transaction-local configuration](https://www.postgresql.org/docs/15/sql-set.html).
+
 Unknown positive input/result disposition versions remain inspectable and are refused
 for execution. Safe cancellation and owner retirement retain their opaque actions and
 liabilities. One-shot lease recovery holds these rows without interpreting nested
