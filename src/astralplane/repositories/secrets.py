@@ -115,6 +115,32 @@ class EncryptedLLMConfigRepository:
         )
         return None if row is None else _user_record(row)
 
+    def get_user_for_update(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+    ) -> EncryptedLLMConfigRecord | None:
+        """Select and hold the owner's opaque configuration until transaction end.
+
+        Args:
+            transaction: Caller-owned transaction spanning selection, exact
+                comparison and dependent writes. The caller sets SQL wait bounds.
+            owner_id: Exact owner of the selected user configuration.
+
+        Returns:
+            The existing detached record, or None without locking a missing key.
+            Concurrent updates/deletes of an existing row wait for transaction
+            completion. After any lock wait, callers must compare the returned
+            record with their original selection before committing dependent work.
+        """
+        owner = _required_id(owner_id, "owner id")
+        row = transaction.fetch_one(
+            f"SELECT {self._USER_FIELDS} FROM user_llm_config WHERE user_id = %s FOR UPDATE",
+            (owner,),
+        )
+        return None if row is None else _user_record(row)
+
     def upsert_user(
         self,
         transaction: Transaction,

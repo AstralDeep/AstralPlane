@@ -1,4 +1,4 @@
-"""Executable 066.001 through the current 079.001 recovery path."""
+"""Executable 066.001 through the current recovery path."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -273,10 +273,12 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
     before = _representative_snapshot(fixture.connection)
     blob_evidence = verify_blob_fixture(fixture.blob_root)
 
-    report = _current_runner(fixture).run(expected_revision="079.001")
+    report = _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
 
     assert report.source_revision == "066.001"
-    assert report.target_revision == "079.001"
+    assert report.target_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
     assert report.applied_steps == (
         "astralplane-067-transactional-recovery",
         "astralplane-074-lets-authority",
@@ -285,11 +287,14 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "astralplane-074-pending-attachment-materialization",
         "astralplane-075-client-local-speech",
         "astralplane-079-persistent-assignments",
+        "astralplane-088-one-shot-operations",
+        "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     assert not report.already_current
     assert _metadata(fixture.connection) == {
         "astralplane_migration_digest": MIGRATION_DIGEST,
-        "revision": "079.001",
+        "revision": CURRENT_DATA_PLANE_REVISION.schema_revision,
     }
     assert _representative_snapshot(fixture.connection) == before
     assert _query_all(
@@ -404,11 +409,11 @@ def test_repeat_upgrade_is_a_noop_with_identical_evidence(
 ) -> None:
     fixture = pre_split_postgres
     runner = _current_runner(fixture)
-    first = runner.run(expected_revision="079.001")
+    first = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     after_first = _representative_snapshot(fixture.connection)
     metadata_after_first = _metadata(fixture.connection)
 
-    second = runner.run(expected_revision="079.001")
+    second = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     assert first.applied_steps
     assert second.already_current
@@ -437,7 +442,7 @@ def test_post_load_predecessor_damage_is_rejected_before_any_migration_repair(
         SchemaRevisionError,
         match="predecessor schema canonical structure",
     ):
-        _current_runner(fixture).run(expected_revision="079.001")
+        _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     assert _metadata(fixture.connection) == {"revision": "066.001"}
     assert _query_one(fixture.connection, "SELECT to_regclass('latex_artifacts')") == (None,)
@@ -514,7 +519,9 @@ def test_transactional_failure_rolls_back_both_edges_and_retry_recovers(
     ) == (0,)
     assert _representative_snapshot(fixture.connection) == before
 
-    recovered = _current_runner(fixture).run(expected_revision="079.001")
+    recovered = _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
 
     assert recovered.applied_steps == (
         "astralplane-067-transactional-recovery",
@@ -524,8 +531,11 @@ def test_transactional_failure_rolls_back_both_edges_and_retry_recovers(
         "astralplane-074-pending-attachment-materialization",
         "astralplane-075-client-local-speech",
         "astralplane-079-persistent-assignments",
+        "astralplane-088-one-shot-operations",
+        "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
-    assert _metadata(fixture.connection)["revision"] == "079.001"
+    assert _metadata(fixture.connection)["revision"] == CURRENT_DATA_PLANE_REVISION.schema_revision
 
 
 def test_075_direct_apply_rejects_a_wrong_predecessor_without_mutation(
@@ -620,11 +630,16 @@ def test_075_failure_rolls_back_backend_column_and_forward_retry_recovers(
         "AND column_name = 'speech_backend'",
     ) == (0,)
 
-    recovered = _current_runner(fixture).run(expected_revision="079.001")
+    recovered = _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
     assert recovered.source_revision == "074.004"
     assert recovered.applied_steps == (
         "astralplane-075-client-local-speech",
         "astralplane-079-persistent-assignments",
+        "astralplane-088-one-shot-operations",
+        "astralplane-088-session-incarnation",
+        "astralplane-088-session-issuer",
     )
     assert _query_one(
         fixture.connection,
@@ -636,8 +651,47 @@ def test_079_upgrades_exact_075_data_and_repeats_without_replaying_ddl(
     pre_split_postgres: _LoadedFixture,
 ) -> None:
     fixture = pre_split_postgres
+    historical_migrations = (
+        PLANE_SCHEMA_067_MIGRATION,
+        PLANE_SCHEMA_074_MIGRATION,
+        PLANE_SCHEMA_074_002_MIGRATION,
+        PLANE_SCHEMA_074_003_MIGRATION,
+        PLANE_SCHEMA_074_004_MIGRATION,
+        migrations_module.PLANE_SCHEMA_075_MIGRATION,
+        migrations_module.PLANE_SCHEMA_079_MIGRATION,
+    )
+    historical_registry = MigrationRegistry(
+        historical_migrations,
+        current_schema_verifier=lambda transaction: (
+            migrations_module._verify_predecessor_plane_schema(transaction, "079.001")
+        ),
+        current_schema_verifier_checksum=(
+            "1987a3e7b27787ef5c4dcc4552e2713b1627b82aaf0760d8ccb881e5a4f30017"
+        ),
+        predecessor_schema_verifier=migrations_module._verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=(
+            "7a881bf3c3753eee9ec320444f7f0d029da03bbf77ef74c9160921435ef54e25"
+        ),
+    )
+    assert historical_registry.digest == migrations_module.PLANE_SCHEMA_079_REGISTRY_DIGEST
+    historical_revision = replace(
+        CURRENT_DATA_PLANE_REVISION,
+        schema_revision="079.001",
+        migration_digest=historical_registry.digest,
+        read_compatible_from=tuple(
+            revision for revision in CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            if revision != "079.001"
+        ),
+        accepted_predecessor_digests=tuple(
+            pair for pair in CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if pair[0] != "079.001"
+        ),
+    )
+    historical_runner = MigrationRunner(
+        fixture.database, revision=historical_revision, registry=historical_registry
+    )
     with fixture.database.transaction() as transaction:
-        for migration in MIGRATION_REGISTRY.migrations[:-1]:
+        for migration in historical_migrations[:-1]:
             migration.apply(transaction)
             transaction.execute(
                 "INSERT INTO schema_meta(key,value) VALUES('revision',%s) "
@@ -654,10 +708,12 @@ def test_079_upgrades_exact_075_data_and_repeats_without_replaying_ddl(
                 (key, value),
             )
     before = _representative_snapshot(fixture.connection)
-    report = _current_runner(fixture).run(expected_revision="079.001")
+    report = historical_runner.run(expected_revision="079.001")
+    assert report.source_revision == "075.001"
+    assert report.target_revision == "079.001"
     assert report.applied_steps == ("astralplane-079-persistent-assignments",)
     assert _representative_snapshot(fixture.connection) == before
-    assert _current_runner(fixture).run(expected_revision="079.001").already_current
+    assert historical_runner.run(expected_revision="079.001").already_current
     assert _query_one(fixture.connection, "SELECT count(*) FROM persistent_assignment") == (0,)
 
 
@@ -701,7 +757,7 @@ def test_documented_joint_restore_returns_to_066_then_reapplies_upgrade(
     baseline_snapshot = _representative_snapshot(fixture.connection)
     baseline_digest = fixture.report.fixture_digest
     original_blob_evidence = verify_blob_fixture(fixture.blob_root)
-    _current_runner(fixture).run(expected_revision="079.001")
+    _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     drop_postgres_fixture(fixture.connection, schema=fixture.schema)
     restored_blob_root = (tmp_path / "restored-pre-split-blobs").resolve()
@@ -719,8 +775,10 @@ def test_documented_joint_restore_returns_to_066_then_reapplies_upgrade(
     assert verify_blob_fixture(restored_blob_root) == original_blob_evidence
     assert verify_blob_fixture(fixture.blob_root) == original_blob_evidence
 
-    recovered = _current_runner(fixture).run(expected_revision="079.001")
+    recovered = _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
 
     assert recovered.source_revision == "066.001"
-    assert recovered.target_revision == "079.001"
+    assert recovered.target_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
     assert _metadata(fixture.connection)["astralplane_migration_digest"] == MIGRATION_DIGEST

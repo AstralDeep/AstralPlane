@@ -63,6 +63,36 @@ def test_user_read_absent_and_keyless_rows_are_explicit() -> None:
     assert record is not None and record.api_key_ciphertext is None
 
 
+def test_locked_user_selection_matches_existing_opaque_record_and_parameters() -> None:
+    repository = EncryptedLLMConfigRepository()
+    query = ScriptedTransaction(one=[_user_row(), _user_row()])
+    ordinary = repository.get_user(query, owner_id="owner-1")
+    locked = repository.get_user_for_update(query, owner_id="owner-1")
+    assert locked == ordinary and "opaque-ciphertext" not in repr(locked)
+    assert query.calls[1][2] == ("owner-1",)
+    assert query.calls[1][1].endswith("WHERE user_id = %s FOR UPDATE")
+
+
+def test_locked_user_selection_returns_none_without_fallback() -> None:
+    query = ScriptedTransaction(one=[None])
+    assert EncryptedLLMConfigRepository().get_user_for_update(query, owner_id="missing") is None
+    assert len(query.calls) == 1
+
+
+@pytest.mark.parametrize("owner", [None, True, [], "", " ", "x" * 513])
+def test_locked_user_selection_refuses_bad_owner_before_sql(owner) -> None:
+    query = ScriptedTransaction()
+    with pytest.raises(RepositoryValidationError):
+        EncryptedLLMConfigRepository().get_user_for_update(query, owner_id=owner)
+    assert query.calls == []
+
+
+def test_locked_user_selection_retains_stored_record_validation() -> None:
+    query = ScriptedTransaction(one=[_user_row(updated_at="invalid")])
+    with pytest.raises(RepositoryDataError):
+        EncryptedLLMConfigRepository().get_user_for_update(query, owner_id="owner-1")
+
+
 def test_user_upsert_uses_native_parameters_and_returns_detached_record() -> None:
     transaction = ScriptedTransaction(
         execute=[Result(returned_records=(_user_row(provider="local"),))]

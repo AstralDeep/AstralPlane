@@ -16,6 +16,8 @@ from astralplane.api import (
     ReceiptClaimConflictError,
     ReceiptWatermarkConflictError,
     RepositoryCatalog,
+    RestoredSessionRetirement,
+    SessionRetirementError,
     create_agent_management_repository,
     create_agent_repository,
     create_artifact_repository,
@@ -62,6 +64,7 @@ from astralplane.api import (
     create_workspace_repository,
     initialize_empty_database,
     inspect_baseline_compatibility,
+    retire_restored_sessions,
 )
 from astralplane.blob_store import (
     BlobDeleteResult,
@@ -280,6 +283,8 @@ __all__ = (
     "ReconciliationReport",
     "ReconciliationRunner",
     "RepositoryCatalog",
+    "RestoredSessionRetirement",
+    "SessionRetirementError",
     "StagedBundleReceipt",
     "StreamingBlobStore",
     "Transaction",
@@ -337,5 +342,6 @@ __all__ = (
     "inspect_baseline_compatibility",
     "inspect_compatibility",
     "paths_for",
+    "retire_restored_sessions",
     "runtime_metadata_for_manifest",
 )

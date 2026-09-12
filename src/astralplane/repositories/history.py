@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+import hashlib
+import re
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from astralplane.contracts import QueryExecutor, Transaction
@@ -23,6 +25,7 @@ from astralplane.repositories import (
     _row_value,
     _single_returned,
 )
+from astralplane.repositories._issuing_identity import _issuing_pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +78,7 @@ class MessageRecord:
 
 @dataclass(frozen=True, slots=True)
 class SessionRecord:
-    """Opaque encrypted session state; token plaintext never enters Plane."""
+    """Opaque session state; only a new ``put`` input may omit incarnation_id."""
 
     session_id: str
     owner_id: str
@@ -86,6 +89,129 @@ class SessionRecord:
     last_refresh_at: int
     resumed: bool
     created_at: int
+    incarnation_id: str | None = field(default=None, repr=False)
+    issuing_issuer: str | None = None
+    issuing_client_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCredentialFence:
+    """Ephemeral exact encrypted-state identity; never a credential or IAM claim."""
+
+    owner_id: str = field(repr=False)
+    session_id: str = field(repr=False)
+    created_at: int
+    interactive_anchor: int
+    hard_expires_at: int
+    refresh_generation: int
+    encrypted_state_binding: str = field(repr=False)
+    incarnation_id: str = field(repr=False)
+    version: int = 2
+    issuing_issuer: str | None = None
+    issuing_client_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionExecutionState:
+    """An exact owner-scoped row observation with a database-clock sample."""
+
+    credential: SessionCredentialFence = field(repr=False)
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SessionExecutionObservation:
+    """Host-verified remote observation, valid for at most fifteen seconds.
+
+    The host captures started_at from Plane before its external refresh, then
+    supplies the exact persisted post-refresh credential fence. Token validation
+    and roles remain host responsibilities; this record carries neither tokens
+    nor claims and must never be persisted or exposed to a client.
+    """
+
+    credential: SessionCredentialFence = field(repr=False)
+    started_at: datetime
+    valid_until: datetime
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class SessionConsentObservation:
+    """Ordinary authenticated consent; never forced-refresh execution authority.
+
+    The host retains the original database-clock sample and credential through
+    grant creation. Normal IAM, roles and request-origin policy remain host-owned.
+    This observation is ephemeral and valid for at most fifteen seconds.
+    """
+
+    credential: SessionCredentialFence = field(repr=False)
+    started_at: datetime
+    valid_until: datetime
+    version: int = 1
+
+
+def _incarnation(value: object) -> str:
+    """Validate the canonical text representation of a database-issued UUID4."""
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value
+        )
+        is None
+    ):
+        raise RepositoryValidationError("canonical session incarnation required")
+    return value
+
+
+def _session_fence(value: object) -> SessionCredentialFence:
+    if not isinstance(value, SessionCredentialFence) or type(value.version) is not int:
+        raise RepositoryValidationError("typed session credential fence required")
+    if value.version != 2:
+        raise RepositoryValidationError("unsupported session credential fence")
+    _incarnation(value.incarnation_id)
+    _issuing_pair(value.issuing_issuer, value.issuing_client_id)
+    _required_id(value.owner_id, "owner_id")
+    _required_id(value.session_id, "session_id")
+    for name in ("created_at", "interactive_anchor", "hard_expires_at", "refresh_generation"):
+        number = getattr(value, name)
+        if type(number) is not int or not 0 <= number <= 2**53 - 1:
+            raise RepositoryValidationError("invalid session credential generation")
+    if not (
+        value.created_at <= value.interactive_anchor < value.hard_expires_at
+        and value.interactive_anchor <= value.refresh_generation
+    ):
+        raise RepositoryValidationError("invalid session lifetime")
+    if not isinstance(value.encrypted_state_binding, str) or not re.fullmatch(
+        "[0-9a-f]{64}", value.encrypted_state_binding
+    ):
+        raise RepositoryValidationError("invalid encrypted session binding")
+    return value
+
+
+def _session_observation(value: object) -> SessionExecutionObservation:
+    if not isinstance(value, SessionExecutionObservation) or type(value.version) is not int:
+        raise RepositoryValidationError("typed session execution observation required")
+    if value.version != 1:
+        raise RepositoryValidationError("unsupported session execution observation")
+    _validate_observation_lifetime(value)
+    return value
+
+
+def _validate_observation_lifetime(
+    value: SessionExecutionObservation | SessionConsentObservation,
+) -> None:
+    _session_fence(value.credential)
+    for timestamp in (value.started_at, value.valid_until):
+        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+            raise RepositoryValidationError("aware session observation timestamp required")
+    if not timedelta(0) < value.valid_until - value.started_at <= timedelta(seconds=15):
+        raise RepositoryValidationError("session observation exceeds freshness bound")
+
+
+def _session_unavailable() -> None:
+    raise RepositoryConflictError(
+        "session authority unavailable", code="session_authority_unavailable"
+    )
 
 
 def _optional_returned(result: object, operation: str) -> Any:
@@ -111,9 +237,7 @@ def _conversation(row: Any) -> ConversationRecord:
         ),
         has_saved_components=bool(row.get("has_saved_components")),
         snapshot_committed_at=(
-            None
-            if row.get("snapshot_committed_at") is None
-            else row["snapshot_committed_at"]
+            None if row.get("snapshot_committed_at") is None else row["snapshot_committed_at"]
         ),
     )
 
@@ -131,9 +255,7 @@ def _conversation_summary(row: Any) -> ConversationSummaryRecord:
         render_revision=conversation.render_revision,
         publication_id=conversation.publication_id,
         has_saved_components=conversation.has_saved_components,
-        latest_message_content=(
-            None if content is None else _content_value(content)
-        ),
+        latest_message_content=(None if content is None else _content_value(content)),
         snapshot_committed_at=conversation.snapshot_committed_at,
     )
 
@@ -163,6 +285,11 @@ def _message(row: Any) -> MessageRecord:
 
 
 def _session(row: Any) -> SessionRecord:
+    try:
+        incarnation = _incarnation(str(row["incarnation_id"]))
+        issuer, client_id = _issuing_pair(row["issuing_issuer"], row["issuing_client_id"])
+    except (KeyError, RepositoryValidationError):
+        raise RepositoryDataError("stored session identity is invalid") from None
     return SessionRecord(
         session_id=str(_row_value(row, "sid")),
         owner_id=str(_row_value(row, "user_id")),
@@ -173,6 +300,9 @@ def _session(row: Any) -> SessionRecord:
         last_refresh_at=int(_row_value(row, "last_refresh_at")),
         resumed=bool(row.get("resumed")),
         created_at=int(_row_value(row, "created_at")),
+        incarnation_id=incarnation,
+        issuing_issuer=issuer,
+        issuing_client_id=client_id,
     )
 
 
@@ -863,11 +993,180 @@ class SessionRepository:
     _SELECT = """
         SELECT sid, user_id, access_token_enc, refresh_token_enc,
                interactive_anchor, hard_expires_at, last_refresh_at,
-               resumed, created_at
+               resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
         FROM web_session
     """
 
+    @staticmethod
+    def bound_request_execution_waits(transaction: Transaction) -> None:
+        """Cap SQL waits for one request-authority transaction, not ordinary sessions.
+
+        Call immediately after opening the transaction, before session reads or
+        locks. Each lock waits at most 100 ms and each statement at most 1000 ms;
+        stricter configured nonzero limits remain in force. PostgreSQL restores
+        these local settings on commit or rollback. A timeout must escape the
+        transaction so its locks and pooled connection are released.
+
+        This does not bound pool checkout, connection establishment, total
+        transaction duration, or a nonresponsive server/network. It is not an
+        alternative to the original database-clock authority deadline.
+        """
+        transaction.execute(
+            """
+            SELECT set_config(
+                settings.name,
+                LEAST(NULLIF(settings.setting::bigint, 0), limits.milliseconds)::text,
+                true
+            )
+            FROM pg_settings AS settings
+            JOIN (VALUES ('lock_timeout', 100), ('statement_timeout', 1000))
+                AS limits(name, milliseconds) ON settings.name = limits.name
+            """
+        )
+
+    @staticmethod
+    def execution_fence(record: SessionRecord) -> SessionCredentialFence:
+        """Bind exact opaque ciphertext, including replacement with reused timestamps.
+
+        Only already encrypted canonical session records may enter this boundary.
+        The binding is ephemeral and is not a hash of a plaintext token.
+        """
+        if not isinstance(record, SessionRecord):
+            raise RepositoryValidationError("typed session record required")
+        encrypted = []
+        for value in (record.access_token_ciphertext, record.refresh_token_ciphertext):
+            encrypted.append(_bounded_text(value, "encrypted credential", maximum=131072))
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
+        # Keep legacy v2 fence bytes exact. The extra canonical object cannot be
+        # confused with the legacy two-string domain and contains no credential.
+        bound_state = (
+            encrypted
+            if issuer is None
+            else [*encrypted, {"issuing_issuer": issuer, "issuing_client_id": client_id}]
+        )
+        binding = hashlib.sha256(
+            _canonical_json(bound_state, "encrypted state").encode("utf-8")
+        ).hexdigest()
+        return _session_fence(
+            SessionCredentialFence(
+                owner_id=record.owner_id,
+                session_id=record.session_id,
+                created_at=record.created_at,
+                interactive_anchor=record.interactive_anchor,
+                hard_expires_at=record.hard_expires_at,
+                refresh_generation=record.last_refresh_at,
+                encrypted_state_binding=binding,
+                incarnation_id=record.incarnation_id,
+                issuing_issuer=issuer,
+                issuing_client_id=client_id,
+            )
+        )
+
+    def get_execution_state(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        session_id: str,
+    ) -> SessionExecutionState | None:
+        """Read this exact session and database time before host remote validation.
+
+        This unlocked observation authorizes no mutation. It deliberately has no
+        owner/latest or administrative-session fallback.
+        """
+        record = self.get(query, owner_id=owner_id, session_id=session_id)
+        if record is None:
+            return None
+        now = query.fetch_one("SELECT clock_timestamp() AS now")["now"]
+        return SessionExecutionState(self.execution_fence(record), now)
+
+    @staticmethod
+    def _lock_execution_owner(transaction: Transaction, owner_id: str) -> None:
+        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
+        retired = transaction.fetch_one(
+            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+            (owner_id,),
+        )
+        if retired is not None and retired["state"] != "active":
+            _session_unavailable()
+
+    def _assert_credential(
+        self,
+        transaction: Transaction,
+        credential: SessionCredentialFence,
+    ) -> SessionExecutionState:
+        credential = _session_fence(credential)
+        self._lock_execution_owner(transaction, credential.owner_id)
+        row = transaction.fetch_one(
+            self._SELECT + " WHERE sid = %s AND user_id = %s FOR UPDATE",
+            (credential.session_id, credential.owner_id),
+        )
+        # clock_timestamp, not the transaction-start timestamp: the SELECT can wait.
+        now = transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
+        if row is None:
+            _session_unavailable()
+        current = self.execution_fence(_session(row))
+        if (
+            current != credential
+            or now.timestamp() < current.interactive_anchor
+            or now.timestamp() >= current.hard_expires_at
+        ):
+            _session_unavailable()
+        return SessionExecutionState(current, now)
+
+    def assert_current_execution(
+        self,
+        transaction: Transaction,
+        *,
+        observation: SessionExecutionObservation,
+    ) -> SessionExecutionState:
+        """Lock owner/session and validate fresh host observation in this transaction.
+
+        Call before assignment/admission/action locks and again after their waits.
+        No returned record is authority outside the caller's current transaction.
+        Local deletion/rotation and owner retirement serialize against these locks.
+        """
+        observation = _session_observation(observation)
+        current = self._assert_credential(transaction, observation.credential)
+        if not observation.started_at <= current.observed_at < observation.valid_until:
+            _session_unavailable()
+        return current
+
+    def assert_current_consent(
+        self,
+        transaction: Transaction,
+        *,
+        observation: SessionConsentObservation,
+    ) -> SessionExecutionState:
+        """Fence ordinary consent before and after grant writes in one transaction.
+
+        Acquire this owner/session fence before grant locks, then call again after
+        any write/lock wait and before commit. Exceptions must roll back the caller's
+        transaction. This distinct record cannot authorize assignment execution.
+        """
+        if (
+            type(observation) is not SessionConsentObservation
+            or type(observation.version) is not int
+        ):
+            raise RepositoryValidationError("typed session consent observation required")
+        if observation.version != 1:
+            raise RepositoryValidationError("unsupported session consent observation")
+        _validate_observation_lifetime(observation)
+        current = self._assert_credential(transaction, observation.credential)
+        if not observation.started_at <= current.observed_at < observation.valid_until:
+            _session_unavailable()
+        return current
+
     def put(self, transaction: Transaction, record: SessionRecord) -> SessionRecord:
+        """Issue a database identity, or replay exact already-stored issuance.
+
+        An explicit incarnation can only replay the complete existing record.
+        It can never create a row, including after deletion. Omitted identities
+        are generated by PostgreSQL and must be taken from this returned record.
+        Owner retirement serializes before issuance; no token or remote I/O runs
+        in this transaction.
+        """
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
         access = _bounded_text(
@@ -884,17 +1183,28 @@ class SessionRepository:
         hard_expires_at = _non_negative_int(record.hard_expires_at, "hard_expires_at")
         last_refresh_at = _non_negative_int(record.last_refresh_at, "last_refresh_at")
         created_at = _non_negative_int(record.created_at, "created_at")
+        if record.incarnation_id is not None:
+            _incarnation(record.incarnation_id)
+        self._lock_execution_owner(transaction, owner_id)
+        if record.incarnation_id is not None:
+            row = transaction.fetch_one(
+                self._SELECT + " WHERE sid = %s AND user_id = %s FOR UPDATE",
+                (session_id, owner_id),
+            )
+            if row is not None and _session(row) == record:
+                return _session(row)
+            raise RepositoryConflictError("session incarnation cannot be issued by a caller")
         result = transaction.execute(
             """
             INSERT INTO web_session (
                 sid, user_id, access_token_enc, refresh_token_enc,
                 interactive_anchor, hard_expires_at, last_refresh_at,
-                resumed, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                resumed, created_at, issuing_issuer, issuing_client_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (sid) DO NOTHING
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
             (
                 session_id,
@@ -906,6 +1216,8 @@ class SessionRepository:
                 last_refresh_at,
                 bool(record.resumed),
                 created_at,
+                issuer,
+                client_id,
             ),
         )
         row = _optional_returned(result, "session.put")
@@ -915,7 +1227,9 @@ class SessionRepository:
                 owner_id=owner_id,
                 session_id=session_id,
             )
-            if existing != record:
+            if existing is None or existing != replace(
+                record, incarnation_id=existing.incarnation_id
+            ):
                 raise RepositoryConflictError(
                     "session identity replay changed durable state",
                     metadata={"operation": "session.put"},
@@ -929,9 +1243,11 @@ class SessionRepository:
         record: SessionRecord,
         *,
         expected_last_refresh_at: int,
+        expected_credential: SessionCredentialFence | None = None,
     ) -> SessionRecord:
         """Replace encrypted tokens only from one exact older refresh generation."""
 
+        issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
         access = _bounded_text(
@@ -949,36 +1265,56 @@ class SessionRepository:
         last_refresh_at = _non_negative_int(record.last_refresh_at, "last_refresh_at")
         created_at = _non_negative_int(record.created_at, "created_at")
         expected = _non_negative_int(expected_last_refresh_at, "expected_last_refresh_at")
+        incarnation = _incarnation(record.incarnation_id)
         if last_refresh_at <= expected:
             raise RepositoryValidationError(
                 "last_refresh_at must advance beyond expected_last_refresh_at"
             )
+        if expected_credential is not None:
+            _session_fence(expected_credential)
+            if (
+                expected_credential.owner_id != owner_id
+                or expected_credential.session_id != session_id
+                or expected_credential.created_at != created_at
+                or expected_credential.interactive_anchor != interactive_anchor
+                or expected_credential.hard_expires_at != hard_expires_at
+                or expected_credential.refresh_generation != expected
+                or expected_credential.incarnation_id != incarnation
+                or expected_credential.issuing_issuer != issuer
+                or expected_credential.issuing_client_id != client_id
+            ):
+                raise RepositoryValidationError("refresh changed the bound session identity")
+            self._assert_credential(transaction, expected_credential)
         result = transaction.execute(
             """
             UPDATE web_session SET
                 access_token_enc = %s,
                 refresh_token_enc = %s,
-                interactive_anchor = %s,
-                hard_expires_at = %s,
                 last_refresh_at = %s,
                 resumed = %s
             WHERE sid = %s AND user_id = %s AND created_at = %s
-              AND last_refresh_at = %s
+              AND interactive_anchor = %s AND hard_expires_at = %s
+              AND last_refresh_at = %s AND incarnation_id = %s::uuid
+              AND issuing_issuer IS NOT DISTINCT FROM %s
+              AND issuing_client_id IS NOT DISTINCT FROM %s
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
             (
                 access,
                 refresh,
-                interactive_anchor,
-                hard_expires_at,
                 last_refresh_at,
                 bool(record.resumed),
                 session_id,
                 owner_id,
                 created_at,
+                interactive_anchor,
+                hard_expires_at,
                 expected,
+                incarnation,
+                issuer,
+                client_id,
             ),
         )
         row = _optional_returned(result, "session.compare_and_set_refresh")
@@ -1008,6 +1344,27 @@ class SessionRepository:
         row = query.fetch_one(
             self._SELECT + " WHERE sid = %s AND user_id = %s",
             (session_id, owner_id),
+        )
+        return None if row is None else _session(row)
+
+    def get_by_incarnation(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        incarnation_id: str,
+    ) -> SessionRecord | None:
+        """Resolve only this owner's original issuance, never a replacement SID.
+
+        This unlocked read is not authority. A host requiring freshness captures
+        a database-clock execution observation and rechecks it under the ordinary
+        owner/session locks after remote validation.
+        """
+        owner = _required_id(owner_id, "owner_id")
+        incarnation = _incarnation(incarnation_id)
+        row = query.fetch_one(
+            self._SELECT + " WHERE user_id = %s AND incarnation_id = %s::uuid",
+            (owner, incarnation),
         )
         return None if row is None else _session(row)
 
@@ -1060,11 +1417,13 @@ class SessionRepository:
         session_id: str,
         expected_resumed: bool,
         resumed: bool,
+        expected_incarnation_id: str,
     ) -> SessionRecord:
         """Compare-and-set the reconnect marker without rotating token state."""
 
         owner_id = _required_id(owner_id, "owner_id")
         session_id = _required_id(session_id, "session_id")
+        incarnation = _incarnation(expected_incarnation_id)
         if not isinstance(expected_resumed, bool) or not isinstance(resumed, bool):
             raise RepositoryValidationError("session resumed states must be booleans")
         if resumed == expected_resumed:
@@ -1073,12 +1432,12 @@ class SessionRepository:
             """
             UPDATE web_session
             SET resumed = %s
-            WHERE sid = %s AND user_id = %s AND resumed = %s
+            WHERE sid = %s AND user_id = %s AND resumed = %s AND incarnation_id = %s::uuid
             RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                       interactive_anchor, hard_expires_at, last_refresh_at,
-                      resumed, created_at
+                      resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id
             """,
-            (resumed, session_id, owner_id, expected_resumed),
+            (resumed, session_id, owner_id, expected_resumed, incarnation),
         )
         row = _optional_returned(result, "session.mark_resumed")
         if row is not None:
@@ -1090,7 +1449,7 @@ class SessionRepository:
         )
         if existing is None:
             raise RepositoryNotFoundError("owner-scoped web session was not found")
-        if existing.resumed == resumed:
+        if existing.incarnation_id == incarnation and existing.resumed == resumed:
             return existing
         raise RepositoryConflictError(
             "session resumed state compare-and-set fence is stale",
@@ -1103,17 +1462,25 @@ class SessionRepository:
         *,
         owner_id: str,
         session_id: str,
+        expected_incarnation_id: str,
     ) -> bool:
+        """Delete only the incarnation observed by the caller before any await."""
         owner_id = _required_id(owner_id, "owner_id")
         session_id = _required_id(session_id, "session_id")
+        incarnation = _incarnation(expected_incarnation_id)
         result = transaction.execute(
-            "DELETE FROM web_session WHERE sid = %s AND user_id = %s",
-            (session_id, owner_id),
+            "DELETE FROM web_session WHERE sid = %s AND user_id = %s AND incarnation_id = %s::uuid",
+            (session_id, owner_id, incarnation),
         )
         return result.rowcount == 1
 
     def delete_and_return(
-        self, transaction: Transaction, *, owner_id: str, session_id: str,
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        expected_incarnation_id: str,
     ) -> SessionRecord | None:
         """Atomically remove a session and return its exact final encrypted tokens.
 
@@ -1122,12 +1489,14 @@ class SessionRepository:
         """
         owner = _required_id(owner_id, "owner_id")
         session = _required_id(session_id, "session_id")
+        incarnation = _incarnation(expected_incarnation_id)
         row = transaction.fetch_one(
             """DELETE FROM web_session WHERE sid = %s AND user_id = %s
+               AND incarnation_id = %s::uuid
                RETURNING sid, user_id, access_token_enc, refresh_token_enc,
                          interactive_anchor, hard_expires_at, last_refresh_at,
-                         resumed, created_at""",
-            (session, owner),
+                         resumed, created_at, incarnation_id, issuing_issuer, issuing_client_id""",
+            (session, owner, incarnation),
         )
         return None if row is None else _session(row)
 
@@ -1144,6 +1513,31 @@ class SessionRepository:
                 "session owner deletion returned an invalid row count",
                 code="session_owner_delete_invalid",
                 metadata={"owner_id": owner_id},
+            )
+        return result.rowcount
+
+    def retire_all_for_recovery(self, transaction: Transaction) -> int:
+        """Retire every restored session in one externally governed transaction.
+
+        Admission and all writers must already be quiescent. This method neither
+        proves that precondition nor reopens traffic. No owner inventory or row
+        decoding can omit an inactive, unknown, expired or malformed session.
+        Callers must verify the exact current schema before this mutation, and
+        discard every application session cache before reopening admission.
+        Grants, work, audit and outstanding liabilities remain untouched.
+        """
+        self.bound_request_execution_waits(transaction)
+        transaction.execute("LOCK TABLE web_session IN ACCESS EXCLUSIVE MODE")
+        result = transaction.execute("DELETE FROM web_session")
+        if type(result.rowcount) is not int or result.rowcount < 0:
+            raise PlaneError(
+                "restored session retirement returned an invalid count",
+                code="session_retirement_invalid",
+            )
+        remaining = transaction.fetch_one("SELECT EXISTS(SELECT 1 FROM web_session) AS remaining")
+        if remaining is None or remaining["remaining"] is not False:
+            raise PlaneError(
+                "restored session retirement was incomplete", code="session_retirement_incomplete"
             )
         return result.rowcount
 
@@ -1184,6 +1578,10 @@ __all__ = (
     "HistoryRepository",
     "MessageRecord",
     "MessageRepository",
+    "SessionConsentObservation",
+    "SessionCredentialFence",
+    "SessionExecutionObservation",
+    "SessionExecutionState",
     "SessionRecord",
     "SessionRepository",
 )

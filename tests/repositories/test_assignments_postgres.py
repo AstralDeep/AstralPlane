@@ -104,6 +104,7 @@ def database():
 @pytest.fixture
 def tx(database):
     with database.transaction() as transaction:
+        transaction.execute("DELETE FROM assignment_operation_receipt")
         transaction.execute("DELETE FROM persistent_assignment")
         transaction.execute("DELETE FROM astralplane_blob_owner_state WHERE owner_id='owner'")
         yield transaction
@@ -238,6 +239,8 @@ def control(repo, tx, record, value="pause", **changes):
         submission_digest=digest(value),
         control=value,
     )
+    if record.execution_profile == "one_shot":
+        values["expected_state_version"] = record.state_version
     values.update(changes)
     return repo.apply_control(tx, **values)
 
@@ -261,6 +264,656 @@ def test_current_assignment_structure_digest(database):
             m._schema_structure_digest(transaction.fetch_all(m.CURRENT_SCHEMA_STRUCTURE_QUERY))
             == m.CURRENT_SCHEMA_STRUCTURE_DIGEST
         )
+
+
+def session_observation(tx, *, owner_id="owner", session_id="session-reference"):
+    """Synthetic host observation of an exact real PostgreSQL session row."""
+    from astralplane.repositories.history import (
+        SessionExecutionObservation,
+        SessionRecord,
+        SessionRepository,
+    )
+
+    sessions = SessionRepository()
+    if sessions.get(tx, owner_id=owner_id, session_id=session_id) is None:
+        now = int(tx.fetch_one("SELECT clock_timestamp() AS now")["now"].timestamp())
+        sessions.put(
+            tx,
+            SessionRecord(
+                session_id,
+                owner_id,
+                "synthetic-encrypted-access",
+                "synthetic-encrypted-refresh",
+                now,
+                now + 3600,
+                now,
+                False,
+                now,
+            ),
+        )
+    state = sessions.get_execution_state(tx, owner_id=owner_id, session_id=session_id)
+    return SessionExecutionObservation(
+        state.credential, state.observed_at, state.observed_at + timedelta(seconds=15)
+    )
+
+
+def create_operation(repo, tx, **changes):
+    """Use only application-owned opaque references, never synthetic bearer claims."""
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    values = definition(tx)
+    limits = {
+        k: v
+        for k, v in values.limits.items()
+        if not k.startswith("daily_") and k != "cadence_seconds"
+    }
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    observed = session_observation(tx)
+    args = dict(
+        authority=observed,
+        owner_id="owner",
+        assignment_id=uid(),
+        origin_namespace="web",
+        caller_key="ordinary-send",
+        command_digest=digest("ordinary-send"),
+        definition=replace(
+            values, source={}, allowed_tools=(), offline_grant_id=None, limits=limits
+        ),
+        operation=AssignmentOperationSpec(
+            kind="chat",
+            authority=AssignmentOperationAuthority(
+                owner_id="owner",
+                origin="interactive",
+                reference_kind="session_incarnation",
+                reference_id=observed.credential.incarnation_id,
+                expires_at=now + timedelta(minutes=10),
+            ),
+            deadline_at=now + timedelta(minutes=5),
+            source_retention="none",
+        ),
+    )
+    args.update(changes)
+    return repo.create_operation(tx, **args)
+
+
+def operation_observation(tx, record):
+    """Resolve only the fixture operation's exact original incarnation."""
+    from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
+
+    sessions = SessionRepository()
+    session = sessions.get_by_incarnation(
+        tx, owner_id=record.owner_id, incarnation_id=record.operation["authority"]["reference_id"]
+    )
+    assert session is not None
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    return SessionExecutionObservation(
+        sessions.execution_fence(session), now, now + timedelta(seconds=15)
+    )
+
+
+def claim_operations(repo, tx, *, worker_id, limit=20, lease_seconds=30):
+    """An explicit fixture host observes and claims each discovered operation separately."""
+    return tuple(
+        repo.claim_operation_for_administration(
+            tx,
+            owner_id=record.owner_id,
+            assignment_id=record.assignment_id,
+            expected_state_version=record.state_version,
+            worker_id=worker_id,
+            authority=operation_observation(tx, record),
+            lease_seconds=lease_seconds,
+        )
+        for record in repo.discover_due_operations_for_administration(tx, limit=limit)
+    )
+
+
+def test_one_shot_profile_isolated_from_legacy_claims_and_capacity(tx, repo):
+    first = create_operation(repo, tx)
+    assert first.execution_profile == "one_shot"
+    assert first.definition.offline_grant_id is None
+    assert first.definition.source == {}
+    assert repo.claim_due_for_administration(tx, worker_id="legacy") == ()
+    assert repo.list_assignments(tx, owner_id="owner") == ()
+    legacy = create(repo, tx, max_retained_assignments=1, max_owned_assignments=1)
+    assert legacy.execution_profile == "persistent"
+    assert claim(repo, tx).assignment.assignment_id == legacy.assignment_id
+    durable = claim_operations(repo, tx, worker_id="operations")
+    assert [item.assignment.assignment_id for item in durable] == [first.assignment_id]
+
+
+def test_one_shot_receipt_is_original_key_bound_and_resolved_before_expansion(tx, repo):
+    first = create_operation(repo, tx)
+    replay = create_operation(repo, tx, assignment_id=uid(), definition=None, operation=None)
+    assert replay == first
+    assert (
+        repo.get_operation_receipt(
+            tx,
+            owner_id="other",
+            origin_namespace="web",
+            caller_key="ordinary-send",
+            command_digest=digest("ordinary-send"),
+        )
+        is None
+    )
+    with pytest.raises(RepositoryConflictError):
+        create_operation(repo, tx, command_digest=digest("different"))
+    second = create_operation(repo, tx, caller_key="different-key")
+    assert second.assignment_id != first.assignment_id
+
+
+def test_one_shot_authority_owner_expiry_and_unknown_fields_refused(tx, repo):
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    authority = AssignmentOperationAuthority(
+        "other",
+        "interactive",
+        "session_incarnation",
+        session_observation(tx).credential.incarnation_id,
+        now + timedelta(minutes=5),
+    )
+    operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
+    with pytest.raises(RepositoryValidationError):
+        create_operation(repo, tx, operation=operation)
+    expired = replace(authority, owner_id="owner", expires_at=now - timedelta(seconds=1))
+    with pytest.raises(RepositoryConflictError):
+        create_operation(repo, tx, operation=replace(operation, authority=expired))
+    unknown = replace(authority, owner_id="owner", reference_kind="trusted_admin")
+    with pytest.raises(RepositoryValidationError):
+        create_operation(repo, tx, operation=replace(operation, authority=unknown))
+
+
+def test_one_shot_unattended_requires_current_offline_grant(tx, repo):
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    authority = AssignmentOperationAuthority(
+        "owner", "scheduled", "offline_grant", uid(), now + timedelta(minutes=5)
+    )
+    operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
+    with pytest.raises(RepositoryConflictError):
+        create_operation(repo, tx, operation=operation)
+
+
+def test_one_shot_creation_does_not_rewrite_legacy_private_json(tx, repo):
+    legacy = create(repo, tx)
+    before = tx.fetch_one(
+        "SELECT data FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+    )["data"]
+    create_operation(repo, tx)
+    after = tx.fetch_one(
+        "SELECT data FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+    )["data"]
+    assert canonical(after) == canonical(before)
+    assert "execution_profile" not in after
+    assert "operation" not in after
+
+
+def test_one_shot_deleted_receipt_cannot_admit_a_second_effect(tx, repo):
+    record = create_operation(repo, tx)
+    stopped = control(repo, tx, record, "stop").assignment
+    assert repo.delete_for_owner(
+        tx,
+        owner_id="owner",
+        assignment_id=record.assignment_id,
+        expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
+    )
+    receipt = tx.fetch_one(
+        "SELECT assignment_id,live_assignment_id FROM assignment_operation_receipt"
+    )
+    assert str(receipt["assignment_id"]) == record.assignment_id
+    assert receipt["live_assignment_id"] is None
+    with pytest.raises(RepositoryConflictError, match="assignment_operation_deleted"):
+        create_operation(repo, tx)
+    with pytest.raises(RepositoryConflictError, match="assignment_history_capacity_exhausted"):
+        create_operation(repo, tx, caller_key="new-key", max_retained_receipts=1)
+
+
+@pytest.mark.parametrize("new_profile", ["one_shot", "persistent"])
+def test_deleted_operation_receipt_never_follows_reused_assignment_uuid(tx, repo, new_profile):
+    first = create_operation(repo, tx)
+    stopped = control(repo, tx, first, "stop").assignment
+    repo.delete_for_owner(
+        tx,
+        owner_id="owner",
+        assignment_id=first.assignment_id,
+        expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
+    )
+    if new_profile == "one_shot":
+        replacement = create_operation(
+            repo,
+            tx,
+            assignment_id=first.assignment_id,
+            caller_key="another-key",
+            command_digest=digest("another-command"),
+        )
+    else:
+        replacement = create(repo, tx, assignment_id=first.assignment_id)
+    assert replacement.assignment_id == first.assignment_id
+    with pytest.raises(RepositoryConflictError, match="assignment_operation_deleted"):
+        repo.get_operation_receipt(
+            tx,
+            owner_id="owner",
+            origin_namespace="web",
+            caller_key="ordinary-send",
+            command_digest=digest("ordinary-send"),
+        )
+
+
+def test_one_shot_capacity_and_retirement_are_separate_current_gates(tx, repo):
+    create_operation(repo, tx)
+    with pytest.raises(RepositoryConflictError, match="assignment_capacity_exhausted"):
+        create_operation(repo, tx, caller_key="next", max_owned_operations=1)
+    tx.execute(
+        "INSERT INTO astralplane_blob_owner_state(owner_id,state,version,retired_at,updated_at) "
+        "VALUES('owner','retired',1,clock_timestamp(),clock_timestamp())"
+    )
+    with pytest.raises(RepositoryConflictError, match="assignment_owner_retired"):
+        create_operation(repo, tx, caller_key="next")
+
+
+def test_one_shot_owner_retirement_removes_receipts_but_cannot_resume(tx, repo):
+    create_operation(repo, tx)
+    assert not repo.retire_operations_for_owner(tx, owner_id="owner").retained_assignment_ids
+    assert tx.fetch_one("SELECT count(*) AS n FROM assignment_operation_receipt")["n"] == 0
+    with pytest.raises(RepositoryConflictError, match="assignment_owner_retired"):
+        create_operation(repo, tx)
+
+
+def test_one_shot_legacy_run_now_is_explicitly_refused(tx, repo):
+    record = create_operation(repo, tx)
+    with pytest.raises(
+        RepositoryConflictError, match="assignment_operation_requires_explicit_wake"
+    ):
+        repo.request_check(
+            tx,
+            owner_id="owner",
+            assignment_id=record.assignment_id,
+            expected_instruction_revision=record.instruction_revision,
+            expected_control_epoch=record.control_epoch,
+            submission_id=uid(),
+            submission_digest=digest("run-now"),
+        )
+
+
+@pytest.mark.parametrize("profile", ["persistent", "one_shot"])
+def test_recovery_filters_profiles_before_batch_limit(tx, repo, profile):
+    persistent = create(repo, tx)
+    operation = create_operation(repo, tx)
+    persistent_claim = claim(repo, tx)
+    operation_claim = claim_operations(repo, tx, worker_id="operation")[0]
+    records = {"persistent": persistent, "one_shot": operation}
+    claims = {"persistent": persistent_claim, "one_shot": operation_claim}
+    recover = {
+        "persistent": repo.recover_expired_for_administration,
+        "one_shot": repo.recover_expired_operations_for_administration,
+    }
+    other = "one_shot" if profile == "persistent" else "persistent"
+    # The other profile is oldest. Filtering after LIMIT would starve this profile.
+    expire_claim(tx, records[other])
+    expire_claim(tx, records[profile])
+    result = recover[profile](tx, limit=1)
+    assert result.reclaimed_assignment_ids == (records[profile].assignment_id,)
+    retained = repo.get_assignment(tx, owner_id="owner", assignment_id=records[other].assignment_id)
+    assert retained.state_version == claims[other].assignment.state_version
+    result = recover[other](tx, limit=1)
+    assert result.reclaimed_assignment_ids == (records[other].assignment_id,)
+    recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    assert now + timedelta(seconds=4) <= recovered.next_wake_at <= now + timedelta(seconds=6)
+    assert repo.recover_expired_for_administration(tx).reclaimed_assignment_ids == ()
+
+
+def test_one_shot_recovery_exhausts_finite_backoff_without_recurring(tx, repo):
+    operation = create_operation(repo, tx)
+    for delay in (5, 15, 45, None):
+        claim_operations(repo, tx, worker_id="operation")
+        expire_claim(tx, operation)
+        repo.recover_expired_operations_for_administration(tx)
+        recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
+        now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+        if delay is None:
+            assert recovered.next_wake_at is None
+            assert (
+                tx.fetch_one(
+                    "SELECT data->>'next_retry_at' AS retry FROM persistent_assignment WHERE id=%s",
+                    (operation.assignment_id,),
+                )["retry"]
+                is None
+            )
+            assert recovered.safe_error_code == "assignment_retry_exhausted"
+            assert recovered.lifecycle == "completed"
+            assert recovered.operation["terminal_outcome"] == "failed"
+        else:
+            assert now + timedelta(seconds=delay - 1) <= recovered.next_wake_at
+            assert recovered.next_wake_at <= now + timedelta(seconds=delay + 1)
+            tx.execute(
+                "UPDATE persistent_assignment SET next_wake_at=statement_timestamp(), "
+                "data=jsonb_set(data,'{next_wake_at}',to_jsonb(statement_timestamp()::text)) "
+                "WHERE id=%s",
+                (operation.assignment_id,),
+            )
+    assert claim_operations(repo, tx, worker_id="again") == ()
+
+
+@pytest.mark.parametrize("boundary", ["read_only", "unreplayable"])
+def test_one_shot_recovery_preserves_issued_liability_and_stale_fence(tx, repo, boundary):
+    operation = create_operation(repo, tx)
+    current = claim_operations(repo, tx, worker_id="operation")[0]
+    binding = bind(repo, tx, current.fence)
+    created = action(repo, tx, current.fence, boundary=boundary)
+    permit = start(repo, tx, current.fence, reserve(repo, tx, current.fence, created), binding)
+    expire_claim(tx, operation)
+    result = repo.recover_expired_operations_for_administration(tx)
+    recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
+    with pytest.raises(RepositoryConflictError):
+        repo.assert_current_claim(tx, fence=current.fence)
+    if boundary == "read_only":
+        assert recovered.usage["spent"]["tool_calls"] == 1
+        assert recovered.usage["outstanding"]["tool_calls"] == 0
+    else:
+        assert result.uncertain_action_ids == (created.action_id,)
+        assert recovered.phase == "reconciliation"
+        assert recovered.next_wake_at is None
+        assert recovered.usage["outstanding"]["tool_calls"] == 1
+        assert outcome(repo, tx, permit, operation.assignment_id).state == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "expired_field,expected",
+    [
+        ("{operation,deadline_at}", "assignment_deadline_exceeded"),
+        ("{operation,authority,expires_at}", "assignment_authorization_unavailable"),
+    ],
+)
+def test_one_shot_recovery_cannot_renew_expired_authority_or_deadline(
+    tx, repo, expired_field, expected
+):
+    operation = create_operation(repo, tx)
+    claim_operations(repo, tx, worker_id="operation")
+    expire_claim(tx, operation)
+    tx.execute(
+        "UPDATE persistent_assignment SET data=jsonb_set(data,%s::text[], "
+        "to_jsonb((clock_timestamp()-interval '1 second')::text)) WHERE id=%s",
+        (expired_field, operation.assignment_id),
+    )
+    repo.recover_expired_operations_for_administration(tx)
+    recovered = repo.get_assignment(tx, owner_id="owner", assignment_id=operation.assignment_id)
+    assert recovered.next_wake_at is None
+    assert recovered.safe_error_code == expected
+    if expected == "assignment_deadline_exceeded":
+        assert recovered.lifecycle == "completed"
+        assert recovered.operation["terminal_outcome"] == "failed"
+    else:
+        assert recovered.lifecycle == "active"
+        assert recovered.operation.get("terminal_outcome") is None
+    assert claim_operations(repo, tx, worker_id="again") == ()
+
+
+def test_one_shot_framework_receipt_is_bound_to_issuing_reference(tx, repo):
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    authority = AssignmentOperationAuthority(
+        "owner", "framework", "credential", "framework-id", now + timedelta(minutes=5)
+    )
+    operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
+    with pytest.raises(RepositoryValidationError, match="credential reference mismatch"):
+        create_operation(repo, tx, operation=operation)
+    record = create_operation(repo, tx, operation=operation, credential_id="framework-id")
+    assert (
+        create_operation(repo, tx, definition=None, operation=None, credential_id="framework-id")
+        == record
+    )
+    with pytest.raises(RepositoryConflictError, match="assignment_idempotency_conflict"):
+        create_operation(repo, tx, definition=None, operation=None, credential_id="other-id")
+
+
+@pytest.mark.parametrize("change", ["deadline", "long_deadline", "research_without_source"])
+def test_one_shot_deadline_and_research_source_bounds(tx, repo, change):
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    authority = AssignmentOperationAuthority(
+        "owner", "interactive", "session", "opaque", now + timedelta(days=3)
+    )
+    deadline = now - timedelta(seconds=1) if change == "deadline" else now + timedelta(days=2)
+    if change == "research_without_source":
+        deadline = now + timedelta(minutes=1)
+    operation = AssignmentOperationSpec(
+        "research" if change == "research_without_source" else "chat", authority, deadline, "none"
+    )
+    with pytest.raises((RepositoryValidationError, RepositoryConflictError)):
+        create_operation(repo, tx, operation=operation)
+
+
+def test_one_shot_binding_checks_original_deadline_after_claim(tx, repo):
+    record = create_operation(repo, tx)
+    current = claim_operations(repo, tx, worker_id="operations")[0]
+    tx.execute(
+        "UPDATE persistent_assignment SET data=jsonb_set(data,'{operation,deadline_at}', "
+        "to_jsonb((clock_timestamp()-interval '1 second')::text)) WHERE id=%s",
+        (record.assignment_id,),
+    )
+    with pytest.raises(RepositoryConflictError, match="assignment_deadline_exceeded"):
+        bind(repo, tx, current.fence)
+
+
+def test_one_shot_grant_and_conversation_references_remain_owner_scoped(tx, repo):
+    record = create_operation(repo, tx)
+    value = replace(record.definition, conversation_id=uid())
+    with pytest.raises(RepositoryConflictError, match="assignment_conversation_not_owned"):
+        create_operation(repo, tx, caller_key="other", definition=value)
+    grant_value = definition(tx)
+    value = replace(record.definition, offline_grant_id=grant_value.offline_grant_id)
+    assert create_operation(repo, tx, caller_key="with-grant", definition=value)
+
+
+def test_profile_and_receipt_structure_repeat_verification(database):
+    runner = MigrationRunner(
+        database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
+    )
+    assert runner.run(expected_revision="088.003").applied_steps == ()
+    with database.transaction() as transaction:
+        rows = transaction.fetch_all("SELECT execution_profile,data FROM persistent_assignment")
+        for row in rows:
+            assert row["execution_profile"] == row["data"].get("execution_profile", "persistent")
+
+
+def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo):
+    """Build the exact pinned predecessor, then use the real guarded candidate edge."""
+    import psycopg2
+
+    from astralplane.database import migrations as m
+
+    with database.transaction() as transaction:
+        transaction.execute("DELETE FROM assignment_operation_receipt")
+        transaction.execute("DELETE FROM persistent_assignment")
+        legacy = create(repo, transaction)
+        snapshot = transaction.fetch_one(
+            "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+        )
+    connection = psycopg2.connect(os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"])
+    schema = "operation_upgrade_" + uuid.uuid4().hex
+    with connection.cursor() as cursor:
+        cursor.execute(f'CREATE SCHEMA "{schema}"')
+        cursor.execute(f'SET search_path TO "{schema}",pg_catalog')
+    connection.commit()
+    pool = ConnectionPool(Pool(connection))
+    upgrade_database = PlaneDatabase(pool)
+    old_registry = m.MigrationRegistry(
+        tuple(
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "079.001"
+        ),
+        current_schema_verifier=lambda transaction: m._verify_predecessor_plane_schema(
+            transaction, "079.001"
+        ),
+        current_schema_verifier_checksum="1987a3e7b27787ef5c4dcc4552e2713b1627b82aaf0760d8ccb881e5a4f30017",
+        predecessor_schema_verifier=m._verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum="7a881bf3c3753eee9ec320444f7f0d029da03bbf77ef74c9160921435ef54e25",
+    )
+    assert old_registry.digest == m.PLANE_SCHEMA_079_REGISTRY_DIGEST
+    old_revision = replace(
+        m.CURRENT_DATA_PLANE_REVISION,
+        schema_revision="079.001",
+        migration_digest=old_registry.digest,
+        read_compatible_from=tuple(
+            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "079.001"
+        ),
+        accepted_predecessor_digests=tuple(
+            v
+            for v in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if v[0] < "079.001"
+        ),
+    )
+    try:
+        old_runner = m.MigrationRunner(
+            upgrade_database, revision=old_revision, registry=old_registry
+        )
+        BaselineMigrationRunner(upgrade_database, old_runner).run(expected_revision="079.001")
+        with upgrade_database.transaction() as transaction:
+            transaction.execute(
+                "INSERT INTO persistent_assignment(id,owner_user_id,submission_id,"
+                "submission_digest,lifecycle,next_wake_at,state_version,data) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+                (
+                    *(
+                        snapshot[k]
+                        for k in (
+                            "id",
+                            "owner_user_id",
+                            "submission_id",
+                            "submission_digest",
+                            "lifecycle",
+                            "next_wake_at",
+                            "state_version",
+                        )
+                    ),
+                    canonical(snapshot["data"]),
+                ),
+            )
+        runner = m.MigrationRunner(
+            upgrade_database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
+        )
+        assert runner.run(expected_revision="088.003").applied_steps == (
+            "astralplane-088-one-shot-operations",
+            "astralplane-088-session-incarnation",
+            "astralplane-088-session-issuer",
+        )
+        assert runner.run(expected_revision="088.003").already_current
+        with upgrade_database.transaction() as transaction:
+            migrated = transaction.fetch_one(
+                "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+            )
+            assert canonical(migrated["data"]) == canonical(snapshot["data"])
+            assert migrated["submission_digest"] == snapshot["submission_digest"]
+            assert migrated["execution_profile"] == "persistent"
+            transaction.execute(
+                "ALTER TABLE assignment_operation_receipt "
+                "DROP CONSTRAINT assignment_operation_receipt_pkey"
+            )
+        with pytest.raises(SchemaRevisionError):
+            runner.run(expected_revision="088.003")
+    finally:
+        pool.close()
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        connection.commit()
+        connection.close()
+
+
+def test_concurrent_one_shot_acceptance_has_one_logical_identity(database, repo):
+    with database.transaction() as transaction:
+        transaction.execute("DELETE FROM assignment_operation_receipt")
+        transaction.execute("DELETE FROM persistent_assignment")
+    records = parallel_transactions(
+        database,
+        (
+            lambda transaction: create_operation(repo, transaction),
+            lambda transaction: create_operation(repo, transaction),
+        ),
+    )
+    assert records[0].assignment_id == records[1].assignment_id
+    with database.transaction() as transaction:
+        assert (
+            transaction.fetch_one("SELECT count(*) AS n FROM assignment_operation_receipt")["n"]
+            == 1
+        )
+
+
+def test_operation_receipt_and_target_are_read_in_one_snapshot(database, repo):
+    with database.transaction() as transaction:
+        transaction.execute("DELETE FROM assignment_operation_receipt")
+        transaction.execute("DELETE FROM persistent_assignment")
+        first = create_operation(repo, transaction)
+        schema = transaction.fetch_one("SELECT current_schema() AS name")["name"]
+
+    class ReplaceAfterReceiptRead:
+        def __init__(self, transaction):
+            self.transaction = transaction
+            self.replaced = False
+
+        def fetch_one(self, statement, parameters):
+            row = self.transaction.fetch_one(statement, parameters)
+            if not self.replaced:
+                self.replaced = True
+                with independent_database(schema) as other, other.transaction() as writer:
+                    stopped = control(repo, writer, first, "stop").assignment
+                    repo.delete_for_owner(
+                        writer,
+                        owner_id="owner",
+                        assignment_id=first.assignment_id,
+                        expected_control_epoch=stopped.control_epoch,
+                        expected_state_version=stopped.state_version,
+                    )
+                    create_operation(
+                        repo,
+                        writer,
+                        assignment_id=first.assignment_id,
+                        caller_key="replacement",
+                        command_digest=digest("replacement"),
+                    )
+            return row
+
+    with database.transaction() as transaction:
+        query = ReplaceAfterReceiptRead(transaction)
+        assert (
+            repo.get_operation_receipt(
+                query,
+                owner_id="owner",
+                origin_namespace="web",
+                caller_key="ordinary-send",
+                command_digest=digest("ordinary-send"),
+            )
+            == first
+        )
+        assert query.replaced
+        with pytest.raises(RepositoryConflictError, match="assignment_operation_deleted"):
+            repo.get_operation_receipt(
+                transaction,
+                owner_id="owner",
+                origin_namespace="web",
+                caller_key="ordinary-send",
+                command_digest=digest("ordinary-send"),
+            )
 
 
 def test_create_replay_owner_controls_and_retirement(tx, repo):
@@ -637,6 +1290,7 @@ def test_unreplayable_recovery_retains_liability_and_late_receipt(tx, repo):
             owner_id="owner",
             assignment_id=record.assignment_id,
             expected_control_epoch=stopped.control_epoch,
+            expected_state_version=stopped.state_version,
         )
     assert outcome(repo, tx, permit, record.assignment_id).state == "succeeded"
 
@@ -1666,6 +2320,7 @@ def test_terminal_retirement_expires_remote_capability_before_removing_link(tx, 
         owner_id="owner",
         assignment_id=record.assignment_id,
         expected_control_epoch=stopped.control_epoch,
+        expected_state_version=stopped.state_version,
     )
     assert (
         repo.get_action_for_interactive_proposal(

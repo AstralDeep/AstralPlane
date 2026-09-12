@@ -1445,6 +1445,53 @@ class PreferencesRepository:
         self.personalization = PersonalizationRepository()
         self.theme = ThemePreferenceRepository()
 
+    def get_chat_phi_notice_enabled(self, query: QueryExecutor, *, owner_id: str) -> bool:
+        """Read the owner's optional chat notice setting; absent means enabled."""
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s", (owner_id,)
+        )
+        if row is None:
+            return True
+        preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+        if not isinstance(preferences, Mapping):
+            raise RepositoryDataError("persisted preferences document must be an object")
+        enabled = preferences.get("chat_phi_notice_enabled", True)
+        if type(enabled) is not bool:
+            raise RepositoryDataError("persisted chat notice preference must be boolean")
+        return enabled
+
+    def set_chat_phi_notice_enabled(
+        self, transaction: Transaction, *, owner_id: str, enabled: bool
+    ) -> None:
+        """Merge one boolean under a row lock without replacing other preferences."""
+        owner_id = _required_id(owner_id, "owner_id")
+        if type(enabled) is not bool:
+            raise RepositoryValidationError("chat notice preference must be boolean")
+        transaction.execute(
+            "INSERT INTO user_preferences (user_id, preferences, updated_at) "
+            "VALUES (%s, '{}', 0) ON CONFLICT (user_id) DO NOTHING", (owner_id,)
+        )
+        row = transaction.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s FOR UPDATE",
+            (owner_id,),
+        )
+        if row is None:
+            raise RepositoryConflictError("chat notice preference row disappeared")
+        preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+        if not isinstance(preferences, Mapping):
+            raise RepositoryDataError("persisted preferences document must be an object")
+        merged = dict(preferences)
+        merged["chat_phi_notice_enabled"] = enabled
+        result = transaction.execute(
+            "UPDATE user_preferences SET preferences = %s, "
+            "updated_at = GREATEST(COALESCE(updated_at, 0) + 1, "
+            "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT) "
+            "WHERE user_id = %s", (_canonical_json(merged, "preferences"), owner_id),
+        )
+        if result.rowcount != 1:
+            raise RepositoryConflictError("chat notice preference update was not applied")
+
 
 __all__ = (
     "FeedbackCommentCandidate",

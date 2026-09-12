@@ -68,11 +68,11 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "dbdf1848c074737161d0f6b55ceee82201be1cc2b1154f1adc8e377b6d7a3ccf"
+          "sha256": "4d8fd4ccd4acd1664e4ade51f0d142d2c7911f17dcdb86402ce67b599b28df6d"
         }
       ],
       "task": "T075/T085",
-      "reason": "Preserved append-only and chain invariants through migration and repository regressions."
+      "reason": "Preserved append-only and chain invariants through migration and repository regressions. The 088 assignment foundation extends registry lineage regression coverage through schema 088.001. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/audit/tests/test_repository_filters.py",
@@ -136,7 +136,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         },
         {
           "path": "tests/repositories/test_preferences.py",
@@ -155,11 +155,15 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_secrets.py",
-          "sha256": "0e1e0024e077b7c5ed09009d8f47c36156747c373b905124dacee845f014c7c9"
+          "sha256": "24a424060a567e7d1580abb185d527692ae2d86ed73ca2496a1f7fd85f62c8a0"
+        },
+        {
+          "path": "tests/repositories/test_secrets_lock_postgres.py",
+          "sha256": "c73fcbcc8e1d4e872610ce25f3d35f5abf0f74e9853370f325e38c27b3baf6ea"
         }
       ],
       "task": "T081",
-      "reason": "Replaced provider-store tests with ciphertext-only owner and system configuration tests."
+      "reason": "Replaced provider-store tests with ciphertext-only owner/system configuration tests and actual PostgreSQL row-lock exclusion, commit/rollback release, and distinct-owner independence."
     },
     {
       "sourcePath": "backend/llm_config/user_store.py",
@@ -170,11 +174,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/secrets.py",
-          "sha256": "42f25cb1bf708b3ac4ecc5dd41704d33ee9e0bed94bb1121024fb84388c96025"
+          "sha256": "ca9a03b18c76f15e380fb8e25477dd7e8f6a086312d8776e49e0b29931cadb5a"
         }
       ],
       "task": "T081",
-      "reason": "Extracted ciphertext-only provider configuration persistence without product policy."
+      "reason": "Extracted ciphertext-only provider configuration persistence without product policy. The explicit owner-scoped locked getter holds the existing opaque selection through a caller-owned dependent transaction; ordinary reads and writes remain unchanged."
     },
     {
       "sourcePath": "backend/onboarding/repository.py",
@@ -185,7 +189,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         }
       ],
       "task": "T081",
@@ -361,12 +365,16 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/_issuing_identity.py",
+          "sha256": "f15c3d0592dfc603fe8922a350a71a820b3e1f92ff9851b2760291b635ed9f23"
+        },
+        {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "fe6e8509fd87ef3d3827aa7eac8967cfa2d2873fb2aa5bc97cf7a17047f23069"
+          "sha256": "8a976c69b6b310ccca9f12fd8617a9ca67356f5db3ba255ab651b591922a5657"
         }
       ],
       "task": "T078",
-      "reason": "Extracted conversation and message persistence without presentation or orchestration logic."
+      "reason": "Extracted owner-isolated history and encrypted session persistence with exact refresh CAS, bounded SQL waits and database-time guards. Revision088.002 provides immutable incarnations and separate consent observations. Revision088.003 binds exact issuer/client metadata while retaining legacy-null fence bytes; its shared validator serves deferred revocations. Imported source identities and historical migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/knowledge_synthesis.py",
@@ -426,7 +434,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "a1f5035ff72289b8fa33da47dffa053688e2a310cfd7feb6b9dd5295741954a0"
+          "sha256": "2ac9d701cb816a5244b363c4cb5f030ed647c3bb6108f0864727f72e94ce782b"
         }
       ],
       "task": "T082",
@@ -440,12 +448,20 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/_issuing_identity.py",
+          "sha256": "f15c3d0592dfc603fe8922a350a71a820b3e1f92ff9851b2760291b635ed9f23"
+        },
+        {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "fe6e8509fd87ef3d3827aa7eac8967cfa2d2873fb2aa5bc97cf7a17047f23069"
+          "sha256": "8a976c69b6b310ccca9f12fd8617a9ca67356f5db3ba255ab651b591922a5657"
+        },
+        {
+          "path": "src/astralplane/repositories/revocations.py",
+          "sha256": "44285fba447ff32209920819dc80df2dbe06366596e74527e0e8f938b4440bcc"
         }
       ],
       "task": "T078",
-      "reason": "Extracted owner-scoped session persistence without API or authentication policy."
+      "reason": "Extracted owner-isolated session persistence and ciphertext-only revocations. Exact refresh CAS and bounded database-time guards retain immutable 088.002 incarnations and 088.003 issuer/client metadata with legacy-null fence bytes. The neutral revocation repository adds finite-cycle administrative pages while preserving owner mutation fences. Imported source identities and historical migration bytes remain unchanged."
     },
     {
       "sourcePath": "backend/orchestrator/voice_sessions.py",
@@ -501,7 +517,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "f050ff3190ba9747343d3609603ce0a260e04aeb8c5be9e4f611bb7dd38c15bd"
+          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
         }
       ],
       "task": "T081",
@@ -516,7 +532,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/scheduler.py",
-          "sha256": "a1f5035ff72289b8fa33da47dffa053688e2a310cfd7feb6b9dd5295741954a0"
+          "sha256": "2ac9d701cb816a5244b363c4cb5f030ed647c3bb6108f0864727f72e94ce782b"
         }
       ],
       "task": "T082",
@@ -531,7 +547,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         },
         {
           "path": "tests/repositories/test_scheduler.py",
@@ -543,7 +559,7 @@
         }
       ],
       "task": "T078/T079/T082",
-      "reason": "Preserved zero-based atomic publication and fenced scheduler behavior across focused tests."
+      "reason": "Preserved zero-based atomic publication and fenced scheduler behavior across focused tests. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/scheduler/tests/test_occurrence_claims_060.py",
@@ -611,7 +627,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "41434bf52e929b2b62d2a7d4939d343aea71230cd6ee1426a30e09b3992a67e4"
+          "sha256": "c56f806ecd148789a5e12d22836714cb61f58a32f9c58d1b0d790bca54ba25d6"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -623,7 +639,7 @@
         }
       ],
       "task": "T068/T069/T075",
-      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state."
+      "reason": "Sliced the monolithic database into neutral contracts, scoped pooling, transactions, and guarded migration state. The 088 assignment foundation adds the guarded 079.001-to-088.001 operation-schema migration while preserving predecessor digests. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/attachments/test_account_deletion.py",
@@ -774,11 +790,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         }
       ],
       "task": "T078",
-      "reason": "Retained owner-scoped history persistence tests while leaving preview shaping outside Plane."
+      "reason": "Retained owner-scoped history persistence tests while leaving preview shaping outside Plane. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/test_remote_jobs_063.py",
@@ -804,11 +820,11 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_history.py",
-          "sha256": "a7b0af6ed9852f78abf7eb2da5196bee20ab4848f5222dd5899bac97eb66d613"
+          "sha256": "4d876c176ddf764f59cd731e10c1b9ef6ffab38343bfe1f4738f06ffcb15c4f1"
         }
       ],
       "task": "T078",
-      "reason": "Preserved owner-scoped session refresh, replay, and conflict coverage."
+      "reason": "Preserved owner-scoped session refresh, replay, and conflict coverage. The 088.002 session-incarnation increment preserves imported behavior with database-issued session identity, exact incarnation fencing and updated lineage tests."
     },
     {
       "sourcePath": "backend/tests/test_voice_session_api_065.py",

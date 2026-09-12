@@ -12,6 +12,27 @@ the complete existing ancestry; operators can require fail-closed pre-provisioni
 
 ## Before upgrade
 
+Revision `088.001` adds the assignment execution-profile discriminator and original-key
+operation receipts. Its predecessor is the exact qualified `079.001` registry/digest;
+existing assignment JSON, submission digests and unresolved effects are not rewritten.
+Legacy workers must use profile-filtered claims, and the matching Deep composition must
+remain closed until its new exact Plane schema/digest pin is qualified. An older binary
+is not declared compatible with the new schema merely because its rows remain present.
+The populated predecessor, repeat-upgrade and new-catalog corruption cases are exercised
+in `tests/repositories/test_assignments_postgres.py`.
+
+Revision `088.002` adds `web_session.incarnation_id` using PostgreSQL `gen_random_uuid()`,
+with non-null, uniqueness and canonical UUID4 constraints. It requires the exact `088.001`
+catalog and registry digest `b6eaa819e9bd471350e48e431686c1ed6922e206608f1b673e0544c14014552d`.
+The immutable `088.001` statements are unchanged. Existing session columns, grant envelopes,
+assignment JSON, usage and unresolved effects are preserved; existing sessions receive an identity
+once in the guarded transaction. Repeat startup verifies the complete catalog and never replaces
+identities or retires sessions. A catalog collision/corruption aborts rather than adopting supplied
+identities. `tests/integration/test_session_incarnation_upgrade.py` exercises populated upgrade (including
+real synthetic v1 issued and uncertain action ledgers, operation receipts, usage and grant bindings),
+repeat and constraint corruption. New writes must use the matching incarnation-aware repository
+and host contract; an older binary is not qualified against this schema.
+
 1. Close admission and quiesce all writers.
 2. Record the exact AstralDeep composition, AstralPlane commit, contract version, schema revision,
    migration digest, blob-layout version, and configured durable roots.
@@ -45,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -247,7 +268,9 @@ maintenance window has been verified:
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
    selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
    `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
-   pinned predecessor catalog shape; `079.001` must also pass the current structural verifier.
+   pinned predecessor catalog shape; `079.001` must match its pinned predecessor catalog
+   and `088.001` and `088.002` must match their pinned predecessor catalogs. `088.003` must
+   pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the
@@ -279,3 +302,92 @@ Chat-step, conversation-file, and saved-component public repository extraction a
 publication-aware Canvas repository rather than duplicating its SQL. Rollback is composition-only;
 leave `chat_steps`, `messages.step_count`, `chat_files`, and `saved_components` untouched. See
 `conversation-extended-state.md`.
+
+
+### `088.002` session identities after a joint restore
+
+A backup restores session and grant identities together, so row incarnation alone cannot prove
+that a restored session was not retired after the backup. Keep admission, scheduling, assignments
+and all other writers closed. Recovery must deliberately retire every restored web session before
+reopening IAM-backed work, require fresh login and new consent, and preserve outstanding assignment
+usage, issued permits, uncertain effects and reconciliation records. Do not rebind a restored grant
+or operation to a new session. No startup migration or normal process restart performs retirement.
+
+The explicit public `astralplane.retire_restored_sessions` recovery entry retires the entire
+restored `web_session` table in one transaction. It requires `database_url`, `expected_database`,
+`expected_schema`, `expected_schema_revision` and `expected_migration_digest` as keyword inputs;
+there is no implicit application environment or target fallback. Supply connection material only
+through the embedding operator's private configuration, never command-line arguments or receipts.
+The current revision and digest must match the installed Plane code. The connected database and
+first selected schema must match the explicit target. Before reading application metadata, a
+qualified-builtin bootstrap gives `pg_catalog` implicit precedence, the existing migration advisory
+lock coordinates maintenance, and relation locks retain `schema_meta` and `web_session` while the
+complete current catalog is verified. Unknown/predecessor schemas, corrupted metadata and catalog
+namesakes are refused; no initializer, migration or product reconciliation hook is called.
+
+The entry then calls `SessionRepository.retire_all_for_recovery(transaction)`, which locks and deletes
+every session and verifies emptiness without decoding credentials or joining an owner inventory.
+Expired, resumed, inactive-owner and unknown-owner rows cannot be missed. It returns a frozen
+`RestoredSessionRetirement(retired_sessions: int)` only after commit and private pool closure. It
+does not return or log owners, session identities, credentials or ciphertext. Session retirement
+does not alter grants, assignments, receipts, audit, blobs or accounting liabilities. Existing
+grants keep their old binding and require fresh consent; no new session can revive that binding.
+
+SQL retains the existing transaction-local lock/statement upper bounds of 100/1000 milliseconds;
+stricter configured nonzero limits remain effective. The private pool bounds checkout to one second
+and connection establishment to five seconds. These are separate limits, not a total network or
+physical worker deadline. Contention, timeout and interruption roll back uncommitted retirement.
+`SessionRetirementError` is data-free; any failure after a possible commit remains unconfirmed.
+Keep admission closed, inspect or repeat explicitly, and never compensate by restoring credentials.
+A completed repeat returns zero. A later restore must run retirement again even if its snapshot
+contains old completion markers. No existing reconciliation marker can skip this operation.
+
+This API neither verifies the joint backup nor proves that writers are stopped. It never changes
+admission, invokes IAM, clears another process's memory or reopens services. The operator must verify
+those external preconditions, retain a private recovery record, discard every application process
+and cache, and require fresh institutional sign-in before reopening. The embedding Deep operator
+tool, private-database end-to-end qualification and final staging remain separate requirements;
+this API is not an independently authorized operational procedure. Ordinary startup/restart and
+owner retirement keep their existing behavior. No operator SQL outside the Plane recovery facade
+is authorized by this procedure.
+
+For recovery from a failed upgrade, preserve the failed database, keep writers closed, and restore
+the verified pre-upgrade PostgreSQL and paired durable-root snapshot as one unit. Do not drop the
+new column/constraints or alter revision markers to simulate a downgrade. Forward retry is allowed
+only after the original predecessor/current catalog and exact composition have passed verification.
+
+
+### `088.003` issuing metadata upgrade and recovery
+
+The guarded `088.002 -> 088.003` edge requires the exact predecessor registry digest
+`22d086ef60c5e73f124f3569268c4b48138871b1614ac538ab7f685a1b313afc` and full catalog.
+It adds nullable `web_session.issuing_issuer` / `issuing_client_id` columns and a
+paired, bounded-text constraint. Existing rows receive null/null; no issuer or
+client is guessed from ciphertext, configuration or JWT claims. Session
+incarnations, credentials, lifetimes, grants, assignments, permits, usage, audit and
+blob records are not rewritten. Same-name columns or a weakened predecessor catalog
+are refused before the edge; partial failure rolls back columns and revision stamp.
+Repeated initialization verifies the complete current catalog and performs no
+metadata conversion. The immutable historical migration statements/digests remain
+pinned, including `088.002`.
+
+Before applying the edge, quiesce admission and all writers, retain the exact old
+composition, and verify the joint database/durable-root backup described above.
+Run the matched new composition's normal migration registry, then verify repeat
+startup and host compatibility before reopening. This storage prerequisite neither
+establishes new native credentials nor changes legacy execution eligibility.
+
+On failure, keep writers closed and preserve the failed state. Use verified forward
+retry or restore the paired pre-upgrade database/durable roots and matching
+composition. Do not drop fields or alter schema markers to simulate downgrade.
+After any joint restore, the explicit complete restored-session retirement procedure
+still applies: restart all process caches and obtain fresh institutional authority
+before reopening; preserve grants/operations and issued liabilities for refusal and
+settlement. The recovery API verifies the matching current revision/digest and will
+not operate against an old schema using new metadata assumptions.
+
+The same 088.003 edge adds nullable `auth_revocation_queue.issuing_issuer` and a
+conditional issuer/client structural constraint. Existing queue records retain
+their ciphertext, client (including null), timestamps, attempt count, and IDs;
+issuer remains unknown. This migration does not dispatch, resolve, or relabel
+queued revocations.

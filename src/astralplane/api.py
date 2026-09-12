@@ -85,6 +85,11 @@ from astralplane.purge import (
 )
 from astralplane.reconciliation import ReconciliationReport, ReconciliationRunner
 from astralplane.reconciliation_store import PostgresReconciliationCoordinator
+from astralplane.recovery import (
+    RestoredSessionRetirement,
+    SessionRetirementError,
+    retire_restored_sessions,
+)
 from astralplane.repositories.agent_management import AgentManagementRepository
 from astralplane.repositories.agents import AgentRepository, AgentRevisionRecord
 from astralplane.repositories.artifacts import (
@@ -832,6 +837,8 @@ __all__ = (
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
+    "RestoredSessionRetirement",
+    "SessionRetirementError",
     "StagedBundleReceipt",
     "canonical_bundle_digest",
     "canonical_generated_agent_manifest_digest",
@@ -885,5 +892,6 @@ __all__ = (
     "initialize_empty_database",
     "inspect_baseline_compatibility",
     "paths_for",
+    "retire_restored_sessions",
     "runtime_metadata_for_manifest",
 )

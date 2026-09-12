@@ -1,6 +1,7 @@
 """Persistent assignment storage invariants (feature 079)."""
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -90,7 +91,11 @@ def test_definition_rejects_unbounded_invalid_authority(change):
         AssignmentRepository.validate_definition(replace(definition(), **change))
 
 
-@pytest.mark.parametrize("value", [float("inf"), object(), {"a": set()}, "x" * 300000])
+@pytest.mark.parametrize(
+    "value",
+    [float("inf"), object(), {"a": set()}, "x" * 300000],
+    ids=("infinity", "object", "set", "oversized"),
+)
 def test_noncanonical_and_oversized_data_is_refused(value):
     with pytest.raises(RepositoryValidationError):
         canonical(value)
@@ -101,3 +106,65 @@ def test_naive_time_is_refused():
 
     with pytest.raises(RepositoryValidationError):
         plain(datetime(2026, 1, 1))
+
+
+def operation_definition(**changes):
+    """One-shot ceilings have no synthetic recurrence or offline permission."""
+    limits = {
+        k: v
+        for k, v in definition().limits.items()
+        if not k.startswith("daily_") and k != "cadence_seconds"
+    }
+    return replace(
+        definition(), source={}, allowed_tools=(), offline_grant_id=None, limits=limits, **changes
+    )
+
+
+def test_one_shot_definition_is_explicit_and_does_not_relax_legacy():
+    value = operation_definition()
+    AssignmentRepository.validate_operation_definition(value)
+    with pytest.raises(RepositoryValidationError):
+        AssignmentRepository.validate_definition(value)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"allowed_tools": ("a", "a")},
+        {"source": []},
+        {"limits": {"tokens": 1}},
+        {"instructions": ""},
+    ],
+)
+def test_one_shot_definition_rejects_unbounded_inputs(changes):
+    with pytest.raises(RepositoryValidationError):
+        AssignmentRepository.validate_operation_definition(
+            replace(operation_definition(), **changes)
+        )
+
+
+def test_operation_authority_is_a_private_reference_not_a_claim_or_token():
+    from astralplane.repositories.assignment_models import AssignmentOperationAuthority
+
+    authority = AssignmentOperationAuthority(
+        owner_id="private-owner",
+        origin="interactive",
+        reference_kind="session",
+        reference_id="private-session-handle",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    assert "private-owner" not in repr(authority)
+    assert "private-session-handle" not in repr(authority)
+    with pytest.raises(TypeError):
+        AssignmentOperationAuthority(**dict(plain(authority), roles=["admin"]))
+
+
+@pytest.mark.parametrize(
+    "key,value", [("unbounded", True), ("max_retries", 4), ("cadence_seconds", 60)]
+)
+def test_one_shot_limits_are_closed_and_finite(key, value):
+    base = operation_definition()
+    with pytest.raises(RepositoryValidationError):
+        AssignmentRepository.validate_operation_definition(
+            replace(base, limits=dict(base.limits, **{key: value}))
+        )

@@ -43,6 +43,28 @@ class AssignmentDefinition(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentOperationAuthority(_Record):
+    """Host-verified reference metadata, never an authentication or dispatch permit."""
+
+    owner_id: str = field(repr=False)
+    origin: str
+    reference_kind: str
+    reference_id: str = field(repr=False)
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentOperationSpec(_Record):
+    """Bounded one-shot intent supplied through the trusted host's admission service."""
+
+    kind: str
+    authority: AssignmentOperationAuthority = field(repr=False)
+    deadline_at: datetime
+    source_retention: str
+    version: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentRecord(_Record):
     assignment_id: str
     owner_id: str = field(repr=False)
@@ -62,6 +84,8 @@ class AssignmentRecord(_Record):
     updated_at: datetime
     safe_error_code: str | None = None
     last_completed_generation: int = 0
+    execution_profile: str = "persistent"
+    operation: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +120,17 @@ class AssignmentControlResult(_Record):
     applied: bool
     invalidated_action_ids: tuple[str, ...] = ()
     begun_action_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentOperationRead(_Record):
+    """Owner-scoped controller snapshot; never a dispatch/authority grant."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    disposition: str
+    continuation_supported: bool
+    result_reference: str | None = field(default=None, repr=False)
+    terminal_outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +209,32 @@ class AssignmentResourceAmount(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentInputReference(_Record):
+    kind: str
+    resource_id: str = field(repr=False)
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentTransientInput(_Record):
+    binding_key_id: str
+    payload_binding: str = field(repr=False)
+    source_retention: str
+    references: tuple[AssignmentInputReference, ...] = field(default=(), repr=False)
+    reconstruction_kind: str = "model_messages"
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentResultDisposition(_Record):
+    available: bool
+    reason: str | None = None
+    references: tuple[AssignmentInputReference, ...] = field(default=(), repr=False)
+    binding_key_id: str | None = None
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentActionIntent(_Record):
     action_key: str
     request: Mapping[str, Any] = field(repr=False)
@@ -190,6 +251,9 @@ class AssignmentActionIntent(_Record):
     quote_digest: str | None = None
     quote_expires_at: datetime | None = None
     approval_expires_at: datetime | None = None
+    transient_input: AssignmentTransientInput | Mapping[str, Any] | None = field(
+        default=None, repr=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +295,7 @@ class AssignmentActionOutcome(_Record):
     result: Mapping[str, Any] = field(default_factory=dict, repr=False)
     evidence_reference: str | None = None
     actual: AssignmentResourceAmount | None = None
+    result_disposition: AssignmentResultDisposition | Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +343,9 @@ class AssignmentEpisodeCompletion(_Record):
     activity: AssignmentActivityRecord | None = None
     safe_error_code: str | None = None
     completed: bool = False
+    terminal_outcome: str | None = None
+    result_reference: str | None = field(default=None, repr=False)
+    event_wait: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,3 +367,4 @@ class AssignmentOwnerRetirementResult(_Record):
     stopped_assignment_ids: tuple[str, ...] = ()
     deleted_assignment_ids: tuple[str, ...] = ()
     unresolved_action_ids: tuple[str, ...] = ()
+    retained_assignment_ids: tuple[str, ...] = ()

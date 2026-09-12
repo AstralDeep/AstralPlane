@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,6 +45,8 @@ class FakeTransaction:
 
     def fetch_one(self, statement: str, parameters: object = ()) -> dict[str, Any] | None:
         self.calls.append(("fetch_one", statement, parameters))
+        if "pg_advisory_xact_lock" in statement or "astralplane_blob_owner_state" in statement:
+            return None
         return self.fetch_one_results.popleft() if self.fetch_one_results else None
 
     def fetch_all(self, statement: str, parameters: object = ()) -> tuple[dict[str, Any], ...]:
@@ -89,9 +91,15 @@ def message_row(**changes: Any) -> dict[str, Any]:
     return row
 
 
+INCARNATION = "12345678-1234-4234-8234-123456789abc"
+
+
 def session_row(**changes: Any) -> dict[str, Any]:
     row = {
         "sid": "session-1",
+        "incarnation_id": INCARNATION,
+        "issuing_issuer": None,
+        "issuing_client_id": None,
         "user_id": "owner-1",
         "access_token_enc": "cipher-a",
         "refresh_token_enc": "cipher-r",
@@ -707,13 +715,13 @@ def test_session_put_get_delete_and_owner_conflict() -> None:
     )
     transaction = FakeTransaction()
     transaction.execute_results.append(returned(session_row()))
-    assert repository.put(transaction, record) == record
-    assert "ON CONFLICT (sid) DO NOTHING" in transaction.calls[0][1]
+    assert repository.put(transaction, record) == replace(record, incarnation_id=INCARNATION)
+    assert "ON CONFLICT (sid) DO NOTHING" in transaction.calls[2][1]
 
     replay = FakeTransaction()
     replay.execute_results.append(Result(rowcount=0))
     replay.fetch_one_results.append(session_row())
-    assert repository.put(replay, record) == record
+    assert repository.put(replay, record) == replace(record, incarnation_id=INCARNATION)
 
     query = FakeTransaction()
     query.fetch_one_results.extend((session_row(resumed=True), None))
@@ -721,8 +729,12 @@ def test_session_put_get_delete_and_owner_conflict() -> None:
     assert repository.get(query, owner_id="owner-1", session_id="missing") is None
 
     transaction.execute_results.extend((Result(rowcount=1), Result(rowcount=0)))
-    assert repository.delete(transaction, owner_id="owner-1", session_id="session-1")
-    assert not repository.delete(transaction, owner_id="owner-1", session_id="session-1")
+    assert repository.delete(
+        transaction, owner_id="owner-1", session_id="session-1", expected_incarnation_id=INCARNATION
+    )
+    assert not repository.delete(
+        transaction, owner_id="owner-1", session_id="session-1", expected_incarnation_id=INCARNATION
+    )
 
     conflict = FakeTransaction()
     conflict.execute_results.append(Result(rowcount=0))
@@ -735,14 +747,26 @@ def test_session_delete_returns_only_the_exact_owner_scoped_final_record() -> No
     repository = SessionRepository()
     tx = FakeTransaction()
     tx.fetch_one_results.extend((session_row(refresh_token_enc="latest-cipher"), None))
-    deleted = repository.delete_and_return(tx, owner_id="owner-1", session_id="session-1")
+    deleted = repository.delete_and_return(
+        tx, owner_id="owner-1", session_id="session-1", expected_incarnation_id=INCARNATION
+    )
     assert deleted.refresh_token_ciphertext == "latest-cipher"
     assert "DELETE FROM web_session" in tx.calls[0][1]
     assert "RETURNING" in tx.calls[0][1]
-    assert tx.calls[0][2] == ("session-1", "owner-1")
-    assert repository.delete_and_return(tx, owner_id="owner-1", session_id="missing") is None
+    assert tx.calls[0][2] == ("session-1", "owner-1", INCARNATION)
+    assert (
+        repository.delete_and_return(
+            tx, owner_id="owner-1", session_id="missing", expected_incarnation_id=INCARNATION
+        )
+        is None
+    )
     with pytest.raises(RepositoryValidationError):
-        repository.delete_and_return(FakeTransaction(), owner_id="", session_id="session-1")
+        repository.delete_and_return(
+            FakeTransaction(),
+            owner_id="",
+            session_id="session-1",
+            expected_incarnation_id=INCARNATION,
+        )
 
 
 def test_session_refresh_requires_an_exact_monotonic_generation() -> None:
@@ -753,39 +777,41 @@ def test_session_refresh_requires_an_exact_monotonic_generation() -> None:
         access_token_ciphertext="cipher-new-a",
         refresh_token_ciphertext="cipher-new-r",
         interactive_anchor=10,
-        hard_expires_at=120,
+        hard_expires_at=100,
         last_refresh_at=30,
         resumed=True,
         created_at=5,
+        incarnation_id=INCARNATION,
     )
     transaction = FakeTransaction()
-    transaction.execute_results.append(returned(session_row(
-        access_token_enc="cipher-new-a",
-        refresh_token_enc="cipher-new-r",
-        hard_expires_at=120,
-        last_refresh_at=30,
-        resumed=True,
-    )))
-    assert repository.compare_and_set_refresh(
-        transaction, refreshed, expected_last_refresh_at=20
-    ) == refreshed
+    transaction.execute_results.append(
+        returned(
+            session_row(
+                access_token_enc="cipher-new-a",
+                refresh_token_enc="cipher-new-r",
+                hard_expires_at=100,
+                last_refresh_at=30,
+                resumed=True,
+            )
+        )
+    )
+    assert (
+        repository.compare_and_set_refresh(transaction, refreshed, expected_last_refresh_at=20)
+        == refreshed
+    )
     assert "last_refresh_at = %s" in transaction.calls[0][1]
-    assert transaction.calls[0][2][-1] == 20
+    assert transaction.calls[0][2][-4:] == (20, INCARNATION, None, None)
 
     stale = FakeTransaction()
     stale.execute_results.append(Result(rowcount=0))
     stale.fetch_one_results.append(session_row(last_refresh_at=25))
     with pytest.raises(RepositoryConflictError, match="stale"):
-        repository.compare_and_set_refresh(
-            stale, refreshed, expected_last_refresh_at=20
-        )
+        repository.compare_and_set_refresh(stale, refreshed, expected_last_refresh_at=20)
     missing = FakeTransaction()
     missing.execute_results.append(Result(rowcount=0))
     missing.fetch_one_results.append(None)
     with pytest.raises(RepositoryNotFoundError):
-        repository.compare_and_set_refresh(
-            missing, refreshed, expected_last_refresh_at=20
-        )
+        repository.compare_and_set_refresh(missing, refreshed, expected_last_refresh_at=20)
     with pytest.raises(RepositoryValidationError, match="advance"):
         repository.compare_and_set_refresh(
             FakeTransaction(), refreshed, expected_last_refresh_at=30
@@ -800,18 +826,12 @@ def test_session_administrative_reads_are_explicit_and_bounded_by_time() -> None
     assert repository.get_by_session_id_for_administration(
         query, session_id="session-1"
     ) == SessionRecord(
-        "session-1", "owner-1", "cipher-a", "cipher-r", 10, 100, 20, False, 5
+        "session-1", "owner-1", "cipher-a", "cipher-r", 10, 100, 20, False, 5, INCARNATION
     )
-    assert repository.get_by_session_id_for_administration(
-        query, session_id="missing"
-    ) is None
-    latest = repository.get_latest_live_for_owner(
-        query, owner_id="owner-1", observed_at=50
-    )
+    assert repository.get_by_session_id_for_administration(query, session_id="missing") is None
+    latest = repository.get_latest_live_for_owner(query, owner_id="owner-1", observed_at=50)
     assert latest is not None and latest.session_id == "session-1"
-    assert repository.get_latest_live_for_owner(
-        query, owner_id="owner-2", observed_at=50
-    ) is None
+    assert repository.get_latest_live_for_owner(query, owner_id="owner-2", observed_at=50) is None
 
     assert query.calls[0][2] == ("session-1",)
     assert "hard_expires_at > %s" in query.calls[2][1]
@@ -828,12 +848,13 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
         changed,
         owner_id="owner-1",
         session_id="session-1",
+        expected_incarnation_id=INCARNATION,
         expected_resumed=False,
         resumed=True,
     )
     assert record.resumed
     assert "user_id = %s AND resumed = %s" in changed.calls[0][1]
-    assert changed.calls[0][2] == (True, "session-1", "owner-1", False)
+    assert changed.calls[0][2] == (True, "session-1", "owner-1", False, INCARNATION)
 
     replay = FakeTransaction()
     replay.execute_results.append(Result(rowcount=0))
@@ -842,6 +863,7 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
         replay,
         owner_id="owner-1",
         session_id="session-1",
+        expected_incarnation_id=INCARNATION,
         expected_resumed=False,
         resumed=True,
     ).resumed
@@ -854,6 +876,7 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
             stale,
             owner_id="owner-1",
             session_id="session-1",
+            expected_incarnation_id=INCARNATION,
             expected_resumed=False,
             resumed=True,
         )
@@ -866,6 +889,7 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
             missing,
             owner_id="owner-1",
             session_id="session-1",
+            expected_incarnation_id=INCARNATION,
             expected_resumed=False,
             resumed=True,
         )
@@ -875,6 +899,7 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
             FakeTransaction(),
             owner_id="owner-1",
             session_id="session-1",
+            expected_incarnation_id=INCARNATION,
             expected_resumed=0,  # type: ignore[arg-type]
             resumed=True,
         )
@@ -883,6 +908,7 @@ def test_session_mark_resumed_uses_owner_compare_and_set_and_is_replay_safe() ->
             FakeTransaction(),
             owner_id="owner-1",
             session_id="session-1",
+            expected_incarnation_id=INCARNATION,
             expected_resumed=True,
             resumed=True,
         )
@@ -894,9 +920,7 @@ def test_session_administrative_deletes_validate_driver_counts() -> None:
     transaction.execute_results.extend((Result(rowcount=3), Result(rowcount=2)))
 
     assert repository.delete_owner(transaction, owner_id="owner-1") == 3
-    assert repository.delete_expired_for_administration(
-        transaction, observed_at=100
-    ) == 2
+    assert repository.delete_expired_for_administration(transaction, observed_at=100) == 2
     assert transaction.calls[0][2] == ("owner-1",)
     assert transaction.calls[1][2] == (100,)
 
