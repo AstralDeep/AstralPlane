@@ -327,6 +327,16 @@ class AssignmentActionReconciliationPreparation(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentOwnerWaitPreparation(_Record):
+    """Locked safe-control facts, valid only in the caller's current transaction."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    replayed: bool
+    invalidated_action_ids: tuple[str, ...] = ()
+    begun_action_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentActivityRecord(_Record):
     activity_key: str
     activity_type: str

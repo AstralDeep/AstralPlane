@@ -44,6 +44,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentOperationRead,
     AssignmentOperationSpec,
     AssignmentOwnerRetirementResult,
+    AssignmentOwnerWaitPreparation,
     AssignmentRecord,
     AssignmentRecoveryResult,
     AssignmentResourceAmount,
@@ -1397,6 +1398,198 @@ class AssignmentRepository:
             (owner_id,),
         )
         return not retired or retired["state"] == "active"
+
+    def _prepare_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version,
+    ):
+        _uuid(submission_id)
+        _digest(submission_digest)
+        _integer(control_version, 1, 1)
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _integer(expected_state_version, 1)
+        _text(event_key, 128)
+        _integer(source_revision)
+        self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_profile_mismatch")
+        signature = [
+            "wait",
+            control_version,
+            event_key,
+            source_revision,
+            expected_instruction_revision,
+            expected_control_epoch,
+            expected_state_version,
+            submission_digest,
+        ]
+        prior = data["controls"].get(submission_id)
+        if prior is not None:
+            if canonical(prior) != canonical(
+                {
+                    "signature": signature,
+                    "submission_digest": submission_digest,
+                    "command": "wait",
+                }
+            ):
+                _conflict("assignment_idempotency_conflict")
+            return data, signature, True, (), ()
+        if data["submission_id"] == submission_id:
+            _conflict("assignment_idempotency_conflict")
+        _require_executable(data)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if (
+            data["lifecycle"] not in {"active", "paused"}
+            or data["operation"].get("terminal_outcome") is not None
+            or (data["phase"] == "failed" and data["next_retry_at"] is None)
+        ):
+            _conflict("assignment_not_waiting")
+        state = data["operation"].get("control", {"watermarks": {}})
+        if source_revision < state["watermarks"].get(event_key, 0):
+            _conflict("assignment_event_revision_conflict")
+        if len(data["controls"]) >= 256 or (
+            event_key not in state["watermarks"] and len(state["watermarks"]) >= 64
+        ):
+            _conflict("assignment_history_capacity_exhausted")
+        actions, unresolved, _ = self._purge_blockers(transaction, data)
+        # Reserved attempts have no issued effect and can be invalidated. Unknown,
+        # started and uncertain action versions remain conservative liabilities.
+        invalidated = tuple(
+            action["action_id"]
+            for action in actions
+            if action["state"] in {"ready", "proposed", "approved", "reserved"}
+            and not any(a["state"] in {"started", "uncertain"} for a in action["attempts"])
+        )
+        begun = tuple(identity for identity in unresolved if identity not in invalidated)
+        return data, signature, False, invalidated, begun
+
+    def prepare_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version=1,
+    ):
+        """Read/lock the exact owner wait decision without writing or borrowing a claim.
+
+        Owner precedes assignment and sorted action locks. The host authenticates
+        the current owner and may audit these facts, then calls set_owner_event_wait
+        with identical arguments in this same bounded transaction. This safe hold
+        needs no execution session and grants no continuation or output authority.
+        """
+        data, _, replayed, invalidated, begun = self._prepare_owner_event_wait(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            submission_id=submission_id,
+            submission_digest=submission_digest,
+            event_key=event_key,
+            source_revision=source_revision,
+            control_version=control_version,
+        )
+        return AssignmentOwnerWaitPreparation(_record(data), replayed, invalidated, begun)
+
+    def set_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version=1,
+    ):
+        """Commit an idempotent owner hold and retire every prior worker delivery fence.
+
+        Revalidate after preparation/audit waits. A savepoint protects all mutation
+        if an error is caught; required host audit preceding this call remains in
+        the enclosing transaction, which the caller must abort on final failure.
+        Returned facts are provisional until that transaction commits. Original
+        session authority is still required for later continuation, never borrowed
+        from this safe control. Authentic issued consumption remains settleable.
+        """
+        with transaction.savepoint("assignment_owner_wait_" + uuid.uuid4().hex):
+            data, signature, replayed, _, _ = self._prepare_owner_event_wait(
+                transaction,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+                expected_instruction_revision=expected_instruction_revision,
+                expected_control_epoch=expected_control_epoch,
+                expected_state_version=expected_state_version,
+                submission_id=submission_id,
+                submission_digest=submission_digest,
+                event_key=event_key,
+                source_revision=source_revision,
+                control_version=control_version,
+            )
+            if replayed:
+                return AssignmentControlResult(_record(data), False)
+            data["controls"][submission_id] = {
+                "signature": signature,
+                "submission_digest": submission_digest,
+                "command": "wait",
+            }
+            state = _operation_control(data["operation"])
+            state["wait"] = {"event_key": event_key, "source_revision": source_revision}
+            state["watermarks"].setdefault(event_key, 0)
+            data["control_epoch"] += 1
+            self._clear_claim(data)
+            invalidated, begun = self._invalidate_actions(transaction, data, conservative=True)
+            for task in data["tasks"]:
+                if task["state"] in {"pending", "running"}:
+                    task["state"] = "pending"
+                    task["task_generation"] += 1
+            _, _, held = self._purge_blockers(transaction, data)
+            held = held or data["phase"] == "reconciliation"
+            data.update(
+                phase="reconciliation" if held else "awaiting_event",
+                next_wake_at=None,
+                next_retry_at=None,
+                wake_reason="event_wait",
+            )
+            if not held:
+                data["safe_error_code"] = None
+            self._activity(
+                transaction,
+                data,
+                AssignmentActivityRecord(
+                    f"control:{submission_id}", "control", "Assignment wait", ""
+                ),
+                critical=True,
+            )
+            return AssignmentControlResult(
+                self._save(transaction, data), True, tuple(invalidated), tuple(begun)
+            )
 
     def set_event_wait(
         self,

@@ -102,6 +102,41 @@ already scheduled retry. Source-less interactive resume validates its operation
 authority and references without inventing an offline grant. Revocation cannot be
 undone by pausing and resuming. Cancellation preserves started/uncertain liabilities.
 
+Owner-directed waiting does not borrow a worker's `set_event_wait` completion
+fence. Use `prepare_owner_event_wait` followed by `set_owner_event_wait` with the
+same arguments in one bounded caller transaction: owner/assignment, observed
+instruction/control/state vector, canonical UUID4 `submission_id`, command digest,
+`event_key` (128-byte bound), nonnegative `source_revision`, and `control_version=1`.
+Preparation locks owner then assignment then all action rows in stable ID order,
+writes nothing, and returns `AssignmentOwnerWaitPreparation(assignment, replayed,
+invalidated_action_ids, begun_action_ids)`. The host authenticates the current
+owner and appends its required same-transaction audit only for a new receipt.
+Final mutation independently repeats validation and inventory after any waits.
+
+A new wait supports known interactive-v2 one-shot records that are active or
+paused. It refuses terminal/unsupported records, stale counters and old source
+watermarks. Original execution-session expiry or retirement does not prevent a
+safe hold. Waiting stores the existing event-wait structure, advances the control
+epoch, clears the claim and fences pending/running child generations. It preserves
+the checkpoint, original authority/deadline, spent usage and issued/unknown
+liabilities. Only unstarted work is invalidated and its unused reservations
+released. Existing reconciliation/unknown holds remain in reconciliation; otherwise
+the phase becomes awaiting-event. Paused lifecycle remains paused. Neither path
+schedules work or grants resume/wake authority. Later continuation still requires
+the qualified host's current original-session authority and all existing holds.
+
+The final method returns the existing `AssignmentControlResult`. Its `wait`
+receipt uses the existing control namespace and an exact command/counter/event
+signature; conflicting reuse refuses, and exact replay returns without another
+mutation or audit even after later cancellation. A new wait refuses at 256 control
+receipts rather than evicting history. Other existing safe controls retain their
+bounded-history policy, so a receipt may eventually be evicted by those controls;
+the original epoch then prevents reapplication. No schema or stored version changes.
+The final savepoint rolls back all wait/action/activity writes if a caller catches
+a failure. Required audit before that savepoint remains provisional: the host must
+abort the enclosing transaction on final failure, and only a committed result may
+be delivered. The preparation is not a capability outside that transaction.
+
 One-shot `finish_episode` requires explicit due time for a nonterminal queued yield;
 it never reads persistent cadence. Transient failures use 5/15/45-second bounded
 retries inside the original deadline/authority lifetime and configured retry ceiling.
