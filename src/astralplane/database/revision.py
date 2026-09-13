@@ -11,8 +11,8 @@ from astralplane.errors import SchemaRevisionError
 _REVISION_PATTERN = re.compile(r"^[0-9]{3}\.[0-9]{3}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-SCHEMA_PREDECESSOR_REVISION: Final = "088.003"
-SCHEMA_REVISION: Final = "088.004"
+SCHEMA_PREDECESSOR_REVISION: Final = "088.004"
+SCHEMA_REVISION: Final = "088.005"
 READ_COMPATIBLE_FROM: Final = "066.001"
 ADVISORY_LOCK_IDS: Final = ((1095980114, 60001), (1095980114, 60002))
 

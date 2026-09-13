@@ -555,6 +555,252 @@ class AssignmentRepository:
         except (KeyError, TypeError, ValueError, RepositoryValidationError) as exc:
             raise RepositoryDataError("invalid persisted assignment") from exc
 
+    def bind_guidance_references(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        references,
+    ):
+        """Bind the initial exact selection, never silently rebind stale guidance.
+
+        The host already holds current caller/session authority. This storage
+        boundary grants none. Explicit instruction-revision replacement is a
+        separate host contract; this initial binding refuses any prior selection.
+        """
+        from astralplane.repositories.guidance_models import GuidanceReference
+
+        if type(references) is not tuple or any(
+            type(ref) is not GuidanceReference for ref in references
+        ):
+            raise RepositoryValidationError("typed guidance references required")
+        references = tuple(
+            GuidanceReference(ref.kind, ref.resource_id, ref.revision) for ref in references
+        )
+        if (
+            sum(ref.kind == "skill" for ref in references) > 20
+            or sum(ref.kind == "note" for ref in references) > 8
+            or len({(ref.kind, ref.resource_id) for ref in references}) != len(references)
+        ):
+            raise RepositoryValidationError("guidance selection exceeds bounds")
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        existing = transaction.fetch_all(
+            (
+                "SELECT * FROM assignment_guidance_reference WHERE owner_id=%s AND assi"
+                "gnment_id=%s ORDER BY kind,resource_id"
+            ),
+            (owner_id, assignment_id),
+        )
+        requested = sorted((ref.kind, ref.resource_id, ref.revision) for ref in references)
+        selection = transaction.fetch_one(
+            "SELECT * FROM assignment_guidance_selection WHERE owner_id=%s AND assignment_id=%s",
+            (owner_id, assignment_id),
+        )
+        if selection is not None:
+            if selection["reference_digest"] != digest(requested):
+                _conflict("assignment_guidance_revision_conflict")
+            actual = [(row["kind"], str(row["resource_id"]), row["revision"]) for row in existing]
+            if actual != requested or any(
+                row["instruction_revision"] != data["instruction_revision"] for row in existing
+            ):
+                _conflict("assignment_guidance_revision_conflict")
+            self._assert_guidance_current(transaction, data)
+            return _record(data)
+        if (
+            data["lifecycle"] != "active"
+            or data["phase"] != "waiting"
+            or data["instruction_revision"] != 1
+            or data["claim_generation"] != 0
+            or data["claim_token"] is not None
+            or data["tasks"]
+            or transaction.fetch_one(
+                "SELECT id FROM persistent_assignment_action WHERE assignment_id=%s LIMIT 1",
+                (assignment_id,),
+            )
+        ):
+            _conflict("assignment_guidance_binding_closed")
+        if existing:
+            raise RepositoryDataError("guidance references have no selection header")
+        with transaction.savepoint("assignment_guidance_bind"):
+            transaction.execute(
+                (
+                    "INSERT INTO assignment_guidance_selection(owner_id,assignment_id,instr"
+                    "uction_revision,reference_digest,created_at) VALUES(%s,%s,%s,%s,floor("
+                    "extract(epoch FROM clock_timestamp())*1000)::bigint)"
+                ),
+                (owner_id, assignment_id, data["instruction_revision"], digest(requested)),
+            )
+            for ref in references:
+                transaction.execute(
+                    (
+                        "INSERT INTO assignment_guidance_reference(owner_id,assignment_id,instr"
+                        "uction_revision,kind,resource_id,revision) VALUES(%s,%s,%s,%s,%s,%s)"
+                    ),
+                    (
+                        owner_id,
+                        assignment_id,
+                        data["instruction_revision"],
+                        ref.kind,
+                        ref.resource_id,
+                        ref.revision,
+                    ),
+                )
+            self._assert_guidance_current(transaction, data)
+            return self._save(transaction, data)
+
+    def assert_guidance_current(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+    ):
+        """Read exact selected revisions under owner/assignment locks, no authority."""
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        self._assert_guidance_current(transaction, data)
+        return _record(data)
+
+    @staticmethod
+    def _assert_guidance_current(transaction, data):
+        from astralplane.repositories.guidance import ExplicitNotesRepository, SkillsRepository
+        from astralplane.repositories.guidance_models import ExplicitNoteRecord, GuidanceReference
+
+        rows = transaction.fetch_all(
+            (
+                "SELECT * FROM assignment_guidance_reference WHERE owner_id=%s AND assi"
+                "gnment_id=%s ORDER BY kind,resource_id"
+            ),
+            (data["owner_id"], data["assignment_id"]),
+        )
+        header = transaction.fetch_one(
+            "SELECT * FROM assignment_guidance_selection WHERE owner_id=%s AND assignment_id=%s",
+            (data["owner_id"], data["assignment_id"]),
+        )
+        if header is not None:
+            actual = [(row["kind"], str(row["resource_id"]), row["revision"]) for row in rows]
+            if header["reference_digest"] != digest(actual):
+                raise RepositoryDataError("guidance selection does not match its references")
+            if header["instruction_revision"] != data["instruction_revision"]:
+                _conflict("assignment_guidance_changed")
+        elif rows:
+            raise RepositoryDataError("guidance references have no selection header")
+        if len(rows) > 28:
+            raise RepositoryDataError("invalid stored guidance selection")
+        expiries = []
+        for row in rows:
+            ref = GuidanceReference(row["kind"], str(row["resource_id"]), row["revision"])
+            if (
+                row["invalidated_at"] is not None
+                or row["instruction_revision"] != data["instruction_revision"]
+            ):
+                _conflict("assignment_guidance_changed")
+            if ref.kind == "skill":
+                current = SkillsRepository().get(
+                    transaction, owner_id=data["owner_id"], skill_id=ref.resource_id
+                )
+                valid = current is not None and current.enabled and current.revision == ref.revision
+            else:
+                current = ExplicitNotesRepository().get_explicit_note(
+                    transaction,
+                    owner_id=data["owner_id"],
+                    note_id=ref.resource_id,
+                    include_disabled=False,
+                )
+                valid = type(current) is ExplicitNoteRecord and current.revision == ref.revision
+                if valid and current.expires_at is not None:
+                    expiries.append(current.expires_at)
+            if not valid:
+                _conflict("assignment_guidance_changed")
+        if expiries:
+            from astralplane.repositories.guidance import _clock
+
+            if min(expiries) <= _clock(transaction):
+                _conflict("assignment_guidance_changed")
+
+    def _lock_guidance_dependants(self, transaction, owner_id, kind, resource_id):
+        """Caller holds owner 79. Lock every affected assignment, then all actions.
+
+        All resource writers and reference binding share that owner lock, so the
+        reference set cannot grow while the caller later locks a resource head.
+        No head is locked here; opaque rows are retained without reinterpretation.
+        """
+        rows = transaction.fetch_all(
+            (
+                "SELECT a.* FROM persistent_assignment a WHERE a.owner_user_id=%s AND a"
+                ".lifecycle IN ('active','paused') AND EXISTS(SELECT 1 FROM assignment_"
+                "guidance_reference r WHERE r.owner_id=a.owner_user_id AND r.assignment"
+                "_id=a.id AND r.kind=%s AND r.resource_id=%s AND r.active AND r.invalid"
+                "ated_at IS NULL) ORDER BY a.id FOR UPDATE"
+            ),
+            (owner_id, kind, resource_id),
+        )
+        identities = [str(row["id"]) for row in rows]
+        if identities:
+            transaction.fetch_all(
+                (
+                    "SELECT id FROM persistent_assignment_action WHERE owner_user_id=%s AND"
+                    " assignment_id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE"
+                ),
+                (owner_id, identities),
+            )
+        return rows
+
+    def _invalidate_guidance_dependants(self, transaction, owner_id, kind, resource_id):
+        rows = self._lock_guidance_dependants(transaction, owner_id, kind, resource_id)
+        for row in rows:
+            data = self._validated_assignment_row(row, owner_id, str(row["id"]))
+            if not _supported(data):
+                # Preserve opaque future records and all accounting. Their exact
+                # reference is still invalidated; no supported reader can adopt it.
+                continue
+            data["control_epoch"] += 1
+            self._clear_claim(data)
+            _, begun = self._invalidate_actions(transaction, data, conservative=True)
+            for task in data["tasks"]:
+                if task["state"] in {"pending", "running"}:
+                    task["task_generation"] += 1
+                    task["state"] = "pending"
+            phase = data["phase"]
+            if phase not in {
+                "waiting_authorization",
+                "awaiting_event",
+                "waiting_approval",
+                "budget_exhausted",
+                "reconciliation",
+            }:
+                phase = "reconciliation" if begun else "waiting"
+            data.update(
+                lifecycle="paused",
+                phase=phase,
+                safe_error_code="guidance_changed",
+                next_wake_at=None,
+                next_retry_at=None,
+            )
+            self._save(transaction, data)
+        transaction.execute(
+            (
+                "UPDATE assignment_guidance_reference SET invalidated_at=floor(extract("
+                "epoch FROM clock_timestamp())*1000)::bigint WHERE owner_id=%s AND kind"
+                "=%s AND resource_id=%s AND active AND invalidated_at IS NULL"
+            ),
+            (owner_id, kind, resource_id),
+        )
+
     def _save(self, transaction, data):
         old_version = data["state_version"]
         data["state_version"] += 1
@@ -576,6 +822,12 @@ class AssignmentRepository:
         )
         if row is None:
             _conflict("assignment_revision_conflict")
+        if data["lifecycle"] in _TERMINAL:
+            transaction.execute(
+                "UPDATE assignment_guidance_reference SET active=FALSE WHERE owner_id=%s "
+                "AND assignment_id=%s AND active",
+                (data["owner_id"], data["assignment_id"]),
+            )
         return _record(data)
 
     def _fenced(self, transaction, fence, *, action_id=None):
@@ -609,6 +861,7 @@ class AssignmentRepository:
         )
 
     def _claim(self, transaction, data, worker_id, lease_seconds, action_id=None):
+        self._assert_guidance_current(transaction, data)
         _text(worker_id, 128)
         _integer(lease_seconds, 5, 60)
         previous = data.get("operation_binding")
@@ -1229,6 +1482,7 @@ class AssignmentRepository:
             # Capacity must never make pause, stop or revocation unavailable.
             data["controls"].pop(next(iter(data["controls"])))
         if control == AssignmentControl.REVISE:
+            self._assert_guidance_current(transaction, data)
             if replacement is None:
                 raise RepositoryValidationError("replacement definition required")
             if one_shot:
@@ -1307,6 +1561,7 @@ class AssignmentRepository:
             if one_shot:
                 _operation_control(data["operation"])["wait"] = None
         elif control == AssignmentControl.RESUME:
+            self._assert_guidance_current(transaction, data)
             if data["lifecycle"] != "paused":
                 _conflict("assignment_not_paused")
             if one_shot:
@@ -1383,6 +1638,7 @@ class AssignmentRepository:
 
     def _validate_operation_continuation(self, transaction, data, definition=None):
         """Local lineage checks supplement, never replace, current host authentication."""
+        self._assert_guidance_current(transaction, data)
         _require_executable(data)
         if data["phase"] == "waiting_authorization":
             _conflict("assignment_authorization_unavailable")
@@ -2088,6 +2344,7 @@ class AssignmentRepository:
             selected
         ):
             _conflict("assignment_authorization_unavailable")
+        self._assert_guidance_current(transaction, data)
         self._assert_bound_admission(transaction, data, binding)
         # A lock wait can cross either local lease/authority deadline. Never
         # authorize with the timestamp sampled before the admission lock.
@@ -2098,6 +2355,7 @@ class AssignmentRepository:
             self._validate_operation_continuation(transaction, data)
         else:
             self._validate_references(transaction, fence.owner_id, _definition(data["definition"]))
+        self._assert_guidance_current(transaction, data)
         return _record(data)
 
     @staticmethod

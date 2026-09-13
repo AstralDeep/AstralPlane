@@ -336,6 +336,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -380,6 +381,9 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane_blob_owner_state",
     }
     expected_search_path = [f"search_path=pg_catalog, {fixture.schema}, pg_temp"]
+    assert function_configurations.pop("reject_guidance_snapshot_update") == [
+        "search_path=pg_catalog"
+    ]
     assert set(function_configurations) == {
         "astraldeep_positive_unique_int_array",
         "astralplane_attachment_id_is_canonical",
@@ -624,6 +628,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )
     trial_count = 50
     migration_owner_violations = 0
@@ -1007,6 +1012,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )
 
     cursor = fixture.connection.cursor()

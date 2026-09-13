@@ -140,6 +140,7 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
     ).applied_steps == (
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -243,4 +244,5 @@ def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(empty_
     ).applied_steps == (
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )

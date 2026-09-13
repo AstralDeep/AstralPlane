@@ -1,4 +1,4 @@
-"""Populated 088.003 upgrade, repeat, corruption, and transactional recovery."""
+"""Populated 088.003-to-current upgrade, repeat, corruption, and transactional recovery."""
 
 import uuid
 from dataclasses import replace
@@ -192,8 +192,11 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
             "started",
             "uncertain",
         }
-    assert current_runner(db).run(expected_revision="088.004").applied_steps == (
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == (
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -211,7 +214,9 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
             assert row.pop("published_revision_kind") == "executable"
         assert after == before
         assert not tx.fetch_all("SELECT * FROM user_agent_command_receipt")
-    assert current_runner(db).run(expected_revision="088.004").already_current
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).already_current
     # An older exact binary cannot silently accept or repair the new schema.
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="088.003")
@@ -236,7 +241,7 @@ def test_predecessor_corruption_refuses_without_partial_upgrade(empty_postgres_s
         tx.execute(corruption)
         before = retained_rows(tx, ("schema_meta",))
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.004")
+        current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert retained_rows(tx, ("schema_meta",)) == before
         assert (
@@ -266,8 +271,12 @@ def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(empty_post
             tx.fetch_one("SELECT to_regclass('user_agent_command_receipt') AS relation")["relation"]
             is None
         )
-    assert current_runner(db).run(expected_revision="088.004").applied_steps
-    assert current_runner(db).run(expected_revision="088.004").already_current
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).already_current
 
 
 @pytest.mark.parametrize(
@@ -284,8 +293,10 @@ def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(empty_post
 )
 def test_current_catalog_refuses_missing_declarative_guard(empty_postgres_schema, corruption):
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.004")
+    BaselineMigrationRunner(db, current_runner(db)).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.004")
+        current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)

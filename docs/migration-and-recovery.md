@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -171,6 +171,31 @@ drop definitions/receipts, rewrite revision markers, infer a downgrade, or activ
 definitions during startup. Apply the existing governed session-retirement restore
 procedure before reopening restored authority. The migration itself does not
 qualify Deep policy, UI, runtime adoption, or institutional staging.
+
+### `088.005` owner guidance and recovery
+
+This additive edge requires the exact `088.004` registry and catalog. It creates
+skill heads/immutable revisions/cutover markers, current encrypted-note rows, and
+an assignment guidance selection header/reference index. Existing executable and
+declarative agents, automatic memory, grants, issued permits, usage, and uncertain
+liabilities remain byte-for-byte unchanged. The migration does not import files,
+infer note values, bind assignments, or enable a host/UI consumer.
+
+Before applying it, close writers and record the joint database/root backup and
+component identities. Run the guarded registry, complete current-catalog check,
+populated upgrade/repeat and rollback/corruption checks before reopening admission.
+A failed edge rolls back its DDL and registry metadata. Prefer a guarded forward
+repair; do not drop new tables or rewrite the schema marker to simulate downgrade.
+Restore database and roots with their exact matching application and keys under
+closed admission, then apply governed session retirement and account for any
+post-backup note Forget/expiry before allowing reads. Logical current-row deletion
+does not erase MVCC, WAL, replicas, or old backups.
+
+The [owner guidance storage contract](owner-guidance-contracts.md) defines controlled
+file cutover, receipt/CAS semantics, note erasure and fair expiry, and ordered
+assignment invalidation. A successful schema qualification alone does not qualify
+Deep privacy/authentication, filesystem materialization, UI, T036 guidance adoption,
+or institutional staging.
 
 ### `079.001` deployment and recovery
 

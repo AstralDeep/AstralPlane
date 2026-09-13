@@ -22,6 +22,7 @@ from astralplane.repositories import (
     _single_returned,
     _structured_json,
 )
+from astralplane.repositories.guidance import ExplicitNotesRepository, SkillsRepository
 
 _SENTIMENTS = frozenset({"negative", "positive"})
 _FEEDBACK_CATEGORIES = frozenset(
@@ -845,7 +846,7 @@ class OnboardingRepository:
         return None if row is None else _onboarding(row)
 
 
-class PersonalizationRepository:
+class PersonalizationRepository(ExplicitNotesRepository):
     _PROFILE_FIELDS = """
         user_id, profession, goals, personality, dreaming_enabled,
         created_at, updated_at
@@ -1440,6 +1441,7 @@ class PreferencesRepository:
     """Grouping of preferences stores without connection or policy ownership."""
 
     def __init__(self) -> None:
+        self.skills = SkillsRepository()
         self.feedback = FeedbackRepository()
         self.onboarding = OnboardingRepository()
         self.personalization = PersonalizationRepository()

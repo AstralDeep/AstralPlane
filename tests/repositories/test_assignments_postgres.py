@@ -730,7 +730,9 @@ def test_profile_and_receipt_structure_repeat_verification(database):
     runner = MigrationRunner(
         database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
     )
-    assert runner.run(expected_revision="088.003").applied_steps == ()
+    assert runner.run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == ()
     with database.transaction() as transaction:
         rows = transaction.fetch_all("SELECT execution_profile,data FROM persistent_assignment")
         for row in rows:
@@ -812,13 +814,18 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
         runner = m.MigrationRunner(
             upgrade_database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
         )
-        assert runner.run(expected_revision="088.003").applied_steps == (
+        assert runner.run(
+            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+        ).applied_steps == (
             "astralplane-088-one-shot-operations",
             "astralplane-088-session-incarnation",
             "astralplane-088-session-issuer",
             "astralplane-088-declarative-agents",
+            "astralplane-088-owner-guidance",
         )
-        assert runner.run(expected_revision="088.003").already_current
+        assert runner.run(
+            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+        ).already_current
         with upgrade_database.transaction() as transaction:
             migrated = transaction.fetch_one(
                 "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
@@ -831,7 +838,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
                 "DROP CONSTRAINT assignment_operation_receipt_pkey"
             )
         with pytest.raises(SchemaRevisionError):
-            runner.run(expected_revision="088.003")
+            runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     finally:
         pool.close()
         connection.rollback()

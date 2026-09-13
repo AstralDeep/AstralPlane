@@ -12,6 +12,7 @@ from typing import Final
 from astralplane.contracts import MigrationCallable, PlaneDatabase, Transaction
 from astralplane.database.assignment_schema import ASSIGNMENT_SCHEMA_STATEMENTS
 from astralplane.database.declarative_agent_schema import DECLARATIVE_AGENT_SCHEMA_STATEMENTS
+from astralplane.database.guidance_schema import GUIDANCE_SCHEMA_STATEMENTS
 from astralplane.database.operation_schema import OPERATION_SCHEMA_STATEMENTS
 from astralplane.database.revision import DataPlaneRevision, validate_revision
 from astralplane.errors import MigrationDefinitionError, SchemaRevisionError
@@ -3459,6 +3460,12 @@ def _apply_plane_schema_088_004(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_088_005(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "088.004")
+    for statement in GUIDANCE_SCHEMA_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
@@ -3478,6 +3485,12 @@ WITH owned_tables(table_name) AS (
         ('agent_scopes'),
         ('agent_trust'),
         ('assignment_operation_receipt'),
+        ('assignment_guidance_reference'),
+        ('assignment_guidance_selection'),
+        ('owner_skill_head'),
+        ('owner_skill_revision'),
+        ('owner_skill_catalog'),
+        ('explicit_note_current'),
         ('astralplane_authority_binding'),
         ('astralplane_authority_lifecycle_operation'),
         ('astralplane_blob_owner_state'),
@@ -4440,10 +4453,10 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 # SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
-# This is generated only from a fresh canonical 088.004 schema and changes
+# This is generated only from a fresh canonical 088.005 schema and changes
 # whenever the structural verifier's expected catalog state changes.
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "5a46bdb17bcead3af6d1bb6a95c97aac04cf35a716ffd3f63b239836f0c30b72"
+    "b278966bf3a42458c72c1c859014c523a8da00d8acd0ee18a4e8ecb9f783835a"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4546,6 +4559,7 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
         ("e04e5d0b8984e89208cefb0321636dde3b85a25679849ba00fe95f99577d0a71",),
     ),
     ("088.003", ("aedb36a4c2ee25925158b5a3f04303b46c71b391a0fe6a4d25dbb3fd395c127b",)),
+    ("088.004", ("5a46bdb17bcead3af6d1bb6a95c97aac04cf35a716ffd3f63b239836f0c30b72",)),
 )
 
 
@@ -4918,6 +4932,16 @@ PLANE_SCHEMA_088_004_MIGRATION: Final = Migration(
     checksum=_statements_checksum(DECLARATIVE_AGENT_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_088_004,
 )
+PLANE_SCHEMA_088_004_REGISTRY_DIGEST: Final = (
+    "99e50e8f0aa6d4086bfe3e56701b951ebbb5bed9628631253f8dce2d935464e3"
+)
+PLANE_SCHEMA_088_005_MIGRATION: Final = Migration(
+    name="astralplane-088-owner-guidance",
+    source_revisions=("088.004",),
+    target_revision="088.005",
+    checksum=_statements_checksum(GUIDANCE_SCHEMA_STATEMENTS),
+    operation=_apply_plane_schema_088_005,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -4931,6 +4955,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_088_002_MIGRATION,
         PLANE_SCHEMA_088_003_MIGRATION,
         PLANE_SCHEMA_088_004_MIGRATION,
+        PLANE_SCHEMA_088_005_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -4939,7 +4964,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="088.004",
+    schema_revision="088.005",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -4952,6 +4977,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "088.001",
         "088.002",
         "088.003",
+        "088.004",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -4965,6 +4991,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("088.001", PLANE_SCHEMA_088_REGISTRY_DIGEST),
         ("088.002", PLANE_SCHEMA_088_002_REGISTRY_DIGEST),
         ("088.003", PLANE_SCHEMA_088_003_REGISTRY_DIGEST),
+        ("088.004", PLANE_SCHEMA_088_004_REGISTRY_DIGEST),
     ),
 )
 
@@ -4977,6 +5004,7 @@ __all__ = (
     "CURRENT_SCHEMA_VERIFICATION_STATEMENTS",
     "CURRENT_SCHEMA_VERIFIER_CHECKSUM",
     "DECLARATIVE_AGENT_SCHEMA_STATEMENTS",
+    "GUIDANCE_SCHEMA_STATEMENTS",
     "MIGRATION_DIGEST",
     "MIGRATION_REGISTRY",
     "PLANE_SCHEMA_067_MIGRATION",
@@ -5005,6 +5033,8 @@ __all__ = (
     "PLANE_SCHEMA_088_003_REGISTRY_DIGEST",
     "PLANE_SCHEMA_088_003_STATEMENTS",
     "PLANE_SCHEMA_088_004_MIGRATION",
+    "PLANE_SCHEMA_088_004_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_088_005_MIGRATION",
     "PLANE_SCHEMA_088_MIGRATION",
     "PLANE_SCHEMA_088_REGISTRY_DIGEST",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",

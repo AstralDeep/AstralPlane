@@ -68,7 +68,7 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "4d8fd4ccd4acd1664e4ade51f0d142d2c7911f17dcdb86402ce67b599b28df6d"
+          "sha256": "5426352101c7b873f2a53c18385af83aed1f103d6d13d95d29b7d989d9bfe607"
         }
       ],
       "task": "T075/T085",
@@ -136,7 +136,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
+          "sha256": "e0b14927dc9ca508f9c0fca4dcd5abcbd700682b0c62c806896db0a47028bc0b"
         },
         {
           "path": "tests/repositories/test_preferences.py",
@@ -189,7 +189,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
+          "sha256": "e0b14927dc9ca508f9c0fca4dcd5abcbd700682b0c62c806896db0a47028bc0b"
         }
       ],
       "task": "T081",
@@ -517,7 +517,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "379c49c39bf6f3716f2c70386c11370a4ffa55f7fe9886e82e0f958143fa8c9a"
+          "sha256": "e0b14927dc9ca508f9c0fca4dcd5abcbd700682b0c62c806896db0a47028bc0b"
         }
       ],
       "task": "T081",
@@ -627,7 +627,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "1880c5bf6aa605ffdec5acf160094c0fd256a38c874eeb1dd82eba2297f1b265"
+          "sha256": "0373ff13ec23faf3dbf69f5da0e40215166a475461a28c5d5a1c2781ef4861fc"
         },
         {
           "path": "src/astralplane/database/pool.py",
