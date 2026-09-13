@@ -1353,6 +1353,17 @@ class AssignmentRepository:
         invalidated, begun = self._invalidate_actions(
             transaction, data, conservative=control == AssignmentControl.STOP
         )
+        if one_shot and _supported(data) and self._operation_continuation_held(transaction, data):
+            # Controls retire unstarted authority, never an issued effect's
+            # liability. Stale settlement need not have changed the phase label.
+            if data["phase"] not in {
+                "waiting_authorization",
+                "awaiting_event",
+                "waiting_approval",
+                "budget_exhausted",
+            }:
+                data["phase"] = "reconciliation"
+            data.update(next_wake_at=None, next_retry_at=None)
         for task in data["tasks"]:
             if task["state"] in {"pending", "running"}:
                 task["state"] = "cancelled" if control in {"stop", "revise"} else "pending"
@@ -1798,6 +1809,14 @@ class AssignmentRepository:
                 or _time(data["next_wake_at"]) > _now(transaction)
             ):
                 _conflict("assignment_not_due")
+            if (
+                self._operation_continuation_held(transaction, data)
+                or data["operation"].get("control", {}).get("wait") is not None
+            ):
+                _conflict("assignment_action_uncertain")
+            # The ledger scan can wait on action locks. Check the original
+            # session and DB deadlines again before minting the claim.
+            self._assert_operation_claim_current(transaction, data, authority)
             claim = self._claim(transaction, data, worker_id, lease_seconds)
             self._assert_operation_claim_current(transaction, data, authority)
             return claim
@@ -1994,6 +2013,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.put_action(transaction, fence=fence, intent=intent)
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, authority=authority
@@ -2019,6 +2039,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.reserve_action(
                 transaction,
                 fence=fence,
@@ -2058,6 +2079,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.start_action(
                 transaction,
                 fence=fence,
@@ -4259,6 +4281,42 @@ class AssignmentRepository:
             or any(task["state"] == "reconciliation" for task in data["tasks"])
         )
         return actions, unresolved, retained
+
+    def _operation_continuation_held(self, transaction, data):
+        """Read actual obligations under assignment then sorted action locks."""
+        actions, _, held = self._purge_blockers(transaction, data)
+        return held or any(action["state"] in {"proposed", "approved"} for action in actions)
+
+    def _assert_operation_action_continuable(self, transaction, fence, binding):
+        """Permit live sibling work, but never bypass unknown or stale consumption.
+
+        The caller already holds owner/session/assignment authority. The sorted
+        inventory locks remain held through its mutation and final authority
+        check. Settlement deliberately does not call this preparation guard.
+        """
+        data = self._load(transaction, fence.owner_id, fence.assignment_id)
+        if data.get("execution_profile") != "one_shot":
+            return
+        actions, unresolved, _ = self._purge_blockers(transaction, data)
+        known = {action["action_id"] for action in actions}
+        if (
+            data["phase"] == "reconciliation"
+            or any(identity not in known for identity in unresolved)
+            or any(task["state"] == "reconciliation" for task in data["tasks"])
+        ):
+            _conflict("assignment_action_uncertain")
+        for action in actions:
+            if action["state"] == "uncertain":
+                _conflict("assignment_action_uncertain")
+            for attempt in action["attempts"]:
+                if attempt["state"] == "uncertain" or (
+                    attempt["state"] == "started"
+                    and (
+                        canonical(attempt.get("assignment_fence")) != canonical(fence)
+                        or canonical(attempt["binding"]) != canonical(binding)
+                    )
+                ):
+                    _conflict("assignment_action_uncertain")
 
     def delete_for_owner(
         self,
