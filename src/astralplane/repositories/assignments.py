@@ -56,6 +56,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentTaskClaim,
     AssignmentTaskResult,
     AssignmentTransientInput,
+    AssignmentWakePreparation,
 )
 from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
 from astralplane.repositories.work_admission import ExecutionFence, WorkAdmissionRepository
@@ -1635,6 +1636,134 @@ class AssignmentRepository:
             ),
         )
 
+    def _prepare_wake(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        expected_instruction_revision,
+        expected_control_epoch,
+        event_id,
+        event_key,
+        source_revision,
+        event_digest,
+        control_version,
+    ):
+        _integer(control_version, 1, 1)
+        _integer(expected_state_version, 1)
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _text(event_id, 128)
+        _text(event_key, 128)
+        _integer(source_revision)
+        _digest(event_digest)
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        state = _operation_control(data["operation"])
+        signature = digest([event_key, source_revision, event_digest])
+        prior = state["wake_receipts"].get(event_id)
+        if prior is not None:
+            if prior != signature:
+                _conflict("assignment_idempotency_conflict")
+            return data, signature, True
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if data["lifecycle"] != "active" or data["phase"] != "awaiting_event":
+            _conflict("assignment_not_waiting")
+        if not owner_active:
+            _conflict("assignment_owner_retired")
+        self._validate_operation_continuation(transaction, data)
+        wait = state["wait"]
+        if wait is None or wait["event_key"] != event_key:
+            _conflict("assignment_event_key_conflict")
+        if source_revision <= max(wait["source_revision"], state["watermarks"].get(event_key, 0)):
+            _conflict("assignment_event_revision_conflict")
+        if len(state["wake_receipts"]) >= 128:
+            _conflict("assignment_history_capacity_exhausted")
+        return data, signature, False
+
+    def prepare_wake(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        expected_instruction_revision,
+        expected_control_epoch,
+        event_id,
+        event_key,
+        source_revision,
+        event_digest,
+        control_version=1,
+    ):
+        """Read/lock a receipt-first wake decision without accepting or scheduling it.
+
+        Uses the same validation and owner→assignment locks as accept_wake. No
+        session/action locks or authority are acquired. A matching receipt precedes
+        new continuation/CAS checks; a miss is only current local decision data.
+        The host must bind current caller and original continuation authority,
+        audit, call accept_wake with identical arguments, and recheck its guards
+        in one bounded transaction. This result is no permission to mutate later.
+        """
+        data, _, replayed = self._prepare_wake(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_state_version=expected_state_version,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            event_id=event_id,
+            event_key=event_key,
+            source_revision=source_revision,
+            event_digest=event_digest,
+            control_version=control_version,
+        )
+        return AssignmentWakePreparation(_record(data), replayed)
+
+    def assert_operation_continuation_clear(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+    ):
+        """Lock current local facts and refuse unresolved one-shot liabilities.
+
+        Owner precedes assignment and sorted action locks. Stored task/authority
+        deadlines are checked again after the scan; no session is selected or
+        authenticated, no claim is granted, and no ledger or schedule is changed.
+        The host must acquire caller/original-session guards before these locks,
+        then recheck them after later waits in the same bounded transaction. This
+        assertion is for a new wake, never a prerequisite to accepted replay or
+        authentic settlement. It is not execution or future mutation authority.
+        """
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _integer(expected_state_version, 1)
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        _require_executable(data)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if not owner_active:
+            _conflict("assignment_owner_retired")
+        operation = self._operation_spec(data["operation"], owner_id)
+        self._check_operation_time(transaction, operation)
+        if self._operation_continuation_held(transaction, data):
+            _conflict("assignment_action_uncertain")
+        self._check_operation_time(transaction, operation)
+        return _record(data)
+
     def accept_wake(
         self,
         transaction,
@@ -1654,40 +1783,27 @@ class AssignmentRepository:
 
         Authentication and current remote authority belong to the host. A receipt
         replay acknowledges prior acceptance only; it grants no new continuation.
+        Revalidates after preparation/audit waits. The host must abort its enclosing
+        transaction on required audit/final guard failure; returned facts are
+        provisional until that transaction commits. No execution authority is
+        inferred from preparation or this receipt.
         """
-        _integer(control_version, 1, 1)
-        _integer(expected_state_version, 1)
-        _integer(expected_instruction_revision, 1)
-        _integer(expected_control_epoch, 1)
-        _text(event_id, 128)
-        _text(event_key, 128)
-        _integer(source_revision)
-        _digest(event_digest)
-        owner_active = self._lock_operation_owner(transaction, owner_id)
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        if data.get("execution_profile") != "one_shot":
-            _conflict("assignment_operation_required")
-        state = _operation_control(data["operation"])
-        signature = digest([event_key, source_revision, event_digest])
-        prior = state["wake_receipts"].get(event_id)
-        if prior is not None:
-            if prior != signature:
-                _conflict("assignment_idempotency_conflict")
+        data, signature, replayed = self._prepare_wake(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_state_version=expected_state_version,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            event_id=event_id,
+            event_key=event_key,
+            source_revision=source_revision,
+            event_digest=event_digest,
+            control_version=control_version,
+        )
+        if replayed:
             return AssignmentControlResult(_record(data), False)
-        _version(data, expected_instruction_revision, expected_control_epoch)
-        _state_version(data, expected_state_version)
-        if data["lifecycle"] != "active" or data["phase"] != "awaiting_event":
-            _conflict("assignment_not_waiting")
-        if not owner_active:
-            _conflict("assignment_owner_retired")
-        self._validate_operation_continuation(transaction, data)
-        wait = state["wait"]
-        if wait is None or wait["event_key"] != event_key:
-            _conflict("assignment_event_key_conflict")
-        if source_revision <= max(wait["source_revision"], state["watermarks"].get(event_key, 0)):
-            _conflict("assignment_event_revision_conflict")
-        if len(state["wake_receipts"]) >= 128:
-            _conflict("assignment_history_capacity_exhausted")
+        state = _operation_control(data["operation"])
         state["wake_receipts"][event_id] = signature
         state["watermarks"][event_key] = source_revision
         state["wait"] = None

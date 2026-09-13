@@ -337,6 +337,14 @@ class AssignmentOwnerWaitPreparation(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentWakePreparation(_Record):
+    """Locked receipt/current-state facts, never authority to continue execution."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentActivityRecord(_Record):
     activity_key: str
     activity_type: str
