@@ -201,21 +201,23 @@ def test_ownership_is_immutable_and_visibility_write_requires_the_owner() -> Non
         is_public=True,
         updated_at=2,
     ).is_public
-    assert transaction.calls[0][2][-1] == "owner@example.test"  # type: ignore[index]
+    assert transaction.calls[0][0] == "execute"
+    assert "pg_advisory_xact_lock" in transaction.calls[0][1]
+    assert transaction.calls[1][2][-1] == "owner@example.test"  # type: ignore[index]
 
     assert repository.remove_ownership(
-        ScriptedTransaction(execute=[Result(rowcount=1)]),
+        ScriptedTransaction(execute=[Result(), Result(rowcount=1)]),
         agent_id=AGENT,
         owner_email="owner@example.test",
     )
     assert not repository.remove_ownership(
-        ScriptedTransaction(execute=[Result(rowcount=0)]),
+        ScriptedTransaction(execute=[Result(), Result(rowcount=0)]),
         agent_id=AGENT,
         owner_email="owner@example.test",
     )
     with pytest.raises(RepositoryDataError, match="row count"):
         repository.remove_ownership(
-            ScriptedTransaction(execute=[Result(rowcount=2)]),
+            ScriptedTransaction(execute=[Result(), Result(rowcount=2)]),
             agent_id=AGENT,
             owner_email="owner@example.test",
         )

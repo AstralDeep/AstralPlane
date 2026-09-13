@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -113,6 +113,64 @@ Assignments retain bounded JSON checkpoints and task graphs; indexed event and a
 protect replay independently of working memory. Existing voice, audit, conversation, grant, and
 blob data remain unchanged. The current structural verifier checks the four tables, constraints,
 indexes, and immutable remote-proposal association index on every startup.
+
+### `088.004` declarative definitions and recovery
+
+This edge requires the exact `088.003` registry digest and catalog. Every existing
+agent and revision is classified `executable`; existing artifact fields, revision
+states, host/runtime records, ownership, trust, grants, and outstanding assignment
+liabilities remain unchanged. No historical definition is inferred. A new
+`declarative` agent stores immutable versioned definition snapshots, including the
+host-validated policy, in the existing revision table. Its selection uses
+`selected_definition_revision_id`; executable promotion pointers remain empty.
+Runtime instances and artifact publications have explicit executable-only foreign
+keys. An authored definition cannot become an executable fallback.
+
+The public agent facade exposes closed `DeclarativeAgentCommand` preparation and
+application, plus the existing owner-scoped revision read/history API. Preparation
+only reads and locks. The host retains current identity, policy validation, audit,
+and final caller checks in the same transaction. Application independently repeats
+preparation and uses a savepoint for every lifecycle/receipt write. A failure after
+the host's audit still requires rollback of the enclosing transaction; returned
+records are provisional until commit succeeds. Activation selects metadata only:
+it creates no assignment, consent, grant, tool permission, trust, or runnable host.
+Revision clears the selection and advances the head state fence. A consumer must
+check that fence and exact selected revision before using unfinished references;
+this storage change does not register an execution consumer.
+
+New metadata operations lock shared owner domain 79, the owner-retirement row,
+then agent-owner domain 0. Any caller session lock must precede agent-owner 0.
+Sorted agent-identity locks in the distinct two-integer advisory namespace
+`_AGENT_IDENTITY_LOCK_NAMESPACE` follow and prevent absent-row
+creation races with legacy trust/ownership writers. Those legacy writers never
+acquire owner/session locks after an identity lock and take it only when no
+immutable-kind head exists. This preserves legacy head-then-ownership transitions;
+their next SQL statement checks kind again after any absence lock wait. Composed
+callers must take owner locks before legacy identity writes and sort multiple
+identities. Executable creation itself takes owner 0 before its identity lock.
+New metadata methods do not
+acquire Work, session, configuration, or guidance locks after agent locks. A future
+definition consumer must preserve that order; no guidance SQL belongs in Deep.
+
+Accepted metadata-only receipts bind owner, command UUID4, target, request digest,
+and resulting revision/state. Identical replay returns the original receipt with
+the current head, including an archived/deleted head; it never activates or audits
+again and still requires a current owner. There are at most 4096 receipts per
+target: ordinary commands stop at 4094, leaving one state-changing archive and one
+delete slot. A new ID for an already archived/deleted state is refused; accepted
+IDs remain replayable. Receipts are never evicted to permit repeated mutation.
+
+Before deployment, quiesce writers and record the exact joint database/root backup,
+component identity, and predecessor digest. Apply the guarded edge and verify the
+complete current catalog, populated executable/legacy/remote compatibility,
+declarative lifecycle/denials, and repeat startup before opening authoring. A failed
+transaction must leave predecessor data and metadata intact. Prefer a guarded
+forward repair; if restoration is necessary, keep admission closed and restore the
+verified database and durable roots together with the matching application. Do not
+drop definitions/receipts, rewrite revision markers, infer a downgrade, or activate
+definitions during startup. Apply the existing governed session-retirement restore
+procedure before reopening restored authority. The migration itself does not
+qualify Deep policy, UI, runtime adoption, or institutional staging.
 
 ### `079.001` deployment and recovery
 

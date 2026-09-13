@@ -11,6 +11,7 @@ from typing import Final
 
 from astralplane.contracts import MigrationCallable, PlaneDatabase, Transaction
 from astralplane.database.assignment_schema import ASSIGNMENT_SCHEMA_STATEMENTS
+from astralplane.database.declarative_agent_schema import DECLARATIVE_AGENT_SCHEMA_STATEMENTS
 from astralplane.database.operation_schema import OPERATION_SCHEMA_STATEMENTS
 from astralplane.database.revision import DataPlaneRevision, validate_revision
 from astralplane.errors import MigrationDefinitionError, SchemaRevisionError
@@ -3452,6 +3453,12 @@ def _apply_plane_schema_088_003(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_088_004(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "088.003")
+    for statement in DECLARATIVE_AGENT_SCHEMA_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
@@ -3539,6 +3546,7 @@ WITH owned_tables(table_name) AS (
         ('tutorial_step_revision'),
         ('user_agent'),
         ('user_agent_revision'),
+        ('user_agent_command_receipt'),
         ('user_attachments'),
         ('user_credentials'),
         ('user_llm_config'),
@@ -4432,10 +4440,10 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 # SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
-# This is generated only from a fresh canonical 088.003 schema and changes
+# This is generated only from a fresh canonical 088.004 schema and changes
 # whenever the structural verifier's expected catalog state changes.
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "aedb36a4c2ee25925158b5a3f04303b46c71b391a0fe6a4d25dbb3fd395c127b"
+    "5a46bdb17bcead3af6d1bb6a95c97aac04cf35a716ffd3f63b239836f0c30b72"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4537,6 +4545,7 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
         "088.002",
         ("e04e5d0b8984e89208cefb0321636dde3b85a25679849ba00fe95f99577d0a71",),
     ),
+    ("088.003", ("aedb36a4c2ee25925158b5a3f04303b46c71b391a0fe6a4d25dbb3fd395c127b",)),
 )
 
 
@@ -4899,6 +4908,16 @@ PLANE_SCHEMA_088_003_MIGRATION: Final = Migration(
     checksum=_statements_checksum(PLANE_SCHEMA_088_003_STATEMENTS),
     operation=_apply_plane_schema_088_003,
 )
+PLANE_SCHEMA_088_003_REGISTRY_DIGEST: Final = (
+    "a3d3ac43bee48b0ca6832cca1e4a347db0a3f838af908b8545edb11e7e94272a"
+)
+PLANE_SCHEMA_088_004_MIGRATION: Final = Migration(
+    name="astralplane-088-declarative-agents",
+    source_revisions=("088.003",),
+    target_revision="088.004",
+    checksum=_statements_checksum(DECLARATIVE_AGENT_SCHEMA_STATEMENTS),
+    operation=_apply_plane_schema_088_004,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -4911,6 +4930,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_088_MIGRATION,
         PLANE_SCHEMA_088_002_MIGRATION,
         PLANE_SCHEMA_088_003_MIGRATION,
+        PLANE_SCHEMA_088_004_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -4919,7 +4939,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="088.003",
+    schema_revision="088.004",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -4931,6 +4951,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "079.001",
         "088.001",
         "088.002",
+        "088.003",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -4943,6 +4964,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("079.001", PLANE_SCHEMA_079_REGISTRY_DIGEST),
         ("088.001", PLANE_SCHEMA_088_REGISTRY_DIGEST),
         ("088.002", PLANE_SCHEMA_088_002_REGISTRY_DIGEST),
+        ("088.003", PLANE_SCHEMA_088_003_REGISTRY_DIGEST),
     ),
 )
 
@@ -4954,6 +4976,7 @@ __all__ = (
     "CURRENT_SCHEMA_STRUCTURE_QUERY",
     "CURRENT_SCHEMA_VERIFICATION_STATEMENTS",
     "CURRENT_SCHEMA_VERIFIER_CHECKSUM",
+    "DECLARATIVE_AGENT_SCHEMA_STATEMENTS",
     "MIGRATION_DIGEST",
     "MIGRATION_REGISTRY",
     "PLANE_SCHEMA_067_MIGRATION",
@@ -4979,7 +5002,9 @@ __all__ = (
     "PLANE_SCHEMA_088_002_REGISTRY_DIGEST",
     "PLANE_SCHEMA_088_002_STATEMENTS",
     "PLANE_SCHEMA_088_003_MIGRATION",
+    "PLANE_SCHEMA_088_003_REGISTRY_DIGEST",
     "PLANE_SCHEMA_088_003_STATEMENTS",
+    "PLANE_SCHEMA_088_004_MIGRATION",
     "PLANE_SCHEMA_088_MIGRATION",
     "PLANE_SCHEMA_088_REGISTRY_DIGEST",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",

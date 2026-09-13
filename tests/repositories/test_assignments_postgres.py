@@ -816,6 +816,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             "astralplane-088-one-shot-operations",
             "astralplane-088-session-incarnation",
             "astralplane-088-session-issuer",
+            "astralplane-088-declarative-agents",
         )
         assert runner.run(expected_revision="088.003").already_current
         with upgrade_database.transaction() as transaction:

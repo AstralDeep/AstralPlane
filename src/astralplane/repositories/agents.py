@@ -11,7 +11,7 @@ import json
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,6 +29,16 @@ from astralplane.repositories import (
     _required_id,
     _structured_json,
 )
+from astralplane.repositories.agent_models import (
+    DeclarativeAgentCommand,
+    DeclarativeAgentPreparation,
+    DeclarativeAgentReceipt,
+    DeclarativeAgentResult,
+    _integer,
+    definition_snapshot,
+)
+
+_AGENT_IDENTITY_LOCK_NAMESPACE = 1095980115
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _POLICY_MARKER_KEY = "user_agent_policy_revision"
@@ -83,6 +93,8 @@ class UserAgentRecord:
     generation_counter: int
     state_revision: int
     validated_policy_revision: str | None
+    agent_kind: str = "executable"
+    selected_definition_revision_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +119,10 @@ class AgentRevisionRecord:
     promoted_at: datetime | None
     failed_at: datetime | None
     failure_code: str | None
+    revision_kind: str = "executable"
+    definition_version: int | None = None
+    definition_json: Mapping[str, Any] | None = field(default=None, repr=False)
+    definition_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +258,7 @@ class AgentRepository:
             """
             UPDATE user_agent
             SET revalidation_required = TRUE
-            WHERE deleted_at IS NULL
+            WHERE deleted_at IS NULL AND agent_kind='executable'
               AND validated_policy_revision IS DISTINCT FROM %s
               AND revalidation_required = FALSE
             """,
@@ -288,18 +304,21 @@ class AgentRepository:
         if not isinstance(is_public, bool):
             raise RepositoryValidationError("is_public must be boolean")
         observed_at = _non_negative_int(observed_at, "observed_at")
+        _lock_unbound_agent_identity(transaction, agent_id)
         row = transaction.fetch_one(
             """
             INSERT INTO agent_ownership (
                 agent_id, owner_email, is_public, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s)
+            ) SELECT %s, %s, %s, %s, %s
+            WHERE NOT EXISTS (SELECT 1 FROM user_agent
+                              WHERE agent_id=%s AND agent_kind<>'executable')
             ON CONFLICT (agent_id) DO UPDATE SET
                 is_public = EXCLUDED.is_public,
                 updated_at = EXCLUDED.updated_at
             WHERE agent_ownership.owner_email = EXCLUDED.owner_email
             RETURNING *
             """,
-            (agent_id, owner_email, is_public, observed_at, observed_at),
+            (agent_id, owner_email, is_public, observed_at, observed_at, agent_id),
         )
         if row is None:
             existing = transaction.fetch_one(
@@ -340,8 +359,11 @@ class AgentRepository:
 
         agent_id = _required_id(agent_id, "agent_id", maximum=512)
         owner_email = _bounded_text(owner_email, "owner_email", maximum=1024)
+        _lock_unbound_agent_identity(transaction, agent_id)
         result = transaction.execute(
-            "DELETE FROM agent_ownership WHERE agent_id = %s AND owner_email = %s",
+            "DELETE FROM agent_ownership WHERE agent_id = %s AND owner_email = %s "
+            "AND NOT EXISTS (SELECT 1 FROM user_agent WHERE "
+            "user_agent.agent_id=agent_ownership.agent_id AND agent_kind<>'executable')",
             (agent_id, owner_email),
         )
         if result.rowcount not in {0, 1}:
@@ -362,10 +384,14 @@ class AgentRepository:
         updated_at = _non_negative_int(updated_at, "updated_at")
         if not isinstance(is_public, bool):
             raise RepositoryValidationError("is_public must be boolean")
+        _lock_unbound_agent_identity(transaction, agent_id)
         row = transaction.fetch_one(
             """
             UPDATE agent_ownership SET is_public = %s, updated_at = %s
-            WHERE agent_id = %s AND owner_email = %s RETURNING *
+            WHERE agent_id = %s AND owner_email = %s
+              AND NOT EXISTS (SELECT 1 FROM user_agent
+                              WHERE user_agent.agent_id=agent_ownership.agent_id
+                              AND agent_kind<>'executable') RETURNING *
             """,
             (is_public, updated_at, agent_id, owner_email),
         )
@@ -391,15 +417,16 @@ class AgentRepository:
         marked_by = _required_id(marked_by, "marked_by")
         if not isinstance(is_safe, bool) or not isinstance(reset_for_revision, bool):
             raise RepositoryValidationError("trust flags must be boolean")
+        _lock_unbound_agent_identity(transaction, agent_id)
         row = transaction.fetch_one(
             """
             INSERT INTO agent_trust (
                 agent_id, is_safe, marked_by, marked_at, prior_state,
                 revised_reset_at
-            ) VALUES (
-                %s, %s, %s, clock_timestamp(), FALSE,
+            ) SELECT %s, %s, %s, clock_timestamp(), FALSE,
                 CASE WHEN %s THEN clock_timestamp() ELSE NULL END
-            )
+            WHERE NOT EXISTS (SELECT 1 FROM user_agent
+                              WHERE agent_id=%s AND agent_kind<>'executable')
             ON CONFLICT (agent_id) DO UPDATE SET
                 is_safe = EXCLUDED.is_safe,
                 marked_by = EXCLUDED.marked_by,
@@ -409,10 +436,10 @@ class AgentRepository:
                                         ELSE agent_trust.revised_reset_at END
             RETURNING *
             """,
-            (agent_id, is_safe, marked_by, reset_for_revision, reset_for_revision),
+            (agent_id, is_safe, marked_by, reset_for_revision, agent_id, reset_for_revision),
         )
-        if row is None:  # pragma: no cover
-            raise RepositoryDataError("trust upsert returned no row")
+        if row is None:
+            raise RepositoryConflictError("declarative identity cannot inherit executable trust")
         return _trust(row)
 
     # -- durable user-agent registry -----------------------------------
@@ -441,6 +468,8 @@ class AgentRepository:
         egress = (
             None if declared_egress is None else _string_tuple(declared_egress, "declared_egress")
         )
+        self.lock_owner(transaction, owner_id=owner_id)
+        _lock_agent_identity(transaction, agent_id)
         row = transaction.fetch_one(
             """
             INSERT INTO user_agent (
@@ -505,9 +534,7 @@ class AgentRepository:
                 stored.state_revision,
             )
             if observed != expected:
-                raise RepositoryConflictError(
-                    "user-agent create replay changed initial semantics"
-                )
+                raise RepositoryConflictError("user-agent create replay changed initial semantics")
             return stored
         return _user_agent(row)
 
@@ -589,7 +616,7 @@ class AgentRepository:
             UPDATE user_agent SET {", ".join(assignments)},
                 state_revision = state_revision + 1
             WHERE agent_id = %s AND owner_user_id = %s
-              AND deleted_at IS NULL AND state_revision = %s
+              AND deleted_at IS NULL AND state_revision = %s AND agent_kind='executable'
             RETURNING *
             """,
             (*values, agent_id, owner_id, expected_revision),
@@ -615,6 +642,265 @@ class AgentRepository:
             expected_revision=expected_revision,
             updates={"status": "disabled", "deleted_at": deleted_at, "updated_at": deleted_at},
         )
+
+    # -- declarative metadata lifecycle --------------------------------
+
+    def lock_declarative_owner(self, transaction: Transaction, *, owner_id: str) -> None:
+        """Shared owner/session order: 79, owner state, then legacy agent owner 0.
+
+        The host acquires any caller session lock before this method. Nothing in
+        this authoring boundary acquires session, Work, or configuration locks
+        after the agent lock. Metadata permission remains a host obligation.
+        """
+        owner_id = _required_id(owner_id, "owner_id")
+        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
+        retired = transaction.fetch_one(
+            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+            (owner_id,),
+        )
+        if retired is not None and retired["state"] != "active":
+            raise RepositoryConflictError("declarative owner is retired")
+        self.lock_owner(transaction, owner_id=owner_id)
+
+    def prepare_declarative_command(
+        self,
+        transaction: Transaction,
+        *,
+        command: DeclarativeAgentCommand,
+    ) -> DeclarativeAgentPreparation:
+        """Lock/read a closed command; accepted receipts precede new policy/CAS.
+
+        This preparation grants no authority and performs no writes. The host
+        validates current identity and policy, writes its audit in this same
+        transaction, calls apply, then rechecks its caller before committing.
+        """
+        if type(command) is not DeclarativeAgentCommand:
+            raise RepositoryValidationError("a typed declarative command is required")
+        command.validate()
+        digest = command.request_digest
+        self.lock_declarative_owner(transaction, owner_id=command.owner_id)
+        row = transaction.fetch_one(
+            "SELECT * FROM user_agent_command_receipt WHERE owner_user_id=%s AND command_id=%s",
+            (command.owner_id, command.command_id),
+        )
+        if row is not None:
+            receipt = _declarative_receipt(row)
+            if (receipt.agent_id, receipt.command, receipt.request_digest) != (
+                command.agent_id,
+                command.command,
+                digest,
+            ):
+                raise RepositoryConflictError("declarative command identity was reused")
+            agent = self.get_agent(
+                transaction, owner_id=command.owner_id, agent_id=command.agent_id, for_update=True
+            )
+            if agent is None or agent.agent_kind != "declarative":
+                raise RepositoryDataError("accepted declarative head is unavailable")
+            # Accepted acknowledgement carries metadata only. Never re-open
+            # old content or apply today's definition policy to a receipt.
+            return DeclarativeAgentPreparation(command, digest, agent, None, receipt, True)
+
+        # All source/target heads are one owner. Sorting also keeps future
+        # multi-head operations consistent with clone's existing lock order.
+        heads = {}
+        for identity in sorted({command.agent_id, command.source_agent_id} - {None}):
+            _lock_agent_identity(transaction, identity)
+        for identity in sorted({command.agent_id, command.source_agent_id} - {None}):
+            heads[identity] = self.get_agent(
+                transaction,
+                owner_id=command.owner_id,
+                agent_id=identity,
+                for_update=True,
+            )
+        agent = heads[command.agent_id]
+        if command.command in {"create", "clone"}:
+            if agent is not None:
+                raise RepositoryConflictError("declarative target already exists")
+            collision = transaction.fetch_one(
+                "SELECT 1 AS present WHERE EXISTS (SELECT 1 FROM user_agent WHERE agent_id=%s) "
+                "OR EXISTS (SELECT 1 FROM agent_ownership WHERE agent_id=%s) "
+                "OR EXISTS (SELECT 1 FROM agent_trust WHERE agent_id=%s)",
+                (command.agent_id, command.agent_id, command.agent_id),
+            )
+            if collision is not None:
+                raise RepositoryConflictError("declarative target identity is already bound")
+        elif agent is None or agent.agent_kind != "declarative" or agent.deleted_at is not None:
+            raise RepositoryNotFoundError("owned declarative agent is unavailable")
+        elif agent.state_revision != command.expected_revision:
+            raise RepositoryConflictError("declarative head state fence is stale")
+
+        count = transaction.fetch_one(
+            "SELECT count(*) AS count FROM user_agent_command_receipt "
+            "WHERE agent_id=%s AND owner_user_id=%s",
+            (command.agent_id, command.owner_id),
+        )["count"]
+        _integer(count, "receipt count", maximum=4096)
+        capacity = {"archive": 4095, "delete": 4096}.get(command.command, 4094)
+        if count >= capacity:
+            raise RepositoryConflictError("declarative command receipt capacity is exhausted")
+        revision = None
+        if command.command == "revise":
+            latest = self.list_revisions(
+                transaction, owner_id=command.owner_id, agent_id=command.agent_id, limit=1
+            )
+            if not latest or latest[0].revision_id != command.parent_revision_id:
+                raise RepositoryConflictError("declarative parent revision is stale")
+            revision = self._definition_revision(
+                transaction,
+                command.owner_id,
+                command.agent_id,
+                command.parent_revision_id,
+            )
+        elif command.command == "activate":
+            revision = self._definition_revision(
+                transaction,
+                command.owner_id,
+                command.agent_id,
+                command.revision_id,
+            )
+            if (
+                agent.status == "active"
+                and agent.selected_definition_revision_id == revision.revision_id
+            ):
+                raise RepositoryConflictError("definition is already selected")
+        elif command.command == "archive" and agent.status == "archived":
+            raise RepositoryConflictError("definition is already archived")
+        elif command.command == "clone":
+            source = heads[command.source_agent_id]
+            if (
+                source is None
+                or source.agent_kind != "declarative"
+                or source.deleted_at is not None
+            ):
+                raise RepositoryNotFoundError("owned clone source is unavailable")
+            revision = self._definition_revision(
+                transaction,
+                command.owner_id,
+                command.source_agent_id,
+                command.source_revision_id,
+            )
+        return DeclarativeAgentPreparation(command, digest, agent, revision, None, False)
+
+    def _definition_revision(self, transaction, owner_id, agent_id, revision_id):
+        revision = self.get_revision(
+            transaction,
+            owner_id=owner_id,
+            agent_id=agent_id,
+            revision_id=revision_id,
+            for_update=True,
+        )
+        if revision is None or revision.revision_kind != "declarative":
+            raise RepositoryNotFoundError("owned definition revision is unavailable")
+        return revision
+
+    def apply_declarative_command(
+        self,
+        transaction: Transaction,
+        *,
+        preparation: DeclarativeAgentPreparation,
+    ) -> DeclarativeAgentResult:
+        """Apply the prepared metadata transition and receipt as one savepoint.
+
+        A caught failure rolls back every write made here. Host audit lies in
+        the enclosing transaction: a failed final host guard must abort that
+        transaction. Returned DTOs are provisional until its commit succeeds.
+        """
+        if type(preparation) is not DeclarativeAgentPreparation:
+            raise RepositoryValidationError("a typed declarative preparation is required")
+        with transaction.savepoint("agent_definition_" + uuid.uuid4().hex):
+            current = self.prepare_declarative_command(transaction, command=preparation.command)
+            if current != preparation:
+                raise RepositoryConflictError("declarative preparation is no longer current")
+            if current.replayed:
+                return DeclarativeAgentResult(
+                    current.agent, current.revision, current.receipt, True
+                )
+            command, agent, revision = current.command, current.agent, current.revision
+            now = transaction.fetch_one(
+                "SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now"
+            )["now"]
+            if command.command in {"create", "clone"}:
+                row = transaction.fetch_one(
+                    "INSERT INTO user_agent(agent_id,owner_user_id,display_name,status,agent_kind,"
+                    "created_at,updated_at) VALUES (%s,%s,%s,'draft','declarative',%s,%s) "
+                    "ON CONFLICT (agent_id) DO NOTHING RETURNING *",
+                    (command.agent_id, command.owner_id, command.display_name, now, now),
+                )
+                if row is None:
+                    raise RepositoryConflictError(
+                        "declarative target identity was concurrently bound"
+                    )
+                agent = _user_agent(row)
+            if command.command in {"create", "revise", "clone"}:
+                definition = (
+                    revision.definition_json if command.command == "clone" else command.definition
+                )
+                snapshot, digest = definition_snapshot(definition)
+                number = revision.revision_number + 1 if command.command == "revise" else 1
+                row = transaction.fetch_one(
+                    "INSERT INTO user_agent_revision(revision_id,agent_id,owner_user_id,"
+                    "revision_number,"
+                    "parent_revision_id,revision_kind,compatibility_state,state,definition_version,"
+                    "definition_json,definition_digest) VALUES (%s,%s,%s,%s,%s,'declarative',"
+                    "'declarative','definition',1,%s::jsonb,%s) RETURNING *",
+                    (
+                        command.revision_id,
+                        command.agent_id,
+                        command.owner_id,
+                        number,
+                        command.parent_revision_id,
+                        _canonical_json(snapshot, "definition"),
+                        digest,
+                    ),
+                )
+                revision = _revision(row)
+            if command.command not in {"create", "clone"}:
+                status = (
+                    "active"
+                    if command.command == "activate"
+                    else ("draft" if command.command == "revise" else "archived")
+                )
+                selected = command.revision_id if command.command == "activate" else None
+                row = transaction.fetch_one(
+                    "UPDATE user_agent SET status=%s,selected_definition_revision_id=%s,"
+                    "display_name=COALESCE(%s,display_name),deleted_at=%s,updated_at=%s,"
+                    "state_revision=state_revision+1 WHERE agent_id=%s AND owner_user_id=%s "
+                    "AND agent_kind='declarative' AND deleted_at IS NULL "
+                    "AND state_revision=%s RETURNING *",
+                    (
+                        status,
+                        selected,
+                        command.display_name,
+                        now if command.command == "delete" else None,
+                        now,
+                        command.agent_id,
+                        command.owner_id,
+                        command.expected_revision,
+                    ),
+                )
+                if row is None:
+                    raise RepositoryConflictError("declarative head mutation is stale")
+                agent = _user_agent(row)
+            # Revisions are immutable snapshots. Editing/retirement clears the
+            # selection and advances the head fence without rewriting history.
+            result_revision_id = revision.revision_id if revision is not None else None
+            row = transaction.fetch_one(
+                "INSERT INTO user_agent_command_receipt(owner_user_id,agent_id,command_id,"
+                "command_version,command,request_digest,result_state_revision,"
+                "result_definition_revision_id) "
+                "VALUES (%s,%s,%s,1,%s,%s,%s,%s) RETURNING *",
+                (
+                    command.owner_id,
+                    command.agent_id,
+                    command.command_id,
+                    command.command,
+                    current.request_digest,
+                    agent.state_revision,
+                    result_revision_id,
+                ),
+            )
+            receipt = _declarative_receipt(row)
+            return DeclarativeAgentResult(agent, revision, receipt, False)
 
     # -- immutable revisions -------------------------------------------
 
@@ -746,16 +1032,20 @@ class AgentRepository:
         owner_id: str,
         agent_id: str,
         limit: int = 200,
+        before_revision_number: int | None = None,
     ) -> tuple[AgentRevisionRecord, ...]:
         agent_id, owner_id = _agent_owner(agent_id, owner_id)
         limit = _bounded_limit(limit, maximum=1000)
+        if before_revision_number is not None:
+            _integer(before_revision_number, "before_revision_number")
         rows = transaction.fetch_all(
             """
             SELECT * FROM user_agent_revision
             WHERE agent_id = %s AND owner_user_id = %s
+              AND (%s::bigint IS NULL OR revision_number < %s)
             ORDER BY revision_number DESC LIMIT %s
             """,
-            (agent_id, owner_id, limit),
+            (agent_id, owner_id, before_revision_number, before_revision_number, limit),
         )
         return tuple(_revision(row) for row in rows)
 
@@ -782,7 +1072,7 @@ class AgentRepository:
             UPDATE user_agent_revision SET {", ".join(assignments)},
                 state_revision = state_revision + 1
             WHERE revision_id = %s AND agent_id = %s AND owner_user_id = %s
-              AND state_revision = %s AND state = %s
+              AND state_revision = %s AND state = %s AND revision_kind='executable'
             RETURNING *
             """,
             (*values, revision_id, agent_id, owner_id, expected_revision, expected_state),
@@ -1204,10 +1494,10 @@ class AgentRepository:
         for row in rows:
             state = str(row.get("state") or "")
             reason = str(row.get("expiry_reason") or "")
-            if reason not in {"startup", "liveness"} or (
-                reason == "startup" and state not in {"delivering", "starting"}
-            ) or (
-                reason == "liveness" and state not in {"ready", "online", "updating"}
+            if (
+                reason not in {"startup", "liveness"}
+                or (reason == "startup" and state not in {"delivering", "starting"})
+                or (reason == "liveness" and state not in {"ready", "online", "updating"})
             ):
                 raise RepositoryDataError(
                     "runtime expiry candidate has invalid persisted semantics"
@@ -1221,8 +1511,7 @@ class AgentRepository:
                 )
             )
         if any(
-            not candidate.runtime_instance_id or not candidate.owner_id
-            for candidate in candidates
+            not candidate.runtime_instance_id or not candidate.owner_id for candidate in candidates
         ):
             raise RepositoryDataError("runtime expiry candidate identity is empty")
         return tuple(candidates)
@@ -1241,9 +1530,7 @@ class AgentRepository:
         owner_id = _required_id(owner_id, "owner_id")
         agent_id = _optional_text(agent_id, "agent_id", 512)
         host_session_id = (
-            None
-            if host_session_id is None
-            else _uuid_text(host_session_id, "host_session_id")
+            None if host_session_id is None else _uuid_text(host_session_id, "host_session_id")
         )
         state_values = None if states is None else list(_string_tuple(states, "states", maximum=64))
         if not isinstance(for_update, bool):
@@ -1467,9 +1754,7 @@ class AgentRepository:
             if runtime_instance_id is None
             else _uuid_text(runtime_instance_id, "runtime_instance_id")
         )
-        state_values = None if states is None else list(
-            _string_tuple(states, "states", maximum=64)
-        )
+        state_values = None if states is None else list(_string_tuple(states, "states", maximum=64))
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
         limit = _bounded_limit(limit, maximum=2000)
@@ -1708,9 +1993,7 @@ def _bounded_timeout(value: object, *, maximum: float) -> float:
         or not isinstance(value, (int, float))
         or not 0 < float(value) <= maximum
     ):
-        raise RepositoryValidationError(
-            f"timeout_seconds must be in (0, {maximum:g}]"
-        )
+        raise RepositoryValidationError(f"timeout_seconds must be in (0, {maximum:g}]")
     return float(value)
 
 
@@ -1810,11 +2093,139 @@ def _trust(row: Mapping[str, Any]) -> AgentTrustRecord:
     )
 
 
+def _lock_agent_identity(transaction: Transaction, agent_id: str) -> None:
+    # Serialize the otherwise absent-row race with legacy trust/ownership
+    # writers. The lock precedes a new SQL statement/snapshot; putting this
+    # inside the INSERT would retain a pre-wait READ COMMITTED snapshot.
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(%s,hashtext(%s))",
+        (_AGENT_IDENTITY_LOCK_NAMESPACE, agent_id),
+    )
+
+
+def _lock_unbound_agent_identity(transaction: Transaction, agent_id: str) -> None:
+    # Existing head identities/kinds are immutable through the public API.
+    # Do not invert a legacy head→ownership transition against identity→head.
+    # If absent, serialize insertion; the mutation's NEXT statement rechecks
+    # kind after any wait. Composed callers must acquire owner locks first and
+    # order multiple identities canonically; these legacy methods never do so.
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(%s,hashtext(%s)) WHERE NOT EXISTS "
+        "(SELECT 1 FROM user_agent WHERE agent_id=%s)",
+        (_AGENT_IDENTITY_LOCK_NAMESPACE, agent_id, agent_id),
+    )
+
+
+def _agent_kind(value: object) -> str:
+    if type(value) is not str or value not in {"executable", "declarative"}:
+        raise RepositoryDataError("persisted agent kind is unsupported")
+    return value
+
+
+def _validate_declarative_head(record: UserAgentRecord) -> None:
+    if (
+        record.status not in {"draft", "active", "archived"}
+        or (record.status == "active") != (record.selected_definition_revision_id is not None)
+        or (record.deleted_at is not None and record.status != "archived")
+        or any(
+            value is not None
+            for value in (
+                record.active_revision_id,
+                record.last_known_good_revision_id,
+                record.host_client_id,
+                record.host_session_id,
+                record.host_last_seen_at,
+                record.selected_host_session_id,
+                record.authoritative_instance_id,
+                record.draft_id,
+                record.constitution_version,
+                record.validated_at,
+                record.validated_policy_revision,
+                record.declared_egress,
+            )
+        )
+        or record.lifecycle_generation
+        or record.generation_counter
+        or record.is_public
+        or record.revalidation_required
+        or record.declared_tools
+        or record.declared_scopes
+    ):
+        raise RepositoryDataError("declarative agent has an invalid lifecycle shape")
+
+
+def _validate_definition_revision(record: AgentRevisionRecord) -> None:
+    try:
+        _, digest = definition_snapshot(record.definition_json)
+    except RepositoryValidationError as exc:
+        raise RepositoryDataError("persisted definition is invalid") from exc
+    if (
+        type(record.definition_version) is not int
+        or record.definition_version != 1
+        or record.definition_digest != digest
+        or record.compatibility_state != "declarative"
+        or record.state != "definition"
+        or record.state_revision != 0
+        or any(
+            value is not None
+            for value in (
+                record.artifact_digest,
+                record.manifest,
+                record.artifact_relative_path,
+                record.runtime_contract_version,
+                record.release_lock_digest,
+                record.promotion_token,
+                record.previous_good_revision_id,
+                record.confirmed_at,
+                record.promoted_at,
+                record.failed_at,
+                record.failure_code,
+            )
+        )
+    ):
+        raise RepositoryDataError("definition revision has an invalid immutable shape")
+
+
+def _declarative_receipt(row: Mapping[str, Any]) -> DeclarativeAgentReceipt:
+    try:
+        command = row["command"]
+        if type(command) is not str or command not in {
+            "create",
+            "revise",
+            "activate",
+            "archive",
+            "clone",
+            "delete",
+        }:
+            raise RepositoryValidationError("unsupported receipt command")
+        if type(row["command_version"]) is not int or row["command_version"] != 1:
+            raise RepositoryValidationError("unsupported receipt version")
+        if row["agent_kind"] != "declarative":
+            raise RepositoryValidationError("invalid receipt kind")
+        return DeclarativeAgentReceipt(
+            _required_id(row["owner_user_id"], "owner_id"),
+            _required_id(row["agent_id"], "agent_id", maximum=255),
+            _uuid_text(str(row["command_id"]), "command_id"),
+            command,
+            _digest(row["request_digest"], "request_digest"),
+            _integer(row["result_state_revision"], "result_state_revision"),
+            _optional_uuid(
+                None
+                if row["result_definition_revision_id"] is None
+                else str(row["result_definition_revision_id"]),
+                "result_definition_revision_id",
+            ),
+            _aware_datetime(row["created_at"], "created_at"),
+        )
+    except (KeyError, RepositoryValidationError) as exc:
+        raise RepositoryDataError("persisted declarative receipt is invalid") from exc
+
+
 def _user_agent(row: Mapping[str, Any]) -> UserAgentRecord:
     tools = _json_strings(row.get("declared_tools"), "declared_tools")
     scopes = _json_strings(row.get("declared_scopes"), "declared_scopes")
     egress = _json_strings(row.get("declared_egress"), "declared_egress", nullable=True)
-    return UserAgentRecord(
+    result = UserAgentRecord(
         agent_id=str(row["agent_id"]),
         owner_id=str(row["owner_user_id"]),
         owner_email=None if row.get("owner_email") is None else str(row["owner_email"]),
@@ -1866,11 +2277,22 @@ def _user_agent(row: Mapping[str, Any]) -> UserAgentRecord:
             if row.get("validated_policy_revision") is None
             else str(row["validated_policy_revision"])
         ),
+        agent_kind=_agent_kind(row.get("agent_kind", "executable")),
+        selected_definition_revision_id=(
+            None
+            if row.get("selected_definition_revision_id") is None
+            else str(row["selected_definition_revision_id"])
+        ),
     )
+    if result.agent_kind == "declarative":
+        _validate_declarative_head(result)
+    elif result.selected_definition_revision_id is not None:
+        raise RepositoryDataError("executable agent has a definition selection")
+    return result
 
 
 def _revision(row: Mapping[str, Any]) -> AgentRevisionRecord:
-    return AgentRevisionRecord(
+    result = AgentRevisionRecord(
         revision_id=str(row["revision_id"]),
         agent_id=str(row["agent_id"]),
         owner_id=str(row["owner_user_id"]),
@@ -1911,7 +2333,21 @@ def _revision(row: Mapping[str, Any]) -> AgentRevisionRecord:
         promoted_at=_optional_datetime(row.get("promoted_at"), "promoted_at"),
         failed_at=_optional_datetime(row.get("failed_at"), "failed_at"),
         failure_code=(None if row.get("failure_code") is None else str(row["failure_code"])),
+        revision_kind=_agent_kind(row.get("revision_kind", "executable")),
+        definition_version=row.get("definition_version"),
+        definition_json=_json_mapping(row.get("definition_json"), "definition_json"),
+        definition_digest=(
+            None if row.get("definition_digest") is None else str(row["definition_digest"])
+        ),
     )
+    if result.revision_kind == "declarative":
+        _validate_definition_revision(result)
+    elif any(
+        value is not None
+        for value in (result.definition_version, result.definition_json, result.definition_digest)
+    ):
+        raise RepositoryDataError("executable revision contains a definition")
+    return result
 
 
 def _host_session(row: Mapping[str, Any]) -> AgentHostSessionRecord:
