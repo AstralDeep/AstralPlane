@@ -472,7 +472,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/voice.py",
-          "sha256": "ff1a8e7e8deeb478c2fee1463293dc07a90df60acd792b020b23936794be200f"
+          "sha256": "60d52ba7a67e6b1b4bc74d3af09a4dbeacad70ef1de11f9780226ac1b900efb5"
         }
       ],
       "task": "T083",

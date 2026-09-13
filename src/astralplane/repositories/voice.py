@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
+from types import MappingProxyType
 
 from astralplane.contracts import Record, Transaction
 from astralplane.errors import PlaneError
-from astralplane.repositories import RepositoryValidationError
+from astralplane.repositories import RepositoryConflictError, RepositoryValidationError
 
 
 class VoiceSessionState(StrEnum):
@@ -329,7 +331,105 @@ class VoiceTurn:
     updated_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceGuidanceObservation:
+    """Detached existing voice metadata; no transcript, media or read capability."""
+
+    session: Record = field(repr=False)
+    turn: Record = field(repr=False)
+    observed_at: datetime
+
+
 class VoiceRepository:
+
+    def assert_current_guidance_turn(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        session_id: str,
+        turn_id: str,
+        expected_session_generation: int,
+        expected_media_grant_revision: int,
+        operation_id: str,
+    ) -> VoiceGuidanceObservation:
+        """Observe exact live voice rows after operation/slot locks, without renewal.
+
+        The caller already guards original owner/session and operation authority.
+        Legacy voice writers use both session→turn and turn→session order, so
+        these two row locks are NOWAIT. A refusal rolls back this savepoint,
+        including its partial locks, and leaves the caller transaction usable.
+        No later voice writes or external calls belong in this read boundary.
+        """
+        if type(owner_id) is not str or not owner_id.strip() or len(owner_id) > 512:
+            raise RepositoryValidationError("voice guidance owner is invalid")
+        for value in (session_id, turn_id, operation_id):
+            try:
+                if type(value) is not str or len(value) != 36:
+                    raise ValueError
+                parsed = uuid.UUID(value)
+                if parsed.version != 4 or str(parsed) != value:
+                    raise ValueError
+            except ValueError:
+                raise RepositoryValidationError("voice guidance identity is invalid") from None
+        for value in (expected_session_generation, expected_media_grant_revision):
+            if type(value) is not int or not 1 <= value <= 2**63 - 1:
+                raise RepositoryValidationError("voice guidance generation is invalid")
+        try:
+            with transaction.savepoint("voice_guidance_current_read"):
+                session = transaction.fetch_one(
+                    "SELECT * FROM voice_session WHERE user_id=%s AND session_id=%s "
+                    "FOR UPDATE NOWAIT", (owner_id, session_id),
+                )
+                turn = transaction.fetch_one(
+                    "SELECT * FROM voice_turn WHERE user_id=%s AND turn_id=%s "
+                    "FOR UPDATE NOWAIT", (owner_id, turn_id),
+                )
+                clock = transaction.fetch_one("SELECT clock_timestamp() AS now")
+                if session is None or turn is None or clock is None:
+                    raise RepositoryConflictError("voice guidance is unavailable")
+                now = clock["now"]
+                if not _is_aware_datetime(now):
+                    raise RepositoryConflictError("voice guidance is unavailable")
+                _validate_persisted_backend_shape(session)
+                counters = (
+                    (session["generation"], expected_session_generation),
+                    (session["media_grant_revision"], expected_media_grant_revision),
+                    (turn["session_generation"], expected_session_generation),
+                    (turn["media_grant_revision"], expected_media_grant_revision),
+                )
+                if (
+                    any(type(actual) is not int or actual != expected
+                        for actual, expected in counters)
+                    or str(session["session_id"]) != session_id
+                    or session["user_id"] != owner_id
+                    or session["state"] != "active"
+                    or session["ended_at"] is not None
+                    or session["chat_unavailable_at"] is not None
+                    or not _is_aware_datetime(session["started_at"])
+                    or not _is_aware_datetime(session["lease_expires_at"])
+                    or not session["started_at"] <= now < session["lease_expires_at"]
+                    or str(turn["turn_id"]) != turn_id
+                    or str(turn["session_id"]) != session_id
+                    or turn["user_id"] != owner_id
+                    or str(turn["operation_id"]) != operation_id
+                    or turn["state"] not in {"accepted", "processing", "waiting_on_user"}
+                    or not _is_aware_datetime(turn["accepted_at"])
+                    or turn["accepted_at"] > now
+                    or turn["terminal_at"] is not None
+                    or turn["terminal_kind"] is not None
+                    or turn["origin_chat_unavailable_at"] is not None
+                ):
+                    raise RepositoryConflictError("voice guidance is unavailable")
+                return VoiceGuidanceObservation(
+                    MappingProxyType(dict(session)), MappingProxyType(dict(turn)),
+                    now.astimezone(UTC),
+                )
+        except Exception as exc:
+            if (getattr(exc, "pgcode", None) == "55P03"
+                    or isinstance(exc, (KeyError, TypeError, ValueError))):
+                raise RepositoryConflictError("voice guidance is unavailable") from None
+            raise
     """Persist supplied metadata; media workers and transport remain product-owned."""
 
     def lock_identity(
@@ -1610,6 +1710,7 @@ def _turn(row: Record) -> VoiceTurn:
 
 
 __all__ = (
+    "VoiceGuidanceObservation",
     "VoiceRepository",
     "VoiceSession",
     "VoiceSessionCreate",

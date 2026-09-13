@@ -38,3 +38,29 @@ waits, keep later operations in the declared lock order, and repeat the guards
 after later waits before using private guidance. No network runs under these
 locks. Authentic terminal settlement remains available under its existing
 contract after authority loss.
+
+## Voice guidance observation
+
+`voice.assert_current_guidance_turn(transaction, *, owner_id, session_id,
+turn_id, expected_session_generation, expected_media_grant_revision,
+operation_id)` returns a frozen `VoiceGuidanceObservation` containing detached
+existing session/turn metadata and the database observation time. Session,
+turn and operation identities are canonical UUID4 strings; generations are
+exact positive integers. No transcript or media is returned or retained.
+
+After its normal owner and operation/slot guards, the host calls this assertion
+before guidance heads. It locks the exact owner session then turn using
+`FOR UPDATE NOWAIT` in one savepoint. Existing voice writers use both lock
+orders; any contention refuses immediately and releases partial read locks,
+so a turn-first writer can proceed. Existing writers and their leases are
+unchanged. Cancellation propagates after savepoint rollback.
+
+The session must be active, unended, at its original generation and media-grant
+revision, and within its lease according to database time sampled after the
+reads. The accepted, nonterminal turn must retain its exact owner, session,
+generation, media revision and operation, with no unavailable-chat marker.
+Backend metadata uses the existing strict local/remote validator. The host
+continues to compare the original full turn/connection identity and to guard
+human permission and operation authority; this voice observation does not
+replace those checks or authorize a later voice write. A later read must
+repeat these checks; a retained observation is not a capability.
