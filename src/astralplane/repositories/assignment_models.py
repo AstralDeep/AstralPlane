@@ -318,6 +318,15 @@ class AssignmentActionReconciliation(_Record):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentActionReconciliationPreparation(_Record):
+    """Read/lock-only current facts; never authority outside the caller's transaction."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    action: AssignmentActionRecord = field(repr=False)
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentActivityRecord(_Record):
     activity_key: str
     activity_type: str

@@ -27,6 +27,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentActionIntent,
     AssignmentActionOutcome,
     AssignmentActionReconciliation,
+    AssignmentActionReconciliationPreparation,
     AssignmentActionRecord,
     AssignmentActionReservation,
     AssignmentActivityRecord,
@@ -2979,6 +2980,106 @@ class AssignmentRepository:
         self._save(transaction, data)
         return _action_record(action)
 
+    def _prepare_action_reconciliation(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        decision,
+        expected_state_version,
+        authority,
+    ):
+        if type(decision) is not AssignmentActionReconciliation:
+            raise RepositoryValidationError("typed reconciliation decision required")
+        _uuid(decision.submission_id)
+        _digest(decision.submission_digest)
+        _digest(decision.prior_result_digest)
+        _text(decision.evidence_reference, 2048)
+        if type(decision.decision) is not str or decision.decision not in {
+            "confirmed_applied",
+            "confirmed_not_applied",
+        }:
+            raise RepositoryValidationError("invalid reconciliation decision")
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        selected = self._load(transaction, owner_id, assignment_id)
+        one_shot = selected.get("execution_profile") == "one_shot"
+        authority_current = (
+            owner_active and self._lock_execution_authority(transaction, selected, authority)
+            if one_shot
+            else owner_active
+        )
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if one_shot:
+            _integer(expected_state_version, 1)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        if one_shot:
+            # Final deadline handling also inspects other liabilities. Acquire all
+            # action rows in stable order before selecting one or appending audit.
+            self._purge_blockers(transaction, data)
+            authority_current = authority_current and (
+                self._execution_authority_selection(selected)
+                == self._execution_authority_selection(data)
+            )
+        action = self._action(transaction, owner_id, assignment_id, action_id)
+        if one_shot and self._known_action(transaction, owner_id, assignment_id, action_id) is None:
+            raise RepositoryDataError("invalid reconciliation action evidence")
+        replayed = action["reconciliation"] is not None
+        if replayed:
+            if action["reconciliation"] != plain(decision):
+                _conflict("assignment_idempotency_conflict")
+        else:
+            if one_shot:
+                _state_version(data, expected_state_version)
+            if (
+                action["state"] != "uncertain"
+                or (action["result"] or {}).get("result_digest") != decision.prior_result_digest
+                or not action["attempts"]
+                or action["attempts"][-1]["state"] != "uncertain"
+                or action["attempts"][-1]["dispatch_token"] is None
+            ):
+                _conflict("assignment_result_conflict")
+        return data, action, owner_active, authority_current, replayed
+
+    def prepare_action_reconciliation(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        decision,
+        expected_state_version=None,
+        authority=None,
+    ):
+        """Lock and validate exact settlement facts without writing or requiring authority.
+
+        Owner/original session precede assignment and sorted action locks. The
+        caller may then append required audit and call reconcile_action with the
+        identical arguments in THIS transaction. This result is not a permit;
+        final settlement revalidates the decision and samples current DB time.
+        An absent/stale execution observation cannot prevent factual settlement.
+        """
+        data, action, _, _, replayed = self._prepare_action_reconciliation(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            authority=authority,
+        )
+        return AssignmentActionReconciliationPreparation(
+            _record(data), _action_record(action), replayed
+        )
+
     def reconcile_action(
         self,
         transaction,
@@ -2990,93 +3091,122 @@ class AssignmentRepository:
         expected_control_epoch,
         decision,
         expected_state_version=None,
+        authority=None,
     ):
-        owner_active = self._lock_operation_owner(transaction, owner_id)
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        one_shot = data.get("execution_profile") == "one_shot"
-        if one_shot:
-            _integer(expected_state_version, 1)
-        _version(data, expected_instruction_revision, expected_control_epoch)
-        action = self._action(transaction, owner_id, assignment_id, action_id)
-        _uuid(decision.submission_id)
-        _digest(decision.submission_digest)
-        _text(decision.evidence_reference, 2048)
-        if action["reconciliation"] is not None:
-            if action["reconciliation"] != plain(decision):
-                _conflict("assignment_idempotency_conflict")
-            return _action_record(action)
-        if one_shot:
-            _state_version(data, expected_state_version)
-        if (
-            action["state"] != "uncertain"
-            or decision.decision not in {"confirmed_applied", "confirmed_not_applied"}
-            or (action["result"] or {}).get("result_digest") != decision.prior_result_digest
-        ):
-            _conflict("assignment_result_conflict")
-        attempt = action["attempts"][-1]
-        self._release(data, attempt["maximum"])
-        self._day(data, _now(transaction))
-        for key in (*_DIMENSIONS, "spend_micro_units"):
-            if attempt["maximum"].get(key) is not None:
-                for bucket in ("spent", "daily"):
-                    data["usage"][bucket][key] = (
-                        data["usage"][bucket].get(key, 0) + attempt["maximum"][key]
-                    )
-        action["reconciliation"] = plain(decision)
-        action["state"] = (
-            "succeeded" if decision.decision == "confirmed_applied" else "failed_not_started"
-        )
-        attempt["state"] = action["state"]
-        action["result"] = {
-            "outcome": "reconciled_applied"
-            if decision.decision == "confirmed_applied"
-            else "reconciled_not_applied",
-            "result_digest": digest(["reconciliation", plain(decision)]),
-            "result": {},
-            "result_available": False,
-            "evidence_reference": decision.evidence_reference,
-            "reconciliation": {
-                "decision": decision.decision,
-                "prior_result_digest": decision.prior_result_digest,
-            },
-        }
-        self._save_action(transaction, action)
-        if data["lifecycle"] == "active":
-            continuation = True
-            if one_shot:
-                # Settlement is factual even after authority expires. It cannot
-                # manufacture a new wake under expired or retired authority.
-                try:
-                    if _time(data["operation"]["deadline_at"]) <= _now(transaction):
-                        _conflict("assignment_deadline_exceeded")
-                    if not owner_active:
-                        _conflict("assignment_owner_retired")
-                    self._validate_operation_continuation(transaction, data)
-                except RepositoryConflictError as exc:
-                    continuation = False
-                    data.update(
-                        phase="failed"
-                        if exc.code == "assignment_deadline_exceeded"
-                        else "waiting_authorization",
-                        next_wake_at=None,
-                        next_retry_at=None,
-                        safe_error_code=exc.code,
-                    )
-                    if exc.code == "assignment_deadline_exceeded":
-                        self._terminal_operation_failure(transaction, data)
-                        if data["lifecycle"] == "completed":
-                            # Issued attempts retain their exact binding receipts;
-                            # a terminal controller cannot retain an executable lease.
-                            self._clear_claim(data)
-            if continuation:
-                data.update(
-                    phase="waiting",
-                    next_wake_at=plain(_now(transaction)),
-                    wake_reason="reconciled",
-                    wake_generation=data["wake_generation"] + 1,
+        """Settle once; only current original authority may schedule one-shot continuation.
+
+        When audit is required, prepare_action_reconciliation must precede that
+        audit in the same transaction, then this final method follows it. Missing
+        or expired execution authority suppresses a wake, never the authentic
+        charge. Infrastructure errors roll back; replay resolves a lost commit
+        acknowledgment. The savepoint also protects callers that catch failures.
+        """
+        with transaction.savepoint("assignment_reconcile_" + uuid.uuid4().hex):
+            data, action, owner_active, authority_current, replayed = (
+                self._prepare_action_reconciliation(
+                    transaction,
+                    owner_id=owner_id,
+                    assignment_id=assignment_id,
+                    action_id=action_id,
+                    expected_instruction_revision=expected_instruction_revision,
+                    expected_control_epoch=expected_control_epoch,
+                    decision=decision,
+                    expected_state_version=expected_state_version,
+                    authority=authority,
                 )
-        self._save(transaction, data)
-        return _action_record(action)
+            )
+            if replayed:
+                return _action_record(action)
+            attempt = action["attempts"][-1]
+            self._release(data, attempt["maximum"])
+            self._day(data, _now(transaction))
+            for key in (*_DIMENSIONS, "spend_micro_units"):
+                if attempt["maximum"].get(key) is not None:
+                    for bucket in ("spent", "daily"):
+                        data["usage"][bucket][key] = (
+                            data["usage"][bucket].get(key, 0) + attempt["maximum"][key]
+                        )
+            action["reconciliation"] = plain(decision)
+            action["state"] = (
+                "succeeded" if decision.decision == "confirmed_applied" else "failed_not_started"
+            )
+            attempt["state"] = action["state"]
+            action["result"] = {
+                "outcome": "reconciled_applied"
+                if decision.decision == "confirmed_applied"
+                else "reconciled_not_applied",
+                "result_digest": digest(["reconciliation", plain(decision)]),
+                "result": {},
+                "result_available": False,
+                "evidence_reference": decision.evidence_reference,
+                "reconciliation": {
+                    "decision": decision.decision,
+                    "prior_result_digest": decision.prior_result_digest,
+                },
+            }
+            self._save_action(transaction, action)
+            if data["lifecycle"] == "active":
+                continuation = True
+                if data.get("execution_profile") == "one_shot":
+                    continuation = self._reconciliation_continuation(
+                        transaction, data, owner_active, authority_current, authority
+                    )
+                if continuation:
+                    if data.get("execution_profile") == "one_shot":
+                        data.update(next_retry_at=None, safe_error_code=None)
+                    data.update(
+                        phase="waiting",
+                        next_wake_at=plain(_now(transaction)),
+                        wake_reason="reconciled",
+                        wake_generation=data["wake_generation"] + 1,
+                    )
+            self._save(transaction, data)
+            return _action_record(action)
+
+    def _reconciliation_continuation(
+        self,
+        transaction,
+        data,
+        owner_active,
+        authority_current,
+        authority,
+    ):
+        # The action is already factually settled. Denial below must persist that
+        # charge with a hold, not raise and erase it due to expired authority.
+        actions, _, held = self._purge_blockers(transaction, data)
+        if held or any(action["state"] in {"proposed", "approved"} for action in actions):
+            data.update(phase="reconciliation", next_wake_at=None, next_retry_at=None)
+            return False
+        if data["operation"].get("control", {}).get("wait") is not None:
+            data.update(phase="awaiting_event", next_wake_at=None, next_retry_at=None)
+            return False
+        if data["phase"] == "budget_exhausted":
+            data.update(next_wake_at=None, next_retry_at=None)
+            return False
+        try:
+            if _time(data["operation"]["deadline_at"]) <= _now(transaction):
+                _conflict("assignment_deadline_exceeded")
+            if not owner_active:
+                _conflict("assignment_owner_retired")
+            self._validate_operation_continuation(transaction, data)
+            if not authority_current or not self._lock_execution_authority(
+                transaction, data, authority
+            ):
+                _conflict("assignment_authorization_unavailable")
+        except RepositoryConflictError as exc:
+            data.update(
+                phase="failed"
+                if exc.code == "assignment_deadline_exceeded"
+                else "waiting_authorization",
+                next_wake_at=None,
+                next_retry_at=None,
+                safe_error_code=exc.code,
+            )
+            self._clear_claim(data)
+            if exc.code == "assignment_deadline_exceeded":
+                self._terminal_operation_failure(transaction, data)
+            return False
+        return True
 
     @staticmethod
     def _event(transaction, owner_id, assignment_id, event_id):

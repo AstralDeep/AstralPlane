@@ -155,6 +155,44 @@ reconciliation becomes terminal failed; any remaining liability/task reconciliat
 keeps the operation held. Renewable authority loss with a live deadline remains an
 authority hold. No result is incorporated or published by settlement.
 
+For one-shot reconciliation, pass the optional original
+`authority=SessionExecutionObservation(...)` only when the host has freshly qualified
+it. Omission, wrong incarnation, deletion, rotation, expiry or revocation never
+turns a genuine uncertain liability into a refund or an authorization exception:
+the exact decision settles once with no result payload, but cannot schedule a wake.
+Continuation additionally requires no remaining reservations, issued/uncertain
+attempts, pending approvals, reconciliation tasks, event wait or budget hold.
+Successful one-shot continuation clears obsolete retry/error metadata. Persistent
+reconciliation retains its existing continuation behavior. No stored
+operation, control, action or schema version changes.
+
+When the host requires atomic audit, use this sequence in one bounded transaction:
+
+1. `prepare_action_reconciliation` with the same owner, assignment/action IDs,
+   observed state/instruction/control vector, exact typed
+   `AssignmentActionReconciliation`, and optional original observation. It acquires
+   owner/original-session locks before the assignment and all one-shot action rows
+   in sorted ID order. It performs no writes and returns
+   `AssignmentActionReconciliationPreparation(assignment, action, replayed)`.
+2. Append the required audit through the caller's ordinary same-transaction audit
+   facade only for a new decision. Remote evidence/authentication must already have
+   completed; no network or second transaction belongs inside this sequence.
+3. Call `reconcile_action` with the identical arguments. It independently validates
+   the decision and resamples database time after audit and action-inventory waits.
+   Expired execution authority suppresses only continuation; the factual charge and
+   audit commit together. A replay never creates a new wake or charge.
+
+Preparation is neither a dispatch permit nor a durable capability, and cannot be
+used after its transaction. The host remains responsible for current owner command
+permission and for committing the entire audit/settlement sequence together.
+Infrastructure failures roll back; the exact receipt resolves a lost commit
+acknowledgment. Final settlement uses a savepoint so a caught storage failure cannot
+leave a partial action/accounting update. The preceding required audit is outside
+that internal savepoint: if final settlement raises, the host must abort the whole
+transaction rather than catch the error and commit an audit-only success. SQL timeout/cancellation is not proof that
+settlement committed and is not a reason to refund the original issued liability.
+
+
 One-shot and mixed-profile account cleanup must explicitly adopt
 `retire_operations_for_owner`. It fences the owner and stops every owned profile in
 one transaction, returning `retained_assignment_ids` as well as actual
