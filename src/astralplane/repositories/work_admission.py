@@ -2035,6 +2035,65 @@ class WorkAdmissionRepository:
             _StatementSession(transaction), fence
         )
 
+    def assert_current_execution_lease(
+        self, transaction: Transaction, fence: ExecutionFence
+    ) -> OperationRecord:
+        """Lock and read an exact live execution and its complete capacity lease.
+
+        Caller owner/session and scheduled-occurrence locks precede this call.
+        Operation then sorted slot locks match expiry/cancel/renewal ordering;
+        no configuration-row lock, renewal, reselection or mutation occurs.
+        The caller must bound its transaction and recheck after later waits.
+        This observation supplies neither user nor delegated authority.
+        """
+        if (type(fence) is not ExecutionFence
+                or type(fence.execution_generation) is not int
+                or not 1 <= fence.execution_generation <= 2**63 - 1):
+            raise RepositoryValidationError("execution fence is invalid")
+        fence = ExecutionFence(
+            fence.operation_id, fence.execution_generation, fence.execution_lease_token
+        )
+        cursor = _StatementSession(transaction)
+        operation = self._assert_current_execution_session(cursor, fence)
+        if operation.cancel_requested_at is not None:
+            raise StaleWorkExecutionFenceError("execution capacity lease is unavailable")
+        expected = self._chain(operation.admission_class)
+        cursor.execute(
+            """
+            SELECT class_name, slot_number, operation_id, lease_token,
+                   claim_generation, lease_expires_at
+            FROM operation_admission_slot WHERE operation_id = %s
+            ORDER BY class_name, slot_number FOR UPDATE
+            """,
+            (str(fence.operation_id),),
+        )
+        slots = cursor.fetchall()
+        cursor.execute("SELECT clock_timestamp() AS current_time")
+        clock = cursor.fetchone()
+        if clock is None:
+            raise WorkAdmissionIntegrityError("execution clock is unavailable")
+        now = _normalize_datetime(clock["current_time"])
+        try:
+            complete = (
+                expected == self._chain(operation.admission_class)
+                and len(slots) == len(expected)
+                and {row["class_name"] for row in slots} == {c.value for c in expected}
+                and len({self._uuid(row["lease_token"]) for row in slots}) == 1
+                and all(
+                    self._uuid(row["operation_id"]) == fence.operation_id
+                    and self._uuid(row["lease_token"]) is not None
+                    and type(row["claim_generation"]) is int
+                    and row["claim_generation"] > 0
+                    and _normalize_datetime(row["lease_expires_at"]) > now
+                    for row in slots
+                )
+            )
+        except (KeyError, TypeError, ValueError, WorkAdmissionIntegrityError):
+            complete = False
+        if not complete:
+            raise StaleWorkExecutionFenceError("execution capacity lease is unavailable")
+        return operation
+
     def reselect_execution(
         self,
         transaction: Transaction,

@@ -163,6 +163,59 @@ class OfflineGrantRepository:
         )
         return None if row is None else _grant(row)
 
+    def assert_current_grant(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        grant_id: str,
+    ) -> OfflineGrantRecord:
+        """Read a locked active owner/grant at fresh database time, without exchange.
+
+        Canonical callers hold owner 79 before session/occurrence/operation/slot
+        locks, and take this grant lock before guidance rows. The nonblocking
+        owner check also refuses a misordered standalone caller rather than
+        waiting upstream. Failed NOWAIT checks roll back only this savepoint.
+        Compare the returned complete record to the original captured grant;
+        this method does not authorize adoption, decrypt, refresh or renew.
+        """
+        owner = str(_required_id(owner_id, "owner_id"))
+        grant = _uuid_text(grant_id, "grant_id")
+        try:
+            with transaction.savepoint("offline_grant_current_read"):
+                locked = transaction.fetch_one(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,79)) AS acquired",
+                    (owner,),
+                )
+                if locked is None or locked["acquired"] is not True:
+                    raise RepositoryConflictError("offline grant is unavailable")
+                state = transaction.fetch_one(
+                    "SELECT state FROM astralplane_blob_owner_state "
+                    "WHERE owner_id=%s FOR UPDATE NOWAIT", (owner,),
+                )
+                if state is not None and state["state"] != "active":
+                    raise RepositoryConflictError("offline grant is unavailable")
+                row = transaction.fetch_one(
+                    f"SELECT {self._FIELDS} FROM user_offline_grant "
+                    "WHERE id=%s AND user_id=%s FOR UPDATE", (grant, owner),
+                )
+                clock = transaction.fetch_one(
+                    "SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms"
+                )
+                if clock is None or type(clock["now_ms"]) is not int:
+                    raise RepositoryDataError("offline grant clock is unavailable")
+                if row is None:
+                    raise RepositoryConflictError("offline grant is unavailable")
+                record = _grant(row)
+                if (record.revoked_at is not None
+                        or not record.issued_at <= clock["now_ms"] < record.expires_at):
+                    raise RepositoryConflictError("offline grant is unavailable")
+                return record
+        except Exception as exc:
+            if getattr(exc, "pgcode", None) == "55P03":
+                raise RepositoryConflictError("offline grant is unavailable") from None
+            raise
+
     def replace_refresh_token_if_current(
         self,
         transaction: Transaction,

@@ -487,7 +487,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/work_admission.py",
-          "sha256": "88b9b87cbcfc09a6aabc5982207b9715212370ca8a4c692d47402f7239646894"
+          "sha256": "64ddf8a2d835dfb2dc02a8e635181e9d2f6dd158671da3d32209a4f0d7345ad6"
         }
       ],
       "task": "T082",
