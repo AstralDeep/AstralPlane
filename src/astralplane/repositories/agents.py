@@ -11,7 +11,7 @@ import json
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -646,11 +646,13 @@ class AgentRepository:
     # -- declarative metadata lifecycle --------------------------------
 
     def lock_declarative_owner(self, transaction: Transaction, *, owner_id: str) -> None:
-        """Shared owner/session order: 79, owner state, then legacy agent owner 0.
+        """Order: owner 79/state, selected assignments/actions, agent owner 0.
 
         The host acquires any caller session lock before this method. Nothing in
-        this authoring boundary acquires session, Work, or configuration locks
-        after the agent lock. Metadata permission remains a host obligation.
+        this authoring boundary acquires new session, Work, or configuration locks
+        after the agent lock. Existing executable methods never take owner 79;
+        callers must not compose owner-0-first methods before this boundary.
+        Metadata permission remains a host obligation.
         """
         owner_id = _required_id(owner_id, "owner_id")
         transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
@@ -660,6 +662,9 @@ class AgentRepository:
         )
         if retired is not None and retired["state"] != "active":
             raise RepositoryConflictError("declarative owner is retired")
+        from astralplane.repositories.assignments import AssignmentRepository
+
+        AssignmentRepository()._lock_selected_agent_dependants(transaction, owner_id)
         self.lock_owner(transaction, owner_id=owner_id)
 
     def prepare_declarative_command(
@@ -676,7 +681,7 @@ class AgentRepository:
         """
         if type(command) is not DeclarativeAgentCommand:
             raise RepositoryValidationError("a typed declarative command is required")
-        command.validate()
+        command = replace(command)
         digest = command.request_digest
         self.lock_declarative_owner(transaction, owner_id=command.owner_id)
         row = transaction.fetch_one(
@@ -855,6 +860,11 @@ class AgentRepository:
                 )
                 revision = _revision(row)
             if command.command not in {"create", "clone"}:
+                from astralplane.repositories.assignments import AssignmentRepository
+
+                AssignmentRepository()._invalidate_selected_agent_dependants(
+                    transaction, command.owner_id, command.agent_id
+                )
                 status = (
                     "active"
                     if command.command == "activate"

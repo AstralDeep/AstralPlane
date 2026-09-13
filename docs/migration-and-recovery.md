@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -196,6 +196,25 @@ file cutover, receipt/CAS semantics, note erasure and fair expiry, and ordered
 assignment invalidation. A successful schema qualification alone does not qualify
 Deep privacy/authentication, filesystem materialization, UI, T036 guidance adoption,
 or institutional staging.
+
+### `088.006` selected input and recovery
+
+This additive edge requires the exact `088.005` registry and catalog. It adds a
+nullable immutable selected-input envelope and a separate owned declarative-agent
+revision index. Existing headers keep a null envelope; no historical selected
+definition, expansion, or private value is inferred. Existing action accounting,
+skill history, encrypted notes and declarative revisions remain unchanged.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+After committed upgrade, recover with the matching database, durable roots and
+application; apply governed session retirement and post-backup Forget/expiry
+reconciliation before admission. Never drop references or rewrite the schema
+marker to make stale selected guidance executable. The
+[selected input contract](selected-input-contracts.md) defines immutable binding,
+ordered invalidation and final database-clock assertions. Schema qualification
+does not establish host authentication, keyed binding verification or T036
+execution/publication integration.
 
 ### `079.001` deployment and recovery
 

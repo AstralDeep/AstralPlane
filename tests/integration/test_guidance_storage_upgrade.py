@@ -8,7 +8,9 @@ import pytest
 from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
-from astralplane.repositories.agents import AgentRepository, DeclarativeAgentCommand
+from astralplane.repositories.agent_models import definition_snapshot
+from astralplane.repositories.agents import DeclarativeAgentCommand
+from astralplane.repositories.assignments import canonical
 from astralplane.repositories.guidance import SkillsRepository
 from astralplane.repositories.guidance_models import SkillCommand, SkillDefinition
 from astralplane.repositories.preferences import MemoryRecord, PreferencesRepository
@@ -81,7 +83,6 @@ def seed_populated(tx):
         ),
     )
     prefs.set_chat_phi_notice_enabled(tx, owner_id="legacy-memory-owner", enabled=False)
-    agents = AgentRepository()
     command = DeclarativeAgentCommand(
         owner_id="declaration-owner",
         agent_id="prior-declaration",
@@ -91,19 +92,57 @@ def seed_populated(tx):
         display_name="Stored draft",
         definition={"version": 1, "purpose": "Exact prior definition"},
     )
-    prepared = agents.prepare_declarative_command(tx, command=command)
-    created = agents.apply_declarative_command(tx, preparation=prepared)
+    # The current 006 writer requires its selected-agent index. Seed exact
+    # valid 004 declaration/receipt shapes here instead of pretending the new
+    # repository is a predecessor writer. No expanded/private values are added.
+    definition, definition_digest = definition_snapshot(command.definition)
+    tx.execute(
+        "INSERT INTO user_agent(agent_id,owner_user_id,display_name,status,agent_kind,"
+        "created_at,updated_at) VALUES(%s,%s,%s,'draft','declarative',0,0)",
+        (command.agent_id, command.owner_id, command.display_name),
+    )
+    tx.execute(
+        "INSERT INTO user_agent_revision(revision_id,agent_id,owner_user_id,revision_number,"
+        "revision_kind,compatibility_state,state,definition_version,"
+        "definition_json,definition_digest) "
+        "VALUES(%s,%s,%s,1,'declarative','declarative','definition',1,%s::jsonb,%s)",
+        (
+            command.revision_id,
+            command.agent_id,
+            command.owner_id,
+            canonical(definition),
+            definition_digest,
+        ),
+    )
     selected = DeclarativeAgentCommand(
         owner_id=command.owner_id,
         agent_id=command.agent_id,
         command_id=str(uuid4()),
         command="activate",
-        expected_revision=created.agent.state_revision,
+        expected_revision=0,
         revision_id=command.revision_id,
     )
-    agents.apply_declarative_command(
-        tx, preparation=agents.prepare_declarative_command(tx, command=selected)
+    tx.execute(
+        "UPDATE user_agent SET status='active',selected_definition_revision_id=%s,"
+        "state_revision=1 WHERE agent_id=%s",
+        (command.revision_id, command.agent_id),
     )
+    for state, cmd in enumerate((command, selected)):
+        tx.execute(
+            "INSERT INTO user_agent_command_receipt(owner_user_id,agent_id,command_id,"
+            "command_version,command,request_digest,result_state_revision,"
+            "result_definition_revision_id) "
+            "VALUES(%s,%s,%s,1,%s,%s,%s,%s)",
+            (
+                cmd.owner_id,
+                cmd.agent_id,
+                cmd.command_id,
+                cmd.command,
+                cmd.request_digest,
+                state,
+                command.revision_id,
+            ),
+        )
     return tuple(
         dict.fromkeys((*tables, "memory_item", "user_preferences", "user_agent_command_receipt"))
     )
@@ -127,8 +166,9 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
             and before["user_offline_grant"]
         )
         assert any(r["selected_definition_revision_id"] for r in before["user_agent"])
-    assert current_runner(db).run(expected_revision="088.005").applied_steps == (
+    assert current_runner(db).run(expected_revision="088.006").applied_steps == (
         "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -154,7 +194,7 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
             ),
         )
         assert result.head.revision == 1
-    assert current_runner(db).run(expected_revision="088.005").already_current
+    assert current_runner(db).run(expected_revision="088.006").already_current
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
     with pytest.raises(SchemaRevisionError):
@@ -176,7 +216,7 @@ def test_wrong_predecessor_refuses_without_partial_guidance_schema(
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.005")
+        current_runner(db).run(expected_revision="088.006")
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "088.004"
@@ -196,8 +236,8 @@ def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(empty_
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT to_regclass('explicit_note_current') AS t")["t"] is None
-    assert current_runner(db).run(expected_revision="088.005").applied_steps
-    assert current_runner(db).run(expected_revision="088.005").already_current
+    assert current_runner(db).run(expected_revision="088.006").applied_steps
+    assert current_runner(db).run(expected_revision="088.006").already_current
 
 
 @pytest.mark.parametrize(
@@ -214,8 +254,8 @@ def test_current_schema_refuses_missing_guards_or_extra_note_history(
     empty_postgres_schema, corruption
 ):
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.005")
+    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.006")
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.005")
+        current_runner(db).run(expected_revision="088.006")

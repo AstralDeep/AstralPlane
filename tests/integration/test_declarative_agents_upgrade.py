@@ -197,6 +197,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
     ).applied_steps == (
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
