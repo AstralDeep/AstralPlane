@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -136,10 +137,46 @@ class ClaimedOccurrenceRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DueScanContinuation:
+    """Resettable scan hints, never claim or eligibility authority.
+
+    Positions identify the last examined row in each independent ordered scan.
+    Deleted rows need not exist; the next scan advances past the tuple and wraps.
+    Owner hints rotate selection within a bounded page, including across polls.
+    """
+
+    definition: tuple[int, str] | None = None
+    occurrence: tuple[datetime, str] | None = None
+    definition_owner: str | None = None
+    occurrence_owner: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("definition", "occurrence"):
+            position = getattr(self, name)
+            if position is None:
+                continue
+            if not isinstance(position, tuple) or len(position) != 2:
+                raise ValueError("scan position must contain a timestamp and UUID")
+            if name == "definition":
+                _millisecond("definition scan timestamp", position[0])
+                if position[0] > 2**63 - 1:
+                    raise ValueError("definition scan timestamp exceeds storage range")
+            else:
+                if not isinstance(position[0], datetime):
+                    raise ValueError("occurrence scan timestamp must be aware")
+                _aware("occurrence scan timestamp", position[0])
+            _uuid("scan identifier", position[1], version=4)
+        for owner in (self.definition_owner, self.occurrence_owner):
+            if owner is not None:
+                _required("scan owner", owner)
+
+
+@dataclass(frozen=True, slots=True)
 class DueClaimBatch:
     claims: tuple[ClaimedOccurrenceRecord, ...]
     recovered_attempts: tuple[RecoveredAttemptRecord, ...]
     ineligible_job_ids: tuple[str, ...]
+    continuation: DueScanContinuation = DueScanContinuation()
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,16 +579,34 @@ class SchedulerRepository:
         lease_seconds: int,
         eligible: Callable[[ScheduledJob], bool],
         next_run: Callable[[ScheduledJob, int], int | None],
+        continuation: DueScanContinuation | None = None,
+        scan_limit: int | None = None,
     ) -> DueClaimBatch:
         """Materialize cadence and claim eligible firings in one transaction.
 
         The two callbacks are product-owned, deterministic policy functions;
         they receive immutable job records and must not perform I/O. AstralPlane
         owns every durable read, lock, and write around those decisions.
+
+        Each scan examines at most ``scan_limit`` rows (default four times the
+        dispatch limit, at least 32 and at most 1000), using at most two queries
+        to wrap. Refused rows advance the returned hint without changing cadence.
+        Retain the hint only after commit; resetting it never bypasses row fences.
+        Fetch/callback work is bounded, not the database's physical index work.
         """
 
         _instance_id(instance_id)
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError("limit must be an integer")
         _limit(limit)
+        scan_limit = min(1000, max(32, limit * 4)) if scan_limit is None else scan_limit
+        if not isinstance(scan_limit, int) or isinstance(scan_limit, bool):
+            raise ValueError("scan_limit must be an integer")
+        _limit(scan_limit)
+        if continuation is None:
+            continuation = DueScanContinuation()
+        if not isinstance(continuation, DueScanContinuation):
+            raise ValueError("continuation must be a scheduler scan hint")
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool):
             raise ValueError("lease_seconds must be an integer")
         if not 5 <= lease_seconds <= 60:
@@ -566,23 +621,34 @@ class SchedulerRepository:
         observed_at = observed_at.astimezone(UTC)
         observed_ms = int(observed_at.timestamp() * 1000)
 
-        due_rows = transaction.fetch_all(
+        due_rows = _scan_rows(
+            transaction,
             """
             SELECT * FROM scheduled_job
             WHERE status = 'active' AND next_run_at IS NOT NULL
               AND next_run_at <= %s
+              {position}
             ORDER BY next_run_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT %s
             """,
-            (observed_ms, limit),
+            (observed_ms,),
+            columns="(next_run_at, id)",
+            position=continuation.definition,
+            limit=scan_limit,
         )
         ineligible_ids: list[str] = []
+        due_candidates: list[tuple[ScheduledJob, Record]] = []
         for row in due_rows:
             job = _job(row)
             if not bool(eligible(job)):
                 ineligible_ids.append(job.job_id)
                 continue
+            due_candidates.append((job, row))
+        selected_due, definition_owner = _rotate_owners(
+            due_candidates, limit=limit, last_owner=continuation.definition_owner,
+        )
+        for job, _ in selected_due:
             if job.next_run_at is None:  # pragma: no cover - SQL predicate invariant
                 raise PlaneError(
                     "locked due definition has no cadence timestamp",
@@ -642,7 +708,8 @@ class SchedulerRepository:
                     metadata={"owner_id": job.owner_id},
                 )
 
-        candidates = transaction.fetch_all(
+        candidates = _scan_rows(
+            transaction,
             """
             SELECT occurrence.*, to_jsonb(job) AS job_record
             FROM scheduled_occurrence AS occurrence
@@ -658,14 +725,19 @@ class SchedulerRepository:
                 OR (occurrence.state IN ('claimed', 'running')
                     AND occurrence.lease_expires_at <= %s)
             )
+            {position}
             ORDER BY occurrence.scheduled_for, occurrence.occurrence_id
             FOR UPDATE OF occurrence SKIP LOCKED
             LIMIT %s
             """,
-            (observed_at, observed_at, observed_at, limit),
+            (observed_at, observed_at, observed_at),
+            columns="(occurrence.scheduled_for, occurrence.occurrence_id)",
+            position=continuation.occurrence,
+            limit=scan_limit,
         )
         claims: list[ClaimedOccurrenceRecord] = []
         recovered: list[RecoveredAttemptRecord] = []
+        eligible_candidates: list[tuple[ScheduledJob, Record]] = []
         for row in candidates:
             raw_job = row.get("job_record")
             if not isinstance(raw_job, Mapping):
@@ -678,6 +750,11 @@ class SchedulerRepository:
                 if job.job_id not in ineligible_ids:
                     ineligible_ids.append(job.job_id)
                 continue
+            eligible_candidates.append((job, row))
+        selected_occurrences, occurrence_owner = _rotate_owners(
+            eligible_candidates, limit=limit, last_owner=continuation.occurrence_owner,
+        )
+        for job, row in selected_occurrences:
             occurrence = _occurrence(row)
             parent_operation_id = occurrence.operation_id
             if parent_operation_id is not None:
@@ -729,6 +806,18 @@ class SchedulerRepository:
             claims=tuple(claims),
             recovered_attempts=tuple(recovered),
             ineligible_job_ids=tuple(ineligible_ids),
+            continuation=DueScanContinuation(
+                definition=(
+                    (int(due_rows[-1]["next_run_at"]), str(due_rows[-1]["id"]))
+                    if due_rows else continuation.definition
+                ),
+                occurrence=(
+                    (candidates[-1]["scheduled_for"], str(candidates[-1]["occurrence_id"]))
+                    if candidates else continuation.occurrence
+                ),
+                definition_owner=definition_owner,
+                occurrence_owner=occurrence_owner,
+            ),
         )
 
     def start_legacy_run(
@@ -2385,6 +2474,55 @@ class SchedulerRepository:
             payload_digest=payload_digest,
             downstream_receipt_digest=None,
         )
+def _scan_rows(
+    transaction: Transaction,
+    query: str,
+    parameters: tuple[object, ...],
+    *,
+    columns: str,
+    position: tuple[object, str] | None,
+    limit: int,
+) -> list[Record]:
+    """Read a bounded circular keyset page using only code-owned SQL fragments."""
+
+    predicate = "" if position is None else f"AND {columns} > (%s, %s)"
+    values = parameters if position is None else (*parameters, *position)
+    rows = list(transaction.fetch_all(query.format(position=predicate), (*values, limit)))
+    if position is not None and len(rows) < limit:
+        rows.extend(transaction.fetch_all(
+            query.format(position=f"AND {columns} <= (%s, %s)"),
+            (*parameters, *position, limit - len(rows)),
+        ))
+    return rows
+
+
+def _rotate_owners(
+    candidates: list[tuple[ScheduledJob, Record]],
+    *,
+    limit: int,
+    last_owner: str | None,
+) -> tuple[list[tuple[ScheduledJob, Record]], str | None]:
+    """Select one eligible row per owner per round, retaining per-owner due order."""
+
+    by_owner: dict[str, deque[tuple[ScheduledJob, Record]]] = {}
+    for candidate in candidates:
+        by_owner.setdefault(candidate[0].owner_id, deque()).append(candidate)
+    owners = sorted(by_owner)
+    if last_owner is not None:
+        owners = [owner for owner in owners if owner > last_owner] + [
+            owner for owner in owners if owner <= last_owner
+        ]
+    ring = deque(owners)
+    selected: list[tuple[ScheduledJob, Record]] = []
+    while ring and len(selected) < limit:
+        owner = ring.popleft()
+        selected.append(by_owner[owner].popleft())
+        last_owner = owner
+        if by_owner[owner]:
+            ring.append(owner)
+    return selected, last_owner
+
+
 def _required(name: str, value: str, *, maximum: int = 512) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a non-empty string of at most {maximum} characters")
