@@ -44,6 +44,7 @@ from astralplane.authority import (
 )
 from astralplane.contracts import OutboxEntry
 from astralplane.database.migrations import (
+    MIGRATION_REGISTRY,
     PLANE_SCHEMA_067_STATEMENTS,
     PLANE_SCHEMA_074_STATEMENTS,
 )
@@ -475,7 +476,12 @@ def test_074_001_authority_ddl_is_repeat_safe_on_real_postgresql(
             assert "UNIQUE INDEX" in index["indexdef"]
             assert "WHERE" in index["indexdef"]
 
-    assert astralplane.SCHEMA_REVISION == "088.003"
+    # The intent here is "the package advertises whatever the migration registry
+    # currently ends at", so this pins the registry head instead of a literal:
+    # the 088 series keeps growing (088.004 declarative agents, 088.005 owner
+    # guidance, 088.006 selected input) and a literal only records the day it
+    # was written.
+    assert MIGRATION_REGISTRY.migrations[-1].target_revision == astralplane.SCHEMA_REVISION
     assert astralplane.CURRENT_DATA_PLANE_REVISION.schema_revision == astralplane.SCHEMA_REVISION
 
 

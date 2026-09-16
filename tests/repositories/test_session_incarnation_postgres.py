@@ -477,7 +477,7 @@ def test_deliberate_owner_session_delete_preserves_issued_liabilities_and_startu
         assert before == after
     report = MigrationRunner(
         database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
-    ).run(expected_revision="088.003")
+    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     assert report.already_current
     with database.transaction() as tx:
         assert repo.get(tx, owner_id=session.owner_id, session_id=session.session_id) is None

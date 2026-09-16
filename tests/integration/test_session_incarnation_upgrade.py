@@ -99,6 +99,8 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -197,6 +199,8 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
     )
 
 
@@ -308,6 +312,8 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
         "astralplane-088-session-incarnation",
         "astralplane-088-session-issuer",
         "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
     )
     for _ in range(2):
         with db.transaction() as tx:

@@ -822,6 +822,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             "astralplane-088-session-issuer",
             "astralplane-088-declarative-agents",
             "astralplane-088-owner-guidance",
+            "astralplane-088-selected-input",
         )
         assert runner.run(
             expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision

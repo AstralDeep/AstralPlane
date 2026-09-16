@@ -7,8 +7,6 @@ from test_assignments_postgres import database as database
 from test_assignments_postgres import repo as repo
 from test_assignments_postgres import session_observation, uid
 from test_assignments_postgres import tx as tx
-from test_declarative_agents_postgres import apply
-from test_declarative_agents_postgres import command as declaration
 from test_guidance_storage_postgres import note
 from test_operation_terminal_postgres import change_action
 from test_result_publication_postgres import proposed, state
@@ -19,6 +17,16 @@ from astralplane.repositories.assignments import canonical, digest, plain
 from astralplane.repositories.guidance import ExplicitNotesRepository
 from astralplane.repositories.guidance_models import GuidanceReference
 from astralplane.repositories.history import SessionRepository
+
+# Imported through the ``tests.*`` package path (the convention the rest of this
+# directory already uses for cross-directory helpers) rather than by bare module
+# name: ``test_declarative_agents_postgres`` itself imports ``tests.integration``,
+# so resolving it by bare name only works when pytest happens to have inserted
+# both ``tests/repositories`` and the repository root on ``sys.path``, which
+# depends on what else is being collected. The package path depends only on the
+# repository root, which ``python -m pytest`` always provides.
+from tests.repositories.test_declarative_agents_postgres import apply
+from tests.repositories.test_declarative_agents_postgres import command as declaration
 
 
 @pytest.mark.parametrize(
