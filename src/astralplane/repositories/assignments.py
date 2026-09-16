@@ -59,6 +59,12 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentWakePreparation,
 )
 from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
+from astralplane.repositories.result_publication_models import (
+    ResultPublicationContent,
+    ResultPublicationPreparation,
+    ResultPublicationProposal,
+    ResultPublicationReceipt,
+)
 from astralplane.repositories.selected_input_models import (  # noqa: F401
     AssignmentSelectedInput,
     SelectedAgentReference,
@@ -2834,6 +2840,10 @@ class AssignmentRepository:
         """
         try:
             action = self._action(transaction, owner_id, assignment_id, action_id)
+            if action["intent"]["request"].get("kind") == "result_publication":
+                from astralplane.repositories.result_publications import known_publication_action
+
+                return known_publication_action(action)
             required = {
                 "action_id",
                 "assignment_id",
@@ -3140,7 +3150,134 @@ class AssignmentRepository:
             if amount.get(key) is not None:
                 usage["outstanding"][key] = usage["outstanding"].get(key, 0) + amount[key]
 
+    def read_result_publication_destination(
+        self,
+        transaction,
+        *,
+        owner_id,
+        conversation_id,
+        expected_render_revision,
+        expected_publication_id,
+        maximum_bytes=1048576,
+    ):
+        """Read a complete, byte/count-bounded owner destination; never authority.
+
+        Holds owner, current head and exact child locks through the caller's
+        transaction. Empty content is permitted; an oversized or busy head is
+        refused, never truncated. The host must separately guard publication.
+        """
+        from astralplane.repositories.result_publication_destination import read
+
+        return read(
+            self,
+            transaction,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            expected_render_revision=expected_render_revision,
+            expected_publication_id=expected_publication_id,
+            maximum_bytes=maximum_bytes,
+        )
+
+    def put_result_publication_proposal(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        proposal: ResultPublicationProposal,
+        content: ResultPublicationContent,
+        expected_selected: AssignmentSelectedInput | None,
+        authority: SessionExecutionObservation,
+        caller_valid_until: datetime,
+    ) -> AssignmentActionRecord:
+        """Propose exact retained result bytes; never revive an execution claim."""
+        from astralplane.repositories.result_publications import put
+
+        return put(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            proposal=proposal,
+            content=content,
+            expected_selected=expected_selected,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
+    def prepare_result_publication(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        decision: AssignmentActionDecision,
+        expected_state_version,
+        authority: SessionExecutionObservation | None = None,
+        caller_valid_until: datetime | None = None,
+    ) -> ResultPublicationPreparation:
+        """Receipt-first read/lock only; the host must still guard and audit Save."""
+        from astralplane.repositories.result_publications import prepare
+
+        return prepare(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
+    def commit_result_publication(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        decision: AssignmentActionDecision,
+        expected_state_version,
+        content: ResultPublicationContent,
+        authority: SessionExecutionObservation | None = None,
+        caller_valid_until: datetime | None = None,
+    ) -> ResultPublicationReceipt:
+        """Atomic fresh canvas pointer + one-time receipt, then final current checks.
+
+        The current owner request and its audit belong in this outer transaction.
+        If final validation fails, the caller must abort its audit too. Accepted
+        replay requires current owner access but no retired original capability.
+        """
+        from astralplane.repositories.result_publications import commit
+
+        return commit(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            content=content,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
     def put_action(self, transaction, *, fence, intent):
+        if (
+            isinstance(intent.request, Mapping)
+            and intent.request.get("kind") == "result_publication"
+        ):
+            raise RepositoryValidationError("owner publication cannot use a worker permit")
         data = self._fenced(transaction, fence)
         _text(intent.action_key)
         _digest(intent.request_digest)
