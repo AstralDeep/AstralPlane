@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -196,6 +196,22 @@ file cutover, receipt/CAS semantics, note erasure and fair expiry, and ordered
 assignment invalidation. A successful schema qualification alone does not qualify
 Deep privacy/authentication, filesystem materialization, UI, T036 guidance adoption,
 or institutional staging.
+
+### `088.007` scheduler policy and recovery
+
+This additive edge requires the exact `088.006` registry and catalog. It adds
+the optional `scheduled_job_policy` row and the `scheduled_occurrence_assignment`
+binding described in `knowledge-scheduler-and-async-contracts.md`. No existing
+scheduler, occurrence, run or effect row changes, no policy row is inferred for
+an existing definition, and no run limit is imposed on old jobs. Charges and
+bindings created after the upgrade are never decremented or rewritten by Stop.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+After committed upgrade, recover with the matching database and application;
+a `088.006` binary must not be asserted compatible with policy rows or bindings.
+Schema qualification does not establish Deep's admission wiring, the monitoring
+outcome classification, or the schedule-surface Stop.
 
 ### `088.006` selected input and recovery
 

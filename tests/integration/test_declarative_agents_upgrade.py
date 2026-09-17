@@ -198,6 +198,8 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -213,6 +215,10 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
                 assert row.pop("revision_kind") == "executable"
         for row in after["draft_agents"]:
             assert row.pop("published_revision_kind") == "executable"
+        # 088.008 adds two additive nullable columns to user_offline_grant.
+        for row in after["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
         assert after == before
         assert not tx.fetch_all("SELECT * FROM user_agent_command_receipt")
     assert current_runner(db).run(

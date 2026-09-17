@@ -70,7 +70,32 @@ def test_create_grant_stores_opaque_bytes_and_redacts_them() -> None:
         1000,
         100,
         100,
+        None,
+        None,
     )
+    assert record.max_admissions is None
+    assert record.consumed_admissions is None
+    assert record.admissions_remaining is None
+
+
+def test_create_grant_with_max_admissions_starts_at_zero_consumed() -> None:
+    transaction = ScriptedTransaction(one=[_grant_row(max_admissions=5, consumed_admissions=0)])
+
+    record = OfflineGrantRepository().create_grant(
+        transaction,  # type: ignore[arg-type]
+        grant_id=GRANT_ID,
+        owner_id="owner-1",
+        agent_id="agent-1",
+        encrypted_refresh_token=b"opaque-token",
+        issued_at=100,
+        expires_at=1000,
+        max_admissions=5,
+    )
+
+    assert transaction.calls[0][2][-2:] == (5, 0)
+    assert record.max_admissions == 5
+    assert record.consumed_admissions == 0
+    assert record.admissions_remaining == 5
 
 
 def test_create_grant_accepts_exact_replay_after_lifecycle_change() -> None:
@@ -224,6 +249,64 @@ def test_owner_revoke_uses_one_timestamp_and_counts_transitions_only() -> None:
     ) == 0
     assert transaction.calls[0][2] == (500, 500, "owner-1")
     assert "revoked_at IS NULL" in transaction.calls[0][1]
+
+
+def test_consume_admission_charges_the_finite_allowance_and_stamps_last_used() -> None:
+    transaction = ScriptedTransaction(
+        one=[_grant_row(max_admissions=5, consumed_admissions=1, updated_at=600)]
+    )
+
+    record = OfflineGrantRepository().consume_admission(
+        transaction,  # type: ignore[arg-type]
+        owner_id="owner-1",
+        grant_id=GRANT_ID,
+        as_of=600,
+    )
+
+    assert record.consumed_admissions == 1
+    assert record.admissions_remaining == 4
+    assert "COALESCE(consumed_admissions, 0) < max_admissions" in transaction.calls[0][1]
+    assert "COALESCE(consumed_admissions, 0) + 1" in transaction.calls[0][1]
+
+
+def test_consume_admission_refuses_an_exhausted_allowance_without_charging_it() -> None:
+    transaction = ScriptedTransaction(
+        one=[None, _grant_row(max_admissions=1, consumed_admissions=1)]
+    )
+
+    with pytest.raises(RepositoryConflictError, match="allowance exhausted"):
+        OfflineGrantRepository().consume_admission(
+            transaction,  # type: ignore[arg-type]
+            owner_id="owner-1",
+            grant_id=GRANT_ID,
+            as_of=600,
+        )
+
+
+def test_consume_admission_refuses_a_revoked_or_expired_grant() -> None:
+    transaction = ScriptedTransaction(one=[None, _grant_row(revoked_at=500)])
+
+    with pytest.raises(RepositoryConflictError, match="offline grant is unavailable"):
+        OfflineGrantRepository().consume_admission(
+            transaction,  # type: ignore[arg-type]
+            owner_id="owner-1",
+            grant_id=GRANT_ID,
+            as_of=600,
+        )
+
+
+def test_consume_admission_is_unlimited_when_no_allowance_is_configured() -> None:
+    transaction = ScriptedTransaction(one=[_grant_row(consumed_admissions=None)])
+
+    record = OfflineGrantRepository().consume_admission(
+        transaction,  # type: ignore[arg-type]
+        owner_id="owner-1",
+        grant_id=GRANT_ID,
+        as_of=600,
+    )
+
+    assert record.max_admissions is None
+    assert record.admissions_remaining is None
 
 
 def test_ciphertext_rotation_is_owner_live_expiry_and_exact_ciphertext_fenced() -> None:

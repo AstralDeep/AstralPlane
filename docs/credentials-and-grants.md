@@ -29,9 +29,11 @@ decryption, new credential field, schema change, or admission policy is added.
   `user_offline_grant`.
 - `create_share_grant_repository()` returns digest-bound immutable snapshot storage over
   `share_grant`.
+- `create_framework_credential_repository()` returns hash-only, owner-issued bearer-credential
+  storage over the additive `088.008` `framework_credential` table (see below).
 
-All three are also available as `credentials`, `offline_grants`, and `share_grants` in
-`RepositoryCatalog`.
+All four are also available as `credentials`, `offline_grants`, `share_grants`, and
+`framework_credentials` in `RepositoryCatalog`.
 
 ## Security and transaction boundary
 
@@ -129,9 +131,124 @@ This schema-neutral primitive provides local serialization and bounded freshness
 it does not perform Keycloak calls, prove remote freshness itself, enable an ingress
 or runner, or close the host's remaining current-authority integration.
 
+## Framework credentials (088.008)
+
+`framework_credential` is an additive `088.008` table: an owner-issued, hash-only
+bearer credential for an external caller — an SDK, MCP, or A2A client — that
+outlives the single request that minted it. Plane never receives or persists
+the plaintext token; the caller hashes the generated secret with SHA-256 before
+calling `issue`, and only that hex digest plus a short non-secret display
+prefix (`token_prefix`) are ever stored.
+
+A framework credential is **independently issued, never delegated**: its scope
+set, allowance and owner-lifetime expiry are fixed at mint time from the
+owner's OWN currently-live authority, and it carries no parent reference. This
+is the opposite shape from an attenuated authority binding or a delegation
+chain, where every capability traces back through a parent's lineage and can
+be narrowed but never independently re-issued. `tests/authority/
+test_issuance_vs_delegation.py` pins the two shapes apart at the model level so
+they can never be structurally confused.
+
+### Closing the pre-lock-authority defect
+
+A prior reference implementation read "is the issuer still valid" and computed
+the expiry BEFORE acquiring any lock, so a concurrent revoke or owner
+retirement racing the mint could lose the race and still see a credential
+appear. `FrameworkCredentialRepository.issue` closes this: it takes the SAME
+owner advisory-lock domain (`pg_advisory_xact_lock(hashtextextended(owner_id,
+79))`) that `AssignmentRepository.create_operation` uses, re-reads the owner's
+retirement state and the named issuer (a live `web_session` incarnation today,
+for either issuer kind) INSIDE that lock, and computes `expires_at` from
+`clock_timestamp() + ttl_seconds` only after both checks pass. A revoke or
+owner-retirement committed while `issue` waits on the lock is always visible
+to it once the lock releases; `tests/repositories/
+test_framework_credentials_postgres.py` proves this with real contending
+transactions using `pg_blocking_pids`, not a timing guess.
+
+### Lifecycle
+
+- `issue(transaction, *, owner_id, credential_id, name, scopes, token_hash,
+  token_prefix, issuer_kind, issuer_reference, max_admissions, ttl_seconds)` —
+  `scopes` must be a non-empty subset of the closed
+  `FRAMEWORK_CREDENTIAL_SCOPES` vocabulary (`operations.submit`,
+  `operations.read`, `operations.control`, `artifacts.read`, `agents.read`);
+  `issuer_kind` is `session_incarnation` or `native_credential`, both
+  currently verified through the same live `web_session` incarnation
+  mechanism (the kind only records, for audit, which kind of caller Deep
+  observed); `max_admissions` is 1..10000; `ttl_seconds` is 1..7,776,000 (90
+  days). Returns a `FrameworkCredentialRecord` that never carries the hash.
+- `revoke(transaction, *, owner_id, credential_id)` — owner-scoped, idempotent
+  (revoking an already-revoked credential returns it unchanged); raises
+  `RepositoryNotFoundError` for a foreign or missing id.
+- `list_for_owner(query, *, owner_id)` — bounded, owner-scoped, hash-free.
+- `consume_admission(transaction, *, owner_id, credential_id)` — a
+  compare-and-set that charges exactly one admission, refusing
+  (`credential_allowance_exhausted`) a revoked, expired, or exhausted
+  credential without ever double-charging a race's loser.
+- `assert_current_execution(transaction, *, observation)` — never persisted.
+  Locks the exact credential row `FOR UPDATE`, re-validates a fresh
+  `FrameworkCredentialObservation` (host-captured, valid at most 15 seconds,
+  the same freshness discipline as `SessionExecutionObservation`), and refuses
+  a revoked, expired, owner-mismatched, or hash-mismatched (replaced)
+  credential. `FrameworkCredentialFence`/`FrameworkCredentialObservation` are
+  exported from `astralplane.repositories.history`, mirroring the session
+  execution-observation shape; their `token_hash` field is excluded from
+  routine representations.
+
+### Execution adapter
+
+A persistent one-shot assignment's `operation.authority` may declare
+`origin="framework"` + `reference_kind="credential"` (previously refused
+outright by `AssignmentRepository._executable`). `_lock_execution_authority`
+now branches on the selected authority's origin: `interactive` continues to
+require a matching `SessionExecutionObservation`; `framework` requires a
+matching `FrameworkCredentialObservation` whose fence names the SAME owner and
+credential id as the persisted operation, re-verified via
+`FrameworkCredentialRepository.assert_current_execution` inside the caller's
+lock. `create_operation` binds the receipt's `credential_id` to the exact
+issuing credential (`_operation_spec`'s `framework` → `credential` reference
+kind, already receipt-tested by `test_one_shot_framework_receipt_is_bound_to_
+issuing_reference`) and, for a framework-origin operation, `_assert_creation_
+authority` verifies that same observation before any row commits — an
+unverified or foreign-typed authority (for example a session observation
+presented for a framework-origin operation) is refused exactly like an
+unverified interactive one. `scheduled`/interactive `delegation` reference
+kinds remain refused exactly as before.
+
+### Finite offline-grant allowance
+
+`user_offline_grant` gains two additive nullable columns, `max_admissions` and
+`consumed_admissions` (both `NULL` on every pre-`088.008` row and on any new
+grant created without an explicit limit — unlimited-admissions legacy
+semantics, unchanged). `OfflineGrantRepository.create_grant(..., 
+max_admissions=None)` accepts the new optional keyword (defaulting
+`consumed_admissions` to `0` only when a limit is given), and
+`consume_admission(transaction, *, owner_id, grant_id, as_of)` is the matching
+compare-and-set: a grant with `max_admissions IS NULL` always succeeds
+(unlimited), otherwise it charges exactly one admission or raises
+`RepositoryConflictError("offline grant allowance exhausted")` without
+touching a revoked or expired grant.
+
+### Usage charge basis (additive, FR-022)
+
+`AssignmentResourceAmount` gains an optional `basis: Mapping[str, str] | None`
+field: a per-dimension charge-provenance annotation (`observed`, `estimated`,
+`uncertain`, or `none`) over the same dimension keys as the amount itself
+(`model_calls`, `tool_calls`, `tokens`, `elapsed_ms`, `spend_micro_units`).
+It never introduces a duplicate counter and never changes how "unknown ≠
+zero" is represented — that remains `None` on the amount field itself; `basis`
+only annotates HOW a *populated* value was determined. Absent on every legacy
+row (`basis=None`), and `AssignmentRepository._amount` validates it only when
+present, so old persisted amounts decode unchanged.
+
 ## Rollback and compatibility
 
-The slice uses columns already present in the extracted `066.001` baseline, so rollback is a code
-composition rollback only. Re-pin the prior Plane/Deep composition while leaving PostgreSQL rows
-untouched. Existing nullable user-credential timestamps and nullable offline-grant bookkeeping
-timestamps remain readable. No ciphertext or snapshot should be copied into diagnostic evidence.
+The `066.001`-era slice above uses columns already present in the extracted baseline, so its own
+rollback is a code composition rollback only. `088.008` (`framework_credential`, and the two
+additive `user_offline_grant` columns) is a forward-only additive migration: re-pinning to `088.007`
+requires no data migration since no `088.007`-era row shape changed, but any already-minted
+framework credential rows would become unreachable code (the table itself would need dropping by an
+operator before a real downgrade, which this migration does not automate). Re-pin the prior
+Plane/Deep composition while leaving PostgreSQL rows untouched. Existing nullable user-credential
+timestamps and nullable offline-grant bookkeeping timestamps remain readable. No ciphertext,
+snapshot, or framework-credential hash should be copied into diagnostic evidence.

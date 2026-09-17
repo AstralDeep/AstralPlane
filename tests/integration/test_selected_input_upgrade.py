@@ -55,6 +55,17 @@ def current_runner(database):
     )
 
 
+# Head-relative on purpose (mirrors test_scheduler_policy_upgrade.py): this
+# module only pins the 088.005 -> 088.006 selected-input edge, not the
+# data-plane's overall tip. A later feature (e.g. 088.007 scheduler policy,
+# 088.008 framework credentials) legitimately stacks its own edge on top,
+# which moves CURRENT_DATA_PLANE_REVISION past "088.006". Hard-coding
+# "088.006" as the run() target would then fail immediately on
+# MigrationRunner's own "composition expected a different data-plane
+# revision" guard, before any of this module's structural assertions run.
+HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
+
+
 def populated(tx):
     tables = (*seed_existing_agents(tx), *load_liabilities(tx))
     assignments = tx.fetch_all("SELECT * FROM persistent_assignment ORDER BY id")
@@ -146,12 +157,16 @@ def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(empty
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)
-    report = current_runner(db).run(expected_revision="088.006")
-    assert report.applied_steps == ("astralplane-088-selected-input",)
+    report = current_runner(db).run(expected_revision=HEAD_REVISION)
+    assert "astralplane-088-selected-input" in report.applied_steps
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
         for row in after["assignment_guidance_selection"]:
             assert row.pop("selected_input") is None
+        # 088.008 adds two additive nullable columns to user_offline_grant.
+        for row in after["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
         assert after == before
         assert tx.fetch_all("SELECT * FROM assignment_selected_agent") == ()
         for assignment in before["persistent_assignment"]:
@@ -163,7 +178,7 @@ def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(empty
             "started",
             "uncertain",
         }
-    assert current_runner(db).run(expected_revision="088.006").already_current
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="088.005")
 
@@ -181,8 +196,8 @@ def test_006_interruption_rolls_back_populated005_and_recovery_repeats(empty_pos
         assert retained_rows(tx, tables) == before
         m._verify_predecessor_plane_schema(tx, "088.005")
         assert tx.fetch_one("SELECT to_regclass('assignment_selected_agent') AS t")["t"] is None
-    assert current_runner(db).run(expected_revision="088.006").applied_steps
-    assert current_runner(db).run(expected_revision="088.006").already_current
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
 
 
 @pytest.mark.parametrize(
@@ -199,7 +214,7 @@ def test_wrong005_predecessor_refuses_before_mutation(empty_postgres_schema, cor
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.006")
+        current_runner(db).run(expected_revision=HEAD_REVISION)
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "088.005"
@@ -221,8 +236,8 @@ def test_current_selected_catalog_refuses_removed_guards_or_new_text(
     empty_postgres_schema, corrupt
 ):
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.006")
+    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision=HEAD_REVISION)
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.006")
+        current_runner(db).run(expected_revision=HEAD_REVISION)

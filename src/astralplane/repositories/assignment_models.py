@@ -206,6 +206,10 @@ class AssignmentResourceAmount(_Record):
     elapsed_ms: int = 0
     spend_micro_units: int | None = None
     currency: str | None = None
+    # Additive (FR-022): per-dimension charge provenance, e.g. {"tokens": "estimated"}.
+    # Absent for every pre-088.008 row; never a duplicate counter. One of
+    # observed|estimated|uncertain|none per populated dimension key.
+    basis: Mapping[str, str] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

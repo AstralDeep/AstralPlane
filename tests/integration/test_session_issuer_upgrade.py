@@ -142,6 +142,8 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -153,6 +155,10 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
             del row["issuing_issuer"], row["issuing_client_id"]
         for row in after["auth_revocation_queue"]:
             assert row.pop("issuing_issuer") is None
+        # 088.008 adds two additive nullable columns to user_offline_grant.
+        for row in after["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
         assert after == before
     assert runner.run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -247,4 +253,6 @@ def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(empty_
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )

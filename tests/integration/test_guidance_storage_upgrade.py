@@ -56,6 +56,17 @@ def current_runner(database):
     )
 
 
+# Head-relative on purpose (mirrors test_scheduler_policy_upgrade.py): this
+# module only pins the 088.004 -> 088.006 owner-guidance/selected-input
+# edges, not the data-plane's overall tip. A later feature (e.g. 088.007
+# scheduler policy, 088.008 framework credentials) legitimately stacks its
+# own edge on top, which moves CURRENT_DATA_PLANE_REVISION past "088.006".
+# Hard-coding "088.006" as the run() target would then fail immediately on
+# MigrationRunner's own "composition expected a different data-plane
+# revision" guard, before any of this module's structural assertions run.
+HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
+
+
 def seed_populated(tx):
     tables = (*seed_existing_agents(tx), *load_liabilities(tx))
     prefs = PreferencesRepository()
@@ -166,12 +177,16 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
             and before["user_offline_grant"]
         )
         assert any(r["selected_definition_revision_id"] for r in before["user_agent"])
-    assert current_runner(db).run(expected_revision="088.006").applied_steps == (
-        "astralplane-088-owner-guidance",
-        "astralplane-088-selected-input",
-    )
+    upgrade_steps = current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
+    assert "astralplane-088-owner-guidance" in upgrade_steps
+    assert "astralplane-088-selected-input" in upgrade_steps
     with db.transaction() as tx:
-        assert retained_rows(tx, tables) == before
+        after = retained_rows(tx, tables)
+        # 088.008 adds two additive nullable columns to user_offline_grant.
+        for row in after["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
+        assert after == before
         for table in (
             "owner_skill_head",
             "owner_skill_revision",
@@ -194,9 +209,13 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
             ),
         )
         assert result.head.revision == 1
-    assert current_runner(db).run(expected_revision="088.006").already_current
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
     with db.transaction() as tx:
-        assert retained_rows(tx, tables) == before
+        still = retained_rows(tx, tables)
+        for row in still["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
+        assert still == before
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="088.004")
 
@@ -216,7 +235,7 @@ def test_wrong_predecessor_refuses_without_partial_guidance_schema(
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.006")
+        current_runner(db).run(expected_revision=HEAD_REVISION)
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "088.004"
@@ -236,8 +255,8 @@ def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(empty_
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT to_regclass('explicit_note_current') AS t")["t"] is None
-    assert current_runner(db).run(expected_revision="088.006").applied_steps
-    assert current_runner(db).run(expected_revision="088.006").already_current
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
+    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
 
 
 @pytest.mark.parametrize(
@@ -254,8 +273,8 @@ def test_current_schema_refuses_missing_guards_or_extra_note_history(
     empty_postgres_schema, corruption
 ):
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.006")
+    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision=HEAD_REVISION)
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.006")
+        current_runner(db).run(expected_revision=HEAD_REVISION)

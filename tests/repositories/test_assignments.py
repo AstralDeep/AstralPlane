@@ -61,6 +61,58 @@ def test_usage_only_has_unknown_money_not_zero():
     assert amount.currency is None
 
 
+def test_resource_amount_basis_is_absent_by_default_and_never_a_duplicate_counter():
+    amount = AssignmentResourceAmount(model_calls=1, tokens=200, elapsed_ms=1000)
+    assert amount.basis is None
+    validated = AssignmentRepository._amount(amount)
+    # Legacy shape unchanged: no synthesized "basis" key appears when absent.
+    assert "basis" not in validated or validated["basis"] is None
+
+
+def test_resource_amount_basis_accepts_the_closed_vocabulary_per_dimension():
+    amount = AssignmentResourceAmount(
+        model_calls=1,
+        tokens=200,
+        elapsed_ms=1000,
+        spend_micro_units=50,
+        currency="USD",
+        basis={"tokens": "estimated", "spend_micro_units": "uncertain"},
+    )
+    validated = AssignmentRepository._amount(amount)
+    assert dict(validated["basis"]) == {"tokens": "estimated", "spend_micro_units": "uncertain"}
+
+
+@pytest.mark.parametrize(
+    "basis",
+    [
+        {},
+        {"tokens": "guessed"},
+        {"not_a_dimension": "observed"},
+        "observed",
+        ["observed"],
+    ],
+)
+def test_resource_amount_basis_rejects_unknown_dimensions_or_values(basis):
+    amount = AssignmentResourceAmount(model_calls=1, tokens=200, elapsed_ms=1000, basis=basis)
+    with pytest.raises(RepositoryValidationError):
+        AssignmentRepository._amount(amount)
+
+
+def test_resource_amount_basis_round_trips_through_a_legacy_reconstructed_dict():
+    """A persisted pre-088.008 dict (no 'basis' key) still reconstructs the dataclass."""
+    legacy = {
+        "model_calls": 1,
+        "tool_calls": 0,
+        "tokens": 200,
+        "elapsed_ms": 1000,
+        "spend_micro_units": None,
+        "currency": None,
+    }
+    amount = AssignmentResourceAmount(**legacy)
+    assert amount.basis is None
+    AssignmentRepository._amount(amount)
+
+
 def test_currency_cap_without_trusted_quote_coverage_is_refused():
     limits = dict(
         definition().limits, currency="USD", spend_micro_units=1000, daily_spend_micro_units=1000

@@ -15,6 +15,12 @@ from astralplane.repositories.scheduler import (
     StagedChatLayout,
     StagedChatMessage,
     StagedChatPublication,
+    _policy,
+)
+from astralplane.repositories.scheduler_models import (
+    EpisodeAdmission,
+    JobStopOutcome,
+    ScheduledJobPolicy,
 )
 
 NOW = datetime(2026, 8, 13, 20, tzinfo=UTC)
@@ -766,3 +772,476 @@ def test_scheduler_public_validation_and_impossible_results_fail_closed() -> Non
                 ScriptedTransaction(),
                 **{**settlement, **changes},
             )
+
+
+# ---------------------------------------------------------------------------
+# 088.007 optional job policy, episode admission and Stop (T039/T040 unit cases)
+# ---------------------------------------------------------------------------
+
+ASSIGNMENT_ID = "99999999-9999-4999-8999-999999999999"
+OTHER_ASSIGNMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def policy_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "job_id": JOB_ID,
+        "owner_id": "owner-1",
+        "version": 1,
+        "max_runs": 3,
+        "admitted_runs": 0,
+        "per_episode_limits": {"model_calls": 4},
+        "max_outstanding_episodes": 1,
+        "monitor_changes": True,
+        "definition_revision": 1,
+        "terminal_stop": False,
+        "last_assignment_id": None,
+        "updated_at": 5,
+    }
+    row.update(overrides)
+    return row
+
+
+def policy_value(**overrides: object) -> ScheduledJobPolicy:
+    return _policy(policy_row(**overrides))
+
+
+def claimed_row(**overrides: object) -> dict[str, object]:
+    return occurrence_row(
+        state="claimed",
+        claim_generation=1,
+        lease_token=LEASE_TOKEN,
+        lease_owner="worker-1",
+        lease_expires_at=NOW + timedelta(seconds=30),
+        database_now=NOW,
+        attempt_count=1,
+        **overrides,
+    )
+
+
+def admit(tx: ScriptedTransaction, **changes: object) -> EpisodeAdmission:
+    values: dict[str, object] = dict(
+        owner_id="owner-1",
+        job_id=JOB_ID,
+        occurrence_id=OCCURRENCE_ID,
+        claim_generation=1,
+        lease_token=LEASE_TOKEN,
+        lease_owner="worker-1",
+        assignment_id=ASSIGNMENT_ID,
+        admitted_at=7,
+    )
+    values.update(changes)
+    return SchedulerRepository().admit_assignment_episode(tx, **values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda repo, tx: repo.get_job_policy(tx, owner_id="", job_id=JOB_ID),
+        lambda repo, tx: repo.get_job_policy(tx, owner_id="owner-1", job_id="job"),
+        lambda repo, tx: repo.put_job_policy(tx, policy=policy_row(), expected_version=0),
+        lambda repo, tx: repo.put_job_policy(tx, policy=policy_value(), expected_version=-1),
+        lambda repo, tx: repo.put_job_policy(tx, policy=policy_value(), expected_version=True),
+        lambda repo, tx: repo.put_job_policy(tx, policy=policy_value(), expected_version=1),
+        lambda repo, tx: repo.put_job_policy(
+            tx, policy=policy_value(admitted_runs=1), expected_version=0
+        ),
+        lambda repo, tx: repo.put_job_policy(
+            tx, policy=policy_value(terminal_stop=True), expected_version=0
+        ),
+        lambda repo, tx: repo.put_job_policy(
+            tx, policy=policy_value(last_assignment_id=ASSIGNMENT_ID), expected_version=0
+        ),
+        lambda repo, tx: admit(tx, spend=-1),
+        lambda repo, tx: admit(tx, spend=1_000_001),
+        lambda repo, tx: admit(tx, spend=True),
+        lambda repo, tx: admit(tx, admitted_at=-1),
+        lambda repo, tx: admit(tx, assignment_id="assignment"),
+        lambda repo, tx: admit(tx, job_id=SUBMISSION_ID),
+        lambda repo, tx: admit(tx, claim_generation=0),
+        lambda repo, tx: admit(tx, lease_owner="bad owner"),
+        lambda repo, tx: repo.stop_assignment_job(
+            tx, owner_id="owner-1", job_id=JOB_ID, expected_version=0, stopped_at=1
+        ),
+        lambda repo, tx: repo.stop_assignment_job(
+            tx, owner_id="owner-1", job_id=JOB_ID, expected_version=1, stopped_at=-1
+        ),
+        lambda repo, tx: repo.stop_assignment_job(
+            tx, owner_id=" ", job_id=JOB_ID, expected_version=1, stopped_at=1
+        ),
+        lambda repo, tx: repo.list_outstanding_episodes(tx, owner_id="owner-1", job_id="x"),
+    ],
+)
+def test_policy_contract_validation_refuses_before_database(call) -> None:
+    tx = ScriptedTransaction()
+    with pytest.raises(ValueError):
+        call(SchedulerRepository(), tx)
+    assert tx.calls == []
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"max_runs": 0},
+        {"max_runs": 1_000_001},
+        {"max_runs": -5},
+        {"admitted_runs": -1},
+        {"admitted_runs": 4},
+        {"max_outstanding_episodes": 0},
+        {"max_outstanding_episodes": 65},
+        {"per_episode_limits": {"model_calls": -1}},
+        {"per_episode_limits": {"model_calls": 2**31}},
+        {"per_episode_limits": {"Model": 1}},
+        {"per_episode_limits": {f"k{i}": 1 for i in range(33)}},
+        {"per_episode_limits": [("model_calls", 1)]},
+        {"per_episode_limits": (("model_calls", 1), ("model_calls", 2))},
+        {"per_episode_limits": (("model_calls",),)},
+        {"definition_revision": 0},
+        {"version": 0},
+        {"version": 2**53},
+        {"monitor_changes": 1},
+        {"terminal_stop": "no"},
+        {"last_assignment_id": "not-a-uuid"},
+        {"owner_id": ""},
+        {"job_id": SUBMISSION_ID},
+        {"updated_at": -1},
+    ],
+)
+def test_policy_record_refuses_negative_or_oversized_limits(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        replace(policy_value(), **changes)
+
+
+def test_policy_record_canonicalizes_limits_and_projects_remaining_runs() -> None:
+    value = policy_value(per_episode_limits={"tool_calls": 2, "model_calls": 4}, admitted_runs=2)
+    assert value.per_episode_limits == (("model_calls", 4), ("tool_calls", 2))
+    assert value.limits() == {"model_calls": 4, "tool_calls": 2}
+    assert value.remaining_runs == 1
+    assert policy_value(max_runs=None, admitted_runs=1_000_000).remaining_runs is None
+    assert _policy(policy_row(per_episode_limits='{"model_calls": 4}')) == policy_value()
+    assert _policy(policy_row(per_episode_limits=None)).per_episode_limits == ()
+    for broken in (policy_row(per_episode_limits="[1]"), policy_row(version="x")):
+        with pytest.raises(PlaneError) as invalid:
+            _policy(broken)
+        assert invalid.value.code == "scheduler_record_invalid"
+    with pytest.raises(ValueError):
+        EpisodeAdmission(
+            JOB_ID, "owner-1", OCCURRENCE_ID, ASSIGNMENT_ID, True, True, "terminal_stop", 1, None
+        )
+    with pytest.raises(ValueError):
+        EpisodeAdmission(
+            JOB_ID, "owner-1", OCCURRENCE_ID, ASSIGNMENT_ID, True, True, "replayed", 1, None
+        )
+    with pytest.raises(ValueError):
+        EpisodeAdmission(
+            JOB_ID, "owner-1", OCCURRENCE_ID, ASSIGNMENT_ID, False, False, "nope", 1, None
+        )
+    with pytest.raises(ValueError):
+        EpisodeAdmission(
+            JOB_ID, "owner-1", OCCURRENCE_ID, ASSIGNMENT_ID, True, True, "admitted", 1, "policy"
+        )
+    with pytest.raises(ValueError):
+        JobStopOutcome(JOB_ID, "owner-1", True, policy_value(), (), (), ())
+    with pytest.raises(ValueError):
+        JobStopOutcome(
+            JOB_ID, "owner-1", True, policy_value(terminal_stop=True), (ASSIGNMENT_ID,) * 2, (), ()
+        )
+    with pytest.raises(ValueError):
+        JobStopOutcome(JOB_ID, "owner-1", "yes", policy_value(terminal_stop=True), (), (), ())
+
+
+def test_policy_put_and_get_are_owner_scoped_version_cas() -> None:
+    repository = SchedulerRepository()
+    assert (
+        repository.get_job_policy(ScriptedTransaction(one=[None]), owner_id="other", job_id=JOB_ID)
+        is None
+    )
+    tx = ScriptedTransaction(one=[policy_row()])
+    assert repository.get_job_policy(tx, owner_id="owner-1", job_id=JOB_ID) == policy_value()
+    assert tx.calls[0][2] == (JOB_ID, "owner-1")
+
+    created = repository.put_job_policy(
+        ScriptedTransaction(one=[{"id": JOB_ID}, None, policy_row()]),
+        policy=policy_value(),
+        expected_version=0,
+    )
+    assert created == policy_value()
+    with pytest.raises(PlaneError) as missing_job:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[None]), policy=policy_value(), expected_version=0
+        )
+    assert missing_job.value.code == "scheduled_job_missing"
+    with pytest.raises(PlaneError) as exists:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, policy_row()]),
+            policy=policy_value(),
+            expected_version=0,
+        )
+    assert exists.value.code == "scheduled_job_policy_version_conflict"
+    assert dict(exists.value.metadata)["observed_version"] == "1"
+    with pytest.raises(PlaneError) as lost_insert:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, None, None]),
+            policy=policy_value(),
+            expected_version=0,
+        )
+    assert lost_insert.value.code == "scheduled_job_policy_version_conflict"
+    assert dict(lost_insert.value.metadata)["observed_version"] == "<none>"
+
+    tx = ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(), policy_row(version=2, max_runs=5)])
+    updated = repository.put_job_policy(
+        tx, policy=policy_value(version=2, max_runs=5), expected_version=1
+    )
+    assert updated.max_runs == 5 and updated.version == 2
+    assert tx.calls[-1][2][-1] == 1  # type: ignore[index]
+    with pytest.raises(PlaneError) as no_policy:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, None]),
+            policy=policy_value(version=2),
+            expected_version=1,
+        )
+    assert no_policy.value.code == "scheduled_job_policy_missing"
+    with pytest.raises(PlaneError) as stale:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(version=3)]),
+            policy=policy_value(version=2),
+            expected_version=1,
+        )
+    assert stale.value.code == "scheduled_job_policy_version_conflict"
+    with pytest.raises(PlaneError) as rewrite:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(admitted_runs=1)]),
+            policy=policy_value(version=2, admitted_runs=0),
+            expected_version=1,
+        )
+    assert rewrite.value.code == "scheduled_job_policy_charge_rewrite"
+    with pytest.raises(PlaneError) as lost_update:
+        repository.put_job_policy(
+            ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(), None]),
+            policy=policy_value(version=2),
+            expected_version=1,
+        )
+    assert lost_update.value.code == "scheduled_job_policy_version_conflict"
+
+
+def test_admission_refusals_write_nothing_and_impossible_results_fail_closed() -> None:
+    no_policy = ScriptedTransaction(one=[job_row(), None])
+    refused = admit(no_policy)
+    assert (refused.admitted, refused.reason, refused.policy) == (False, "policy_missing", None)
+    assert [kind for kind, _, _ in no_policy.calls] == ["one", "one"]
+
+    stopped = ScriptedTransaction(one=[job_row(), policy_row(terminal_stop=True), claimed_row()])
+    assert admit(stopped).reason == "terminal_stop"
+    assert len(stopped.calls) == 3
+
+    with pytest.raises(PlaneError) as mismatch:
+        admit(
+            ScriptedTransaction(one=[job_row(), policy_row(), claimed_row(job_id=OTHER_JOB_ID)])
+        )
+    assert mismatch.value.code == "scheduled_occurrence_job_mismatch"
+    with pytest.raises(PlaneError) as paused:
+        admit(ScriptedTransaction(one=[job_row(status="paused")]))
+    assert paused.value.code == "stale_occurrence_claim"
+    with pytest.raises(PlaneError) as stale:
+        admit(ScriptedTransaction(one=[job_row(), policy_row(), None]))
+    assert stale.value.code == "stale_occurrence_claim"
+
+    replay = admit(
+        ScriptedTransaction(
+            one=[
+                job_row(),
+                policy_row(admitted_runs=1),
+                claimed_row(),
+                {"assignment_id": ASSIGNMENT_ID, "spend": 1},
+            ]
+        )
+    )
+    assert (replay.admitted, replay.created, replay.reason, replay.spend) == (
+        True,
+        False,
+        "replayed",
+        1,
+    )
+    with pytest.raises(PlaneError) as bound_elsewhere:
+        admit(
+            ScriptedTransaction(
+                one=[
+                    job_row(),
+                    policy_row(),
+                    claimed_row(),
+                    {"assignment_id": OTHER_ASSIGNMENT_ID, "spend": 1},
+                ]
+            )
+        )
+    assert bound_elsewhere.value.code == "scheduled_occurrence_binding_conflict"
+    with pytest.raises(PlaneError) as missing:
+        admit(ScriptedTransaction(one=[job_row(), policy_row(), claimed_row(), None, None]))
+    assert missing.value.code == "scheduled_episode_assignment_missing"
+    with pytest.raises(PlaneError) as resolved:
+        admit(
+            ScriptedTransaction(
+                one=[job_row(), policy_row(), claimed_row(), None, {"lifecycle": "completed"}]
+            )
+        )
+    assert resolved.value.code == "scheduled_episode_assignment_resolved"
+
+    outstanding = ScriptedTransaction(
+        one=[job_row(), policy_row(), claimed_row(), None, {"lifecycle": "active"}],
+        all_rows=[({"assignment_id": OTHER_ASSIGNMENT_ID},)],
+    )
+    assert admit(outstanding).reason == "episode_outstanding"
+    assert len(outstanding.calls) == 6
+    exhausted = ScriptedTransaction(
+        one=[
+            job_row(),
+            policy_row(max_runs=2, admitted_runs=2),
+            claimed_row(),
+            None,
+            {"lifecycle": "active"},
+        ],
+        all_rows=[()],
+    )
+    assert admit(exhausted).reason == "allowance_exhausted"
+    over_spend = ScriptedTransaction(
+        one=[
+            job_row(),
+            policy_row(max_runs=2, admitted_runs=1),
+            claimed_row(),
+            None,
+            {"lifecycle": "paused"},
+        ],
+        all_rows=[()],
+    )
+    assert admit(over_spend, spend=2).reason == "allowance_exhausted"
+
+    admitted_tx = ScriptedTransaction(
+        one=[
+            job_row(),
+            policy_row(max_runs=None),
+            claimed_row(),
+            None,
+            {"lifecycle": "active"},
+            {"occurrence_id": OCCURRENCE_ID},
+            policy_row(
+                max_runs=None, version=2, admitted_runs=1, last_assignment_id=ASSIGNMENT_ID
+            ),
+        ],
+        all_rows=[()],
+    )
+    admitted = admit(admitted_tx)
+    assert (admitted.admitted, admitted.created, admitted.reason) == (True, True, "admitted")
+    assert admitted.policy == policy_value(
+        max_runs=None, version=2, admitted_runs=1, last_assignment_id=ASSIGNMENT_ID
+    )
+    insert_parameters = admitted_tx.calls[-2][2]
+    assert insert_parameters == (OCCURRENCE_ID, "owner-1", JOB_ID, ASSIGNMENT_ID, 1, 7)
+    with pytest.raises(PlaneError) as lost_binding:
+        admit(
+            ScriptedTransaction(
+                one=[job_row(), policy_row(), claimed_row(), None, {"lifecycle": "active"}, None],
+                all_rows=[()],
+            )
+        )
+    assert lost_binding.value.code == "scheduled_occurrence_binding_conflict"
+    with pytest.raises(PlaneError) as lost_charge:
+        admit(
+            ScriptedTransaction(
+                one=[
+                    job_row(),
+                    policy_row(),
+                    claimed_row(),
+                    None,
+                    {"lifecycle": "active"},
+                    {"occurrence_id": OCCURRENCE_ID},
+                    None,
+                ],
+                all_rows=[()],
+            )
+        )
+    assert lost_charge.value.code == "scheduled_job_policy_version_conflict"
+
+
+def test_stop_is_terminal_idempotent_and_fails_closed_on_lost_fences() -> None:
+    repository = SchedulerRepository()
+
+    def stop(tx: ScriptedTransaction, expected_version: int = 1) -> JobStopOutcome:
+        return repository.stop_assignment_job(
+            tx, owner_id="owner-1", job_id=JOB_ID, expected_version=expected_version, stopped_at=9
+        )
+
+    with pytest.raises(PlaneError) as missing_job:
+        stop(ScriptedTransaction(one=[None]))
+    assert missing_job.value.code == "scheduled_job_missing"
+    with pytest.raises(PlaneError) as missing_policy:
+        stop(ScriptedTransaction(one=[{"id": JOB_ID}, None]))
+    assert missing_policy.value.code == "scheduled_job_policy_missing"
+    with pytest.raises(PlaneError) as stale:
+        stop(ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(version=2)]))
+    assert stale.value.code == "scheduled_job_policy_version_conflict"
+
+    repeat_tx = ScriptedTransaction(
+        one=[{"id": JOB_ID}, policy_row(terminal_stop=True)],
+        all_rows=[({"assignment_id": ASSIGNMENT_ID},)],
+    )
+    repeat = stop(repeat_tx)
+    assert not repeat.stopped and repeat.outstanding_assignment_ids == (ASSIGNMENT_ID,)
+    assert repeat.cancelled_occurrence_ids == () and repeat.policy.terminal_stop
+    assert len(repeat_tx.calls) == 3
+
+    stopped_policy = policy_row(version=2, terminal_stop=True, admitted_runs=1)
+    other_occurrence = occurrence_row(
+        occurrence_id=OTHER_OCCURRENCE_ID, current_operation_id=OPERATION_ID
+    )
+    tx = ScriptedTransaction(
+        one=[
+            {"id": JOB_ID},
+            policy_row(admitted_runs=1),
+            stopped_policy,
+            occurrence_row(),
+            other_occurrence,
+        ],
+        all_rows=[
+            (occurrence_row(), other_occurrence),
+            ({"assignment_id": ASSIGNMENT_ID}, {"assignment_id": ASSIGNMENT_ID}),
+        ],
+        execute=[Result(rowcount=1)],
+    )
+    outcome = stop(tx)
+    assert outcome.stopped and outcome.policy == _policy(stopped_policy)
+    assert outcome.cancelled_occurrence_ids == (OCCURRENCE_ID, OTHER_OCCURRENCE_ID)
+    assert outcome.cancelled_operation_ids == (OPERATION_ID,)
+    assert outcome.outstanding_assignment_ids == (ASSIGNMENT_ID,)
+    statements = tx.fetch_sql()
+    assert "SET status = 'completed', next_run_at = NULL" in statements
+    assert statements.count("SET state = 'cancelled'") == 2
+    assert tx.calls[-3][2][0] == "cancelled_job_stopped"  # type: ignore[index]
+
+    with pytest.raises(PlaneError) as lost_policy:
+        stop(ScriptedTransaction(one=[{"id": JOB_ID}, policy_row(), None]))
+    assert lost_policy.value.code == "scheduled_job_policy_version_conflict"
+    with pytest.raises(PlaneError) as lost_status:
+        stop(
+            ScriptedTransaction(
+                one=[{"id": JOB_ID}, policy_row(), stopped_policy], execute=[Result(rowcount=0)]
+            )
+        )
+    assert lost_status.value.code == "scheduled_job_status_conflict"
+    with pytest.raises(PlaneError) as lost_cancel:
+        stop(
+            ScriptedTransaction(
+                one=[
+                    {"id": JOB_ID},
+                    policy_row(),
+                    stopped_policy,
+                    None,
+                    {"state": "completed", "current_operation_id": None},
+                ],
+                all_rows=[(occurrence_row(),)],
+                execute=[Result(rowcount=1)],
+            )
+        )
+    assert lost_cancel.value.code == "stale_occurrence_fence"
+    outstanding_tx = ScriptedTransaction(all_rows=[({"assignment_id": ASSIGNMENT_ID},)])
+    assert repository.list_outstanding_episodes(
+        outstanding_tx, owner_id="owner-1", job_id=JOB_ID
+    ) == (ASSIGNMENT_ID,)
+    assert outstanding_tx.calls[0][2] == (JOB_ID, "owner-1")

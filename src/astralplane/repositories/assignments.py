@@ -58,7 +58,12 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentTransientInput,
     AssignmentWakePreparation,
 )
-from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
+from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
+from astralplane.repositories.history import (
+    FrameworkCredentialObservation,
+    SessionExecutionObservation,
+    SessionRepository,
+)
 from astralplane.repositories.result_publication_models import (
     ResultPublicationContent,
     ResultPublicationPreparation,
@@ -75,6 +80,27 @@ from astralplane.repositories.selected_input_models import (  # noqa: F401
 from astralplane.repositories.work_admission import ExecutionFence, WorkAdmissionRepository
 
 _DIMENSIONS = ("model_calls", "tool_calls", "tokens", "elapsed_ms")
+_USAGE_BASIS_VALUES = frozenset({"observed", "estimated", "uncertain", "none"})
+
+
+def _validate_usage_basis(basis):
+    """Validate an additive, optional per-dimension charge-provenance map.
+
+    Unknown price vs. a genuine zero stays distinguishable via ``None`` in the
+    amount itself (unchanged); ``basis`` only annotates HOW a populated
+    dimension's value was determined. It never introduces a duplicate counter.
+    """
+    if not isinstance(basis, Mapping):
+        raise RepositoryValidationError("usage basis must be a mapping")
+    allowed_keys = frozenset((*_DIMENSIONS, "spend_micro_units"))
+    if not basis:
+        raise RepositoryValidationError("usage basis must not be empty when present")
+    for key, value in basis.items():
+        if key not in allowed_keys:
+            raise RepositoryValidationError("unknown usage basis dimension")
+        if value not in _USAGE_BASIS_VALUES:
+            raise RepositoryValidationError("invalid usage basis value")
+    canonical(basis, 1024)
 _PHASES = {
     "awaiting_event",
     "waiting",
@@ -213,14 +239,15 @@ def _supported(data):
 
 
 def _executable(data):
-    """Only v2's qualified incarnation authority can continue one-shot work."""
+    """Only v2's qualified incarnation or framework-credential authority continues one-shot work."""
     if data.get("execution_profile") != "one_shot":
         return True
-    return (
-        _supported(data)
-        and data["operation"]["version"] == 2
-        and data["operation"]["authority"]["origin"] == "interactive"
-        and data["operation"]["authority"]["reference_kind"] == "session_incarnation"
+    if not (_supported(data) and data["operation"]["version"] == 2):
+        return False
+    authority = data["operation"]["authority"]
+    return (authority["origin"], authority["reference_kind"]) in (
+        ("interactive", "session_incarnation"),
+        ("framework", "credential"),
     )
 
 
@@ -1507,13 +1534,13 @@ class AssignmentRepository:
             operation = self._operation_spec(operation, owner_id)
             if operation.version != 2:
                 _conflict("assignment_version_unsupported")
-            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
             if (
                 operation.authority.reference_id
                 if operation.authority.origin == "framework"
                 else None
             ) != credential_id:
                 raise RepositoryValidationError("framework credential reference mismatch")
+            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
             self._check_operation_time(transaction, operation)
             if _time(operation.deadline_at) > _now(transaction) + timedelta(days=1):
                 raise RepositoryValidationError("one-shot deadline exceeds one day")
@@ -1572,8 +1599,9 @@ class AssignmentRepository:
             return record
 
     def _assert_creation_authority(self, transaction, owner_id, definition, operation, authority):
-        """Bind interactive creation to its original issued session, including expiry."""
-        if operation.authority.origin != "interactive":
+        """Bind interactive/framework creation to its original issued authority, incl. expiry."""
+        origin = operation.authority.origin
+        if origin not in {"interactive", "framework"}:
             return
         data = {
             "owner_id": owner_id,
@@ -1588,7 +1616,11 @@ class AssignmentRepository:
         expiry_microseconds = (
             elapsed.days * 86400 + elapsed.seconds
         ) * 1_000_000 + elapsed.microseconds
-        if expiry_microseconds > authority.credential.hard_expires_at * 1_000_000:
+        if origin == "interactive":
+            bound_microseconds = authority.credential.hard_expires_at * 1_000_000
+        else:
+            bound_microseconds = authority.credential.expires_at * 1_000_000
+        if expiry_microseconds > bound_microseconds:
             _conflict("assignment_authorization_unavailable")
 
     @staticmethod
@@ -2578,23 +2610,50 @@ class AssignmentRepository:
         """
         selected, grant_id = self._execution_authority_selection(data)
         if selected is not None:
-            if not _executable(data) or not isinstance(authority, SessionExecutionObservation):
+            if not _executable(data):
                 return False
-            try:
-                state = authority.credential
-                if (
-                    state.owner_id != data["owner_id"]
-                    or state.incarnation_id != selected["reference_id"]
+            origin = selected["origin"]
+            if origin == "interactive":
+                if not isinstance(authority, SessionExecutionObservation):
+                    return False
+                try:
+                    state = authority.credential
+                    if (
+                        state.owner_id != data["owner_id"]
+                        or state.incarnation_id != selected["reference_id"]
+                    ):
+                        return False
+                    SessionRepository().assert_current_execution(transaction, observation=authority)
+                except (
+                    AttributeError,
+                    RepositoryConflictError,
+                    RepositoryDataError,
+                    RepositoryNotFoundError,
+                    RepositoryValidationError,
                 ):
                     return False
-                SessionRepository().assert_current_execution(transaction, observation=authority)
-            except (
-                AttributeError,
-                RepositoryConflictError,
-                RepositoryDataError,
-                RepositoryNotFoundError,
-                RepositoryValidationError,
-            ):
+            elif origin == "framework":
+                if not isinstance(authority, FrameworkCredentialObservation):
+                    return False
+                try:
+                    state = authority.credential
+                    if (
+                        state.owner_id != data["owner_id"]
+                        or state.credential_id != selected["reference_id"]
+                    ):
+                        return False
+                    FrameworkCredentialRepository().assert_current_execution(
+                        transaction, observation=authority
+                    )
+                except (
+                    AttributeError,
+                    RepositoryConflictError,
+                    RepositoryDataError,
+                    RepositoryNotFoundError,
+                    RepositoryValidationError,
+                ):
+                    return False
+            else:
                 return False
         return (
             grant_id is None
@@ -3111,6 +3170,9 @@ class AssignmentRepository:
             _text(values.get("currency"), 8)
         elif values.get("currency") is not None:
             raise RepositoryValidationError("unknown money cannot carry a currency")
+        basis = values.get("basis")
+        if basis is not None:
+            _validate_usage_basis(basis)
         return values
 
     @staticmethod

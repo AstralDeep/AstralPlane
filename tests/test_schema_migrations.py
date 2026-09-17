@@ -658,3 +658,105 @@ def test_ambiguous_registry_definitions_fail_closed(factory: Any) -> None:
 def test_invalid_migration_definitions_are_rejected(migration: tuple[object, ...]) -> None:
     with pytest.raises((MigrationDefinitionError, SchemaRevisionError)):
         Migration(*migration)  # type: ignore[arg-type]
+
+
+def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
+
+    edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
+    # 088.008 (framework credentials) now follows this edge in the registry.
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert edge.name == "astralplane-088-scheduler-policy"
+    assert edge.source_revisions == ("088.006",)
+    assert edge.target_revision == "088.007"
+    assert edge.checksum == canonical._statements_checksum(SCHEDULER_POLICY_SCHEMA_STATEMENTS)
+    assert len(SCHEDULER_POLICY_SCHEMA_STATEMENTS) == 4
+    ddl = "\n".join(SCHEDULER_POLICY_SCHEMA_STATEMENTS)
+    assert "CREATE TABLE scheduled_job_policy" in ddl
+    assert "CREATE TABLE scheduled_occurrence_assignment" in ddl
+    assert "scheduled_occurrence_assignment_unique UNIQUE(occurrence_id, owner_id)" in ddl
+    assert "scheduled_job_policy_allowance" in ddl
+    assert "REFERENCES persistent_assignment(id, owner_user_id) ON DELETE CASCADE" in ddl
+    assert "IF NOT EXISTS" not in ddl
+    # The 088.006 predecessor is pinned by its exact registry digest and catalog digest.
+    assert canonical.PLANE_SCHEMA_088_006_REGISTRY_DIGEST == (
+        "4f5783e676a12a4009959da2056c2c769418f8c101d67f533223a608158ed73a"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["088.006"] == (
+        "aa8dd06daf08fb11b92dc528c57a2e68072698e437a5b2f83933fdaecebe9f8b",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.006") == (
+        canonical.PLANE_SCHEMA_088_006_REGISTRY_DIGEST
+    )
+    # 088.007 is itself now a pinned predecessor of 088.008, not the current tip.
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
+        canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    assert "('scheduled_job_policy')" in query_tables
+    assert "('scheduled_occurrence_assignment')" in query_tables
+    # Verifying the 088.006 predecessor with a synthetic transaction that lacks
+    # the new tables must still accept the pinned 088.006 digest set.
+    accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
+    assert set(accepted) >= {"088.005", "088.006", "088.007"}
+    with pytest.raises(SchemaRevisionError):
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "088.008")
+
+
+def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.framework_credential_schema import (
+        FRAMEWORK_CREDENTIAL_SCHEMA_STATEMENTS,
+    )
+
+    edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
+    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert edge.name == "astralplane-088-framework-credentials"
+    assert edge.source_revisions == ("088.007",)
+    assert edge.target_revision == "088.008"
+    assert edge.checksum == canonical._statements_checksum(FRAMEWORK_CREDENTIAL_SCHEMA_STATEMENTS)
+    ddl = "\n".join(FRAMEWORK_CREDENTIAL_SCHEMA_STATEMENTS)
+    assert "CREATE TABLE framework_credential" in ddl
+    assert "token_hash TEXT NOT NULL UNIQUE CHECK(token_hash ~ '^[0-9a-f]{64}$')" in ddl
+    assert (
+        "issuer_kind TEXT NOT NULL CHECK(issuer_kind IN "
+        "('session_incarnation','native_credential'))"
+    ) in ddl
+    assert "framework_credential_allowance CHECK(consumed_admissions <= max_admissions)" in ddl
+    assert "ALTER TABLE user_offline_grant ADD COLUMN max_admissions INTEGER" in ddl
+    assert "ALTER TABLE user_offline_grant ADD COLUMN consumed_admissions INTEGER" in ddl
+    assert "IF NOT EXISTS" not in ddl
+    # The 088.007 predecessor is pinned by its exact registry digest and catalog digest.
+    assert canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST == (
+        "844d9f6629bc422013f84488b10ba6d2862f4805475c63b217639184146fca4d"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["088.007"] == (
+        "eeb9ed13a85e58ce84be7f9d31324e815946b72a8168c67068257c0791e332db",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
+        canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "088.008"
+    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
+        "c99faec61a4a8b4b362550cb12074aefb7e610e3775fa276daf9d2df1d7cbbe1"
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    assert "('framework_credential')" in query_tables
+    # Verifying the 088.007 predecessor with a synthetic transaction that lacks
+    # the new table must still accept the pinned 088.007 digest set.
+    accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
+    assert set(accepted) >= {"088.006", "088.007"}
+    with pytest.raises(SchemaRevisionError):
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "088.008")
+
+
+class _NoStructure:
+    def fetch_all(self, statement: str, parameters: object = ()) -> tuple[()]:
+        raise AssertionError("no predecessor evidence exists for the current revision")
+
+    def fetch_one(self, statement: str, parameters: object = ()) -> None:
+        return None
+
+    def execute(self, statement: str, parameters: object = ()) -> None:
+        return None

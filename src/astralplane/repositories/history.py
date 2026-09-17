@@ -150,6 +150,49 @@ class SessionConsentObservation:
     version: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class FrameworkCredentialFence:
+    """Ephemeral exact framework-credential identity; never the plaintext token.
+
+    Independently owner-lifetime bound, unlike a delegation chain: it carries
+    no parent reference and is never attenuated from another authority.
+    """
+
+    owner_id: str = field(repr=False)
+    credential_id: str = field(repr=False)
+    token_hash: str = field(repr=False)
+    scopes: tuple[str, ...]
+    max_admissions: int
+    consumed_admissions: int
+    created_at: int
+    expires_at: int
+    revoked_at: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FrameworkCredentialExecutionState:
+    """An exact owner-scoped framework-credential row observation, database-clock timed."""
+
+    credential: FrameworkCredentialFence = field(repr=False)
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FrameworkCredentialObservation:
+    """Host-verified fresh framework-credential row observation, valid <=15s.
+
+    The host captures ``started_at`` from Plane immediately before resolving
+    the caller's bearer token, then supplies the exact locked-row fence this
+    observation names. This record carries no plaintext token, authorizes no
+    mutation by itself, and must never be persisted or exposed to a client.
+    """
+
+    credential: FrameworkCredentialFence = field(repr=False)
+    started_at: datetime
+    valid_until: datetime
+    version: int = 1
+
+
 def _incarnation(value: object) -> str:
     """Validate the canonical text representation of a database-issued UUID4."""
     if (
@@ -211,6 +254,63 @@ def _validate_observation_lifetime(
 def _session_unavailable() -> None:
     raise RepositoryConflictError(
         "session authority unavailable", code="session_authority_unavailable"
+    )
+
+
+_FRAMEWORK_SCOPE_PATTERN = re.compile(r"^[0-9a-z][0-9a-z_.]{0,63}$")
+_TOKEN_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _framework_credential_fence(value: object) -> FrameworkCredentialFence:
+    if not isinstance(value, FrameworkCredentialFence):
+        raise RepositoryValidationError("typed framework credential fence required")
+    _required_id(value.owner_id, "owner_id")
+    _required_id(value.credential_id, "credential_id")
+    if (
+        not isinstance(value.token_hash, str)
+        or _TOKEN_HASH_PATTERN.fullmatch(value.token_hash) is None
+    ):
+        raise RepositoryValidationError("invalid framework credential token hash")
+    if not isinstance(value.scopes, tuple) or not value.scopes:
+        raise RepositoryValidationError("framework credential scopes must be a non-empty tuple")
+    for scope in value.scopes:
+        if not isinstance(scope, str) or _FRAMEWORK_SCOPE_PATTERN.fullmatch(scope) is None:
+            raise RepositoryValidationError("invalid framework credential scope")
+    for name in ("max_admissions", "consumed_admissions", "created_at", "expires_at"):
+        number = getattr(value, name)
+        if type(number) is not int or not 0 <= number <= 2**53 - 1:
+            raise RepositoryValidationError("invalid framework credential generation")
+    if (
+        not 1 <= value.max_admissions <= 10000
+        or not 0 <= value.consumed_admissions <= value.max_admissions
+    ):
+        raise RepositoryValidationError("invalid framework credential allowance")
+    if value.expires_at <= value.created_at:
+        raise RepositoryValidationError("invalid framework credential lifetime")
+    if value.revoked_at is not None and (
+        type(value.revoked_at) is not int or not 0 <= value.revoked_at <= 2**53 - 1
+    ):
+        raise RepositoryValidationError("invalid framework credential revocation")
+    return value
+
+
+def _framework_credential_observation(value: object) -> FrameworkCredentialObservation:
+    if not isinstance(value, FrameworkCredentialObservation) or type(value.version) is not int:
+        raise RepositoryValidationError("typed framework credential observation required")
+    if value.version != 1:
+        raise RepositoryValidationError("unsupported framework credential observation")
+    _framework_credential_fence(value.credential)
+    for timestamp in (value.started_at, value.valid_until):
+        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+            raise RepositoryValidationError("aware framework observation timestamp required")
+    if not timedelta(0) < value.valid_until - value.started_at <= timedelta(seconds=15):
+        raise RepositoryValidationError("framework observation exceeds freshness bound")
+    return value
+
+
+def _framework_credential_unavailable() -> None:
+    raise RepositoryConflictError(
+        "credential authority unavailable", code="credential_authority_unavailable"
     )
 
 
@@ -1575,6 +1675,9 @@ __all__ = (
     "ConversationRecord",
     "ConversationRepository",
     "ConversationSummaryRecord",
+    "FrameworkCredentialExecutionState",
+    "FrameworkCredentialFence",
+    "FrameworkCredentialObservation",
     "HistoryRepository",
     "MessageRecord",
     "MessageRepository",

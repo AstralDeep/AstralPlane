@@ -103,6 +103,10 @@ def _background_tasks(catalog: api.RepositoryCatalog, transaction: FailingExecut
     catalog.background_tasks.get(transaction, owner_id=_OWNER, task_id="task-1")
 
 
+def _framework_credentials(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.framework_credentials.list_for_owner(transaction, owner_id=_OWNER)
+
+
 def _history(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.history.conversations.get(
         transaction,
@@ -539,6 +543,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryDataError", "RepositoryNotFoundError"),
     ),
     RepositoryContract(
+        "framework_credentials",
+        api.create_framework_credential_repository,
+        "src/astralplane/repositories/framework_credentials.py",
+        _framework_credentials,
+        _OWNER,
+        "WHERE owner_id=%s ORDER BY",
+        ("pg_advisory_xact_lock(hashtextextended(%s,79))", "FOR UPDATE"),
+        (),
+        "mint-only issuance; each call always creates a new independent credential",
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "history",
         api.create_history_repository,
         "src/astralplane/repositories/history.py",
@@ -938,6 +954,19 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_secrets:test_user_upsert_uses_native_parameters_and_returns_detached_record",
         "tests.repositories.test_secrets:test_user_upsert_before_deadline_is_one_fenced_statement",
         "tests.repositories.test_secrets:test_write_requires_exactly_one_returned_record",
+    ),
+    BehavioralEvidence(
+        "framework_credentials",
+        "tests.repositories.test_framework_credentials_postgres:"
+        "test_public_framework_credential_contract_behaviors",
+        None,
+        "tests.repositories.test_framework_credentials_postgres:"
+        "test_public_framework_credential_contract_behaviors",
+        "tests.repositories.test_framework_credentials_postgres:"
+        "test_public_framework_credential_contract_behaviors",
+        replay_not_applicable=(
+            "mint-only issuance; each call always creates a new independent credential"
+        ),
     ),
     BehavioralEvidence(
         "history",

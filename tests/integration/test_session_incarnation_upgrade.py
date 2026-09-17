@@ -78,14 +78,14 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
             agent_id=None,
             created_at=10,
         )
-        catalog.offline_grants.create_grant(
-            tx,
-            grant_id=str(uuid4()),
-            owner_id="owner-0",
-            agent_id=None,
-            encrypted_refresh_token=b"legacy-opaque-reference",
-            issued_at=10,
-            expires_at=100,
+        # Raw insert on the pre-088.008 column set: the 088.008 repository code
+        # now always names max_admissions/consumed_admissions, which do not
+        # exist yet at this schema revision (088.001).
+        tx.execute(
+            "INSERT INTO user_offline_grant (id, user_id, agent_id, refresh_token_enc, "
+            "issued_at, expires_at, revoked_at, created_at, updated_at) "
+            "VALUES (%s, %s, NULL, %s, %s, %s, NULL, %s, %s)",
+            (str(uuid4()), "owner-0", b"legacy-opaque-reference", 10, 100, 10, 10),
         )
         tables = ("persistent_assignment", "user_offline_grant", "chats")
         unchanged = {
@@ -101,6 +101,8 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -115,9 +117,19 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
         identities = {str(row["incarnation_id"]) for row in after}
         assert len(identities) == 4
         assert all(UUID(value).version == 4 and str(UUID(value)) == value for value in identities)
-        assert unchanged == {
+        after_unchanged = {
             table: tuple(dict(row) for row in tx.fetch_all("SELECT * FROM " + table))
             for table in tables
+        }
+        # 088.008 adds two additive nullable columns to user_offline_grant;
+        # every other liability table stays byte-identical.
+        grants_after = tuple(dict(row) for row in after_unchanged["user_offline_grant"])
+        for row in grants_after:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
+        assert grants_after == unchanged["user_offline_grant"]
+        assert {k: v for k, v in after_unchanged.items() if k != "user_offline_grant"} == {
+            k: v for k, v in unchanged.items() if k != "user_offline_grant"
         }
     assert (
         BaselineMigrationRunner(db, runner)
@@ -201,6 +213,8 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
 
 
@@ -243,6 +257,12 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
                 row.pop("incarnation_id", None)
                 row.pop("issuing_issuer", None)
                 row.pop("issuing_client_id", None)
+        if table == "user_offline_grant":
+            # 088.008 adds two additive nullable columns; a legacy grant
+            # (issued before that revision) always has both unset.
+            for row in values:
+                assert row.pop("max_admissions", None) is None
+                assert row.pop("consumed_admissions", None) is None
         return sorted(values, key=lambda row: json.dumps(row, sort_keys=True))
 
     db = empty_postgres_schema.database
@@ -314,6 +334,8 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
         "astralplane-088-declarative-agents",
         "astralplane-088-owner-guidance",
         "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
     for _ in range(2):
         with db.transaction() as tx:

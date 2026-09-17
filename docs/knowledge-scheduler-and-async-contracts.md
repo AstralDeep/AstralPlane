@@ -60,6 +60,58 @@ three extended-state repositories above do not duplicate admission or scheduled-
 Plane does not execute coroutines, jobs, models, SSH commands, notifications, or maintenance
 outputs. AstralDeep keeps those policies and supplies only validated records and state transitions.
 
+## Optional job policy, episode admission and Stop (088.007)
+
+Revision `088.007` adds two additive tables behind `SchedulerRepository`:
+`scheduled_job_policy` (one optional versioned row per definition) and
+`scheduled_occurrence_assignment` (a durable occurrence-to-assignment binding, unique by
+occurrence and owner, with a foreign key to the owner's `persistent_assignment` row). A definition
+without a policy row keeps every pre-088.007 semantic byte for byte: the due scan, run-now,
+`update_job_after_run_for_administration` (last-run / next-run projection), pause, delete and
+`cancel_unstarted_occurrence` never consult these tables, and `admit_assignment_episode` on such a
+definition returns the typed refusal `policy_missing` after writing nothing. Old jobs gain no run
+limit.
+
+`ScheduledJobPolicy` (`astralplane.repositories.scheduler_models`) carries `max_runs` (nullable,
+1..1,000,000), `admitted_runs`, `per_episode_limits` (bounded snake_case name to non-negative
+integer pairs, at most 32), `max_outstanding_episodes` (default 1, at most 64), `monitor_changes`,
+`definition_revision`, `terminal_stop`, `last_assignment_id` (the last logical task reference) and
+`updated_at`. Every bound is validated before SQL runs, so a negative or oversized limit never
+reaches the database. `admitted_runs`, `terminal_stop` and `last_assignment_id` are scheduler
+owned: `put_job_policy(transaction, policy=, expected_version=)` creates with expected version 0
+(those fields must start unset) or replaces under version CAS and refuses
+`scheduled_job_policy_charge_rewrite` when a caller tries to lower a charge or clear a Stop. A
+policy whose `max_runs` is below `admitted_runs` is refused as a `ValueError` by the record itself.
+`get_job_policy` is owner scoped and returns `None` for legacy definitions.
+
+`admit_assignment_episode(transaction, *, owner_id, job_id, occurrence_id, claim_generation,
+lease_token, lease_owner, assignment_id, admitted_at, spend=1)` binds one current claim to one
+episode and charges the allowance in the caller's transaction. Lock order is definition
+(`scheduled_job FOR UPDATE`, which also requires an executable definition), policy, occurrence
+(`assert_current_claim`), binding. The caller creates or locks the episode's persistent assignment
+before calling admission, which keeps the assignment-before-admission order documented in
+`persistent-assignment-contracts.md`. The typed `EpisodeAdmission` reports `admitted`, `created`
+and a reason: `admitted` (binding inserted, `admitted_runs += spend`, `last_assignment_id`
+updated, policy version advanced), `replayed` (the identical binding already existed; nothing is
+charged), or a refusal that writes nothing: `policy_missing`, `terminal_stop`,
+`episode_outstanding` (bindings whose assignment is still `active`/`paused` already reach
+`max_outstanding_episodes`, so an outstanding episode consumes nothing more) and
+`allowance_exhausted` (`admitted_runs + spend > max_runs`). A stale claim, a definition that is
+paused/disabled, an occurrence of another definition, a missing/foreign/resolved assignment, or an
+occurrence already bound to a different assignment fails closed with `PlaneError`.
+
+`stop_assignment_job(transaction, *, owner_id, job_id, expected_version, stopped_at)` is the
+terminal Stop for a policy job. Atomically it sets `terminal_stop` under version CAS, moves the
+definition to `completed` with `next_run_at = NULL` so the due scan never materializes it again,
+cancels every unstarted occurrence (`pending`/`retryable`/`claimed`) through the existing
+`cancel_unstarted_occurrence` path with terminal code `cancelled_job_stopped`, and returns a
+`JobStopOutcome` with the cancelled occurrence ids, their operation ids (so the host cancels the
+matching work-admission records in the same transaction) and the still outstanding assignment ids
+so Deep stops each episode family. Bindings, charges, runs and started occurrences are retained; a
+repeat Stop returns `stopped=False` with the same outstanding families. Pausing a policy job is the
+ordinary `paused` transition and never touches the policy row. `list_outstanding_episodes` is the
+delete precondition: a policy job may be deleted only when it is empty.
+
 ## Bounded event-loop adapter
 
 `AsyncPlaneRuntime` is the only async composition adapter. `run_in_transaction(callback)` admits a

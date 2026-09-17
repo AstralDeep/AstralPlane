@@ -615,6 +615,48 @@ def _write_encrypted_llm_config(catalog: api.RepositoryCatalog, transaction: Tra
     )
 
 
+_FRAMEWORK_ISSUER: dict[str, str] = {}
+
+
+def _prepare_framework_credentials(fixture: _CatalogDatabase) -> None:
+    """Seed a committed live web session so issue() has a real issuer to lock."""
+    from astralplane.repositories.history import SessionRecord, SessionRepository
+
+    with fixture.database.transaction() as transaction:
+        now = int(transaction.fetch_one("SELECT clock_timestamp() AS now")["now"].timestamp())
+        record = SessionRepository().put(
+            transaction,
+            SessionRecord(
+                "rollback-framework-session",
+                _OWNER,
+                "synthetic-encrypted-access",
+                "synthetic-encrypted-refresh",
+                now,
+                now + 3600,
+                now,
+                False,
+                now,
+            ),
+        )
+    _FRAMEWORK_ISSUER[_OWNER] = record.incarnation_id
+
+
+def _write_framework_credentials(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.framework_credentials.issue(
+        transaction,
+        owner_id=_OWNER,
+        credential_id="5b8e0000-0000-4000-8000-0000000f8acc",
+        name="Rollback credential",
+        scopes=("operations.submit", "operations.read"),
+        token_hash="c" * 64,
+        token_prefix="afk_roll",
+        issuer_kind="session_incarnation",
+        issuer_reference=_FRAMEWORK_ISSUER[_OWNER],
+        max_admissions=1,
+        ttl_seconds=3600,
+    )
+
+
 def _write_history(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.history.conversations.create(
         transaction,
@@ -1121,6 +1163,14 @@ ROLLBACK_CASES = (
         1,
         0,
     ),
+    RollbackCase(
+        "framework_credentials",
+        _write_framework_credentials,
+        _count("framework_credential", "id", "5b8e0000-0000-4000-8000-0000000f8acc"),
+        1,
+        0,
+        prepare=_prepare_framework_credentials,
+    ),
     RollbackCase("history", _write_history, _count("chats", "id", "rollback-history-chat"), 1, 0),
     RollbackCase(
         "harness_cleanup",
@@ -1275,7 +1325,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 37
+    assert len(applicable_keys) == len(set(applicable_keys)) == 38
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from astralplane.repositories import RepositoryConflictError
 from astralplane.repositories.history import SessionRecord
 from tests.integration.test_catalog_caller_rollback import catalog_database as _catalog_database
 
@@ -43,6 +44,57 @@ def test_opaque_refresh_replacement_respects_every_durable_fence(catalog_databas
     with database.transaction() as tx:
         assert rotate(tx, expected_encrypted_refresh_token=b"reference") is None
         assert not repo.get_grant(tx, owner_id="cas-owner", grant_id=gid).active
+
+
+def test_finite_grant_allowance_charges_exactly_once_per_admission(catalog_database):
+    database = catalog_database.database
+    repo = catalog_database.catalog.offline_grants
+    gid = str(uuid.uuid4())
+    with database.transaction() as tx:
+        created = repo.create_grant(
+            tx,
+            grant_id=gid,
+            owner_id="allowance-owner",
+            agent_id=None,
+            encrypted_refresh_token=b"finite-grant-token",
+            issued_at=100,
+            expires_at=2_000_000_000,
+            max_admissions=2,
+        )
+        assert created.max_admissions == 2
+        assert created.consumed_admissions == 0
+        assert created.admissions_remaining == 2
+    with database.transaction() as tx:
+        first = repo.consume_admission(tx, owner_id="allowance-owner", grant_id=gid, as_of=200)
+        assert first.consumed_admissions == 1
+        assert first.admissions_remaining == 1
+    with database.transaction() as tx:
+        second = repo.consume_admission(tx, owner_id="allowance-owner", grant_id=gid, as_of=300)
+        assert second.consumed_admissions == 2
+        assert second.admissions_remaining == 0
+    with database.transaction() as tx, pytest.raises(
+        RepositoryConflictError, match="offline grant allowance exhausted"
+    ):
+        repo.consume_admission(tx, owner_id="allowance-owner", grant_id=gid, as_of=400)
+    # An unlimited (legacy-shaped) grant never charges an allowance.
+    unlimited_id = str(uuid.uuid4())
+    with database.transaction() as tx:
+        repo.create_grant(
+            tx,
+            grant_id=unlimited_id,
+            owner_id="allowance-owner",
+            agent_id=None,
+            encrypted_refresh_token=b"unlimited-grant-token",
+            issued_at=100,
+            expires_at=2_000_000_000,
+        )
+    with database.transaction() as tx:
+        for as_of in (150, 250, 350):
+            record = repo.consume_admission(
+                tx, owner_id="allowance-owner", grant_id=unlimited_id, as_of=as_of
+            )
+            assert record.max_admissions is None
+            assert record.admissions_remaining is None
 
 
 def test_session_rotation_and_deletion_return_the_final_credential(catalog_database):
