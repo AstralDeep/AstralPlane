@@ -135,8 +135,15 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
         assert len(before["assignment_operation_receipt"]) == 2
         assert before["user_offline_grant"]
     runner = current_runner(db)
-    assert runner.run(expected_revision="088.003").applied_steps == (
+    assert runner.run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == (
         "astralplane-088-session-issuer",
+        "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -148,8 +155,14 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
             del row["issuing_issuer"], row["issuing_client_id"]
         for row in after["auth_revocation_queue"]:
             assert row.pop("issuing_issuer") is None
+        # 088.008 adds two additive nullable columns to user_offline_grant.
+        for row in after["user_offline_grant"]:
+            assert row.pop("max_admissions") is None
+            assert row.pop("consumed_admissions") is None
         assert after == before
-    assert runner.run(expected_revision="088.003").already_current
+    assert runner.run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).already_current
     with db.transaction() as tx:
         assert all(
             row["issuing_issuer"] is None and row["issuing_client_id"] is None
@@ -174,7 +187,7 @@ def test_wrong_predecessor_catalog_is_refused_before_any_new_edge(
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="088.003")
+        current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "088.002"
@@ -195,11 +208,13 @@ def test_wrong_predecessor_catalog_is_refused_before_any_new_edge(
 def test_current_issuing_catalog_drift_is_refused(empty_postgres_schema, corruption):
     db = empty_postgres_schema.database
     runner = current_runner(db)
-    BaselineMigrationRunner(db, runner).run(expected_revision="088.003")
+    BaselineMigrationRunner(db, runner).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        runner.run(expected_revision="088.003")
+        runner.run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
 
 
 def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(empty_postgres_schema):
@@ -226,11 +241,18 @@ def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(empty_
     assert registry.digest == m.MIGRATION_DIGEST
     with pytest.raises(Exception, match=r"controlled|migration"):
         m.MigrationRunner(db, revision=m.CURRENT_DATA_PLANE_REVISION, registry=registry).run(
-            expected_revision="088.003"
+            expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
         )
     with db.transaction() as tx:
         m._verify_predecessor_plane_schema(tx, "088.002")
         assert retained_rows(tx, tables) == before
-    assert current_runner(db).run(expected_revision="088.003").applied_steps == (
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == (
         "astralplane-088-session-issuer",
+        "astralplane-088-declarative-agents",
+        "astralplane-088-owner-guidance",
+        "astralplane-088-selected-input",
+        "astralplane-088-scheduler-policy",
+        "astralplane-088-framework-credentials",
     )

@@ -52,8 +52,8 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     plane_schema_075_migration = migrations_module.PLANE_SCHEMA_075_MIGRATION
     plane_schema_075_statements = migrations_module.PLANE_SCHEMA_075_STATEMENTS
     plane_schema_074_004_registry_digest = migrations_module.PLANE_SCHEMA_074_004_REGISTRY_DIGEST
-    assert SCHEMA_PREDECESSOR_REVISION == "088.002"
-    assert SCHEMA_REVISION == "088.003"
+    assert SCHEMA_PREDECESSOR_REVISION == "088.007"
+    assert SCHEMA_REVISION == "088.008"
     assert READ_COMPATIBLE_FROM == "066.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
@@ -70,6 +70,11 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         "079.001",
         "088.001",
         "088.002",
+        "088.003",
+        "088.004",
+        "088.005",
+        "088.006",
+        "088.007",
     )
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
@@ -82,6 +87,11 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         ("079.001", migrations_module.PLANE_SCHEMA_079_REGISTRY_DIGEST),
         ("088.001", migrations_module.PLANE_SCHEMA_088_REGISTRY_DIGEST),
         ("088.002", migrations_module.PLANE_SCHEMA_088_002_REGISTRY_DIGEST),
+        ("088.003", migrations_module.PLANE_SCHEMA_088_003_REGISTRY_DIGEST),
+        ("088.004", migrations_module.PLANE_SCHEMA_088_004_REGISTRY_DIGEST),
+        ("088.005", migrations_module.PLANE_SCHEMA_088_005_REGISTRY_DIGEST),
+        ("088.006", migrations_module.PLANE_SCHEMA_088_006_REGISTRY_DIGEST),
+        ("088.007", migrations_module.PLANE_SCHEMA_088_007_REGISTRY_DIGEST),
     )
     assert CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("067.001") == (
         PLANE_SCHEMA_067_REGISTRY_DIGEST
@@ -110,10 +120,32 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     assert migrations_module.PLANE_SCHEMA_088_MIGRATION.target_revision == "088.001"
     assert migrations_module.PLANE_SCHEMA_088_002_MIGRATION.source_revisions == ("088.001",)
     assert migrations_module.PLANE_SCHEMA_088_002_MIGRATION.target_revision == "088.002"
-    assert migrations_module.PLANE_SCHEMA_088_003_MIGRATION.source_revisions == (
+    assert migrations_module.PLANE_SCHEMA_088_003_MIGRATION.source_revisions == ("088.002",)
+    assert migrations_module.PLANE_SCHEMA_088_003_MIGRATION.target_revision == "088.003"
+    assert migrations_module.PLANE_SCHEMA_088_004_MIGRATION.source_revisions == ("088.003",)
+    assert migrations_module.PLANE_SCHEMA_088_004_MIGRATION.target_revision == "088.004"
+    assert migrations_module.PLANE_SCHEMA_088_005_MIGRATION.source_revisions == ("088.004",)
+    assert migrations_module.PLANE_SCHEMA_088_005_MIGRATION.target_revision == "088.005"
+    assert migrations_module.PLANE_SCHEMA_088_006_MIGRATION.source_revisions == ("088.005",)
+    assert migrations_module.PLANE_SCHEMA_088_006_MIGRATION.target_revision == "088.006"
+    assert migrations_module.PLANE_SCHEMA_088_006_REGISTRY_DIGEST == (
+        "4f5783e676a12a4009959da2056c2c769418f8c101d67f533223a608158ed73a"
+    )
+    assert migrations_module.PLANE_SCHEMA_088_007_MIGRATION.source_revisions == ("088.006",)
+    assert migrations_module.PLANE_SCHEMA_088_007_MIGRATION.target_revision == "088.007"
+    assert migrations_module.PLANE_SCHEMA_088_007_MIGRATION.name == (
+        "astralplane-088-scheduler-policy"
+    )
+    assert migrations_module.PLANE_SCHEMA_088_007_REGISTRY_DIGEST == (
+        "844d9f6629bc422013f84488b10ba6d2862f4805475c63b217639184146fca4d"
+    )
+    assert migrations_module.PLANE_SCHEMA_088_008_MIGRATION.source_revisions == (
         SCHEMA_PREDECESSOR_REVISION,
     )
-    assert migrations_module.PLANE_SCHEMA_088_003_MIGRATION.target_revision == SCHEMA_REVISION
+    assert migrations_module.PLANE_SCHEMA_088_008_MIGRATION.target_revision == SCHEMA_REVISION
+    assert migrations_module.PLANE_SCHEMA_088_008_MIGRATION.name == (
+        "astralplane-088-framework-credentials"
+    )
     assert MIGRATION_REGISTRY.migrations == (
         PLANE_SCHEMA_067_MIGRATION,
         PLANE_SCHEMA_074_MIGRATION,
@@ -125,6 +157,11 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         migrations_module.PLANE_SCHEMA_088_MIGRATION,
         migrations_module.PLANE_SCHEMA_088_002_MIGRATION,
         migrations_module.PLANE_SCHEMA_088_003_MIGRATION,
+        migrations_module.PLANE_SCHEMA_088_004_MIGRATION,
+        migrations_module.PLANE_SCHEMA_088_005_MIGRATION,
+        migrations_module.PLANE_SCHEMA_088_006_MIGRATION,
+        migrations_module.PLANE_SCHEMA_088_007_MIGRATION,
+        migrations_module.PLANE_SCHEMA_088_008_MIGRATION,
     )
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,12 @@ from enum import StrEnum
 
 from astralplane.contracts import Record, Transaction
 from astralplane.errors import PlaneError
+from astralplane.repositories.scheduler_models import (
+    MAX_SPEND,
+    EpisodeAdmission,
+    JobStopOutcome,
+    ScheduledJobPolicy,
+)
 
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -136,10 +143,46 @@ class ClaimedOccurrenceRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DueScanContinuation:
+    """Resettable scan hints, never claim or eligibility authority.
+
+    Positions identify the last examined row in each independent ordered scan.
+    Deleted rows need not exist; the next scan advances past the tuple and wraps.
+    Owner hints rotate selection within a bounded page, including across polls.
+    """
+
+    definition: tuple[int, str] | None = None
+    occurrence: tuple[datetime, str] | None = None
+    definition_owner: str | None = None
+    occurrence_owner: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("definition", "occurrence"):
+            position = getattr(self, name)
+            if position is None:
+                continue
+            if not isinstance(position, tuple) or len(position) != 2:
+                raise ValueError("scan position must contain a timestamp and UUID")
+            if name == "definition":
+                _millisecond("definition scan timestamp", position[0])
+                if position[0] > 2**63 - 1:
+                    raise ValueError("definition scan timestamp exceeds storage range")
+            else:
+                if not isinstance(position[0], datetime):
+                    raise ValueError("occurrence scan timestamp must be aware")
+                _aware("occurrence scan timestamp", position[0])
+            _uuid("scan identifier", position[1], version=4)
+        for owner in (self.definition_owner, self.occurrence_owner):
+            if owner is not None:
+                _required("scan owner", owner)
+
+
+@dataclass(frozen=True, slots=True)
 class DueClaimBatch:
     claims: tuple[ClaimedOccurrenceRecord, ...]
     recovered_attempts: tuple[RecoveredAttemptRecord, ...]
     ineligible_job_ids: tuple[str, ...]
+    continuation: DueScanContinuation = DueScanContinuation()
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,16 +585,34 @@ class SchedulerRepository:
         lease_seconds: int,
         eligible: Callable[[ScheduledJob], bool],
         next_run: Callable[[ScheduledJob, int], int | None],
+        continuation: DueScanContinuation | None = None,
+        scan_limit: int | None = None,
     ) -> DueClaimBatch:
         """Materialize cadence and claim eligible firings in one transaction.
 
         The two callbacks are product-owned, deterministic policy functions;
         they receive immutable job records and must not perform I/O. AstralPlane
         owns every durable read, lock, and write around those decisions.
+
+        Each scan examines at most ``scan_limit`` rows (default four times the
+        dispatch limit, at least 32 and at most 1000), using at most two queries
+        to wrap. Refused rows advance the returned hint without changing cadence.
+        Retain the hint only after commit; resetting it never bypasses row fences.
+        Fetch/callback work is bounded, not the database's physical index work.
         """
 
         _instance_id(instance_id)
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError("limit must be an integer")
         _limit(limit)
+        scan_limit = min(1000, max(32, limit * 4)) if scan_limit is None else scan_limit
+        if not isinstance(scan_limit, int) or isinstance(scan_limit, bool):
+            raise ValueError("scan_limit must be an integer")
+        _limit(scan_limit)
+        if continuation is None:
+            continuation = DueScanContinuation()
+        if not isinstance(continuation, DueScanContinuation):
+            raise ValueError("continuation must be a scheduler scan hint")
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool):
             raise ValueError("lease_seconds must be an integer")
         if not 5 <= lease_seconds <= 60:
@@ -566,23 +627,34 @@ class SchedulerRepository:
         observed_at = observed_at.astimezone(UTC)
         observed_ms = int(observed_at.timestamp() * 1000)
 
-        due_rows = transaction.fetch_all(
+        due_rows = _scan_rows(
+            transaction,
             """
             SELECT * FROM scheduled_job
             WHERE status = 'active' AND next_run_at IS NOT NULL
               AND next_run_at <= %s
+              {position}
             ORDER BY next_run_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT %s
             """,
-            (observed_ms, limit),
+            (observed_ms,),
+            columns="(next_run_at, id)",
+            position=continuation.definition,
+            limit=scan_limit,
         )
         ineligible_ids: list[str] = []
+        due_candidates: list[tuple[ScheduledJob, Record]] = []
         for row in due_rows:
             job = _job(row)
             if not bool(eligible(job)):
                 ineligible_ids.append(job.job_id)
                 continue
+            due_candidates.append((job, row))
+        selected_due, definition_owner = _rotate_owners(
+            due_candidates, limit=limit, last_owner=continuation.definition_owner,
+        )
+        for job, _ in selected_due:
             if job.next_run_at is None:  # pragma: no cover - SQL predicate invariant
                 raise PlaneError(
                     "locked due definition has no cadence timestamp",
@@ -642,7 +714,8 @@ class SchedulerRepository:
                     metadata={"owner_id": job.owner_id},
                 )
 
-        candidates = transaction.fetch_all(
+        candidates = _scan_rows(
+            transaction,
             """
             SELECT occurrence.*, to_jsonb(job) AS job_record
             FROM scheduled_occurrence AS occurrence
@@ -658,14 +731,19 @@ class SchedulerRepository:
                 OR (occurrence.state IN ('claimed', 'running')
                     AND occurrence.lease_expires_at <= %s)
             )
+            {position}
             ORDER BY occurrence.scheduled_for, occurrence.occurrence_id
             FOR UPDATE OF occurrence SKIP LOCKED
             LIMIT %s
             """,
-            (observed_at, observed_at, observed_at, limit),
+            (observed_at, observed_at, observed_at),
+            columns="(occurrence.scheduled_for, occurrence.occurrence_id)",
+            position=continuation.occurrence,
+            limit=scan_limit,
         )
         claims: list[ClaimedOccurrenceRecord] = []
         recovered: list[RecoveredAttemptRecord] = []
+        eligible_candidates: list[tuple[ScheduledJob, Record]] = []
         for row in candidates:
             raw_job = row.get("job_record")
             if not isinstance(raw_job, Mapping):
@@ -678,6 +756,11 @@ class SchedulerRepository:
                 if job.job_id not in ineligible_ids:
                     ineligible_ids.append(job.job_id)
                 continue
+            eligible_candidates.append((job, row))
+        selected_occurrences, occurrence_owner = _rotate_owners(
+            eligible_candidates, limit=limit, last_owner=continuation.occurrence_owner,
+        )
+        for job, row in selected_occurrences:
             occurrence = _occurrence(row)
             parent_operation_id = occurrence.operation_id
             if parent_operation_id is not None:
@@ -729,6 +812,18 @@ class SchedulerRepository:
             claims=tuple(claims),
             recovered_attempts=tuple(recovered),
             ineligible_job_ids=tuple(ineligible_ids),
+            continuation=DueScanContinuation(
+                definition=(
+                    (int(due_rows[-1]["next_run_at"]), str(due_rows[-1]["id"]))
+                    if due_rows else continuation.definition
+                ),
+                occurrence=(
+                    (candidates[-1]["scheduled_for"], str(candidates[-1]["occurrence_id"]))
+                    if candidates else continuation.occurrence
+                ),
+                definition_owner=definition_owner,
+                occurrence_owner=occurrence_owner,
+            ),
         )
 
     def start_legacy_run(
@@ -2385,6 +2480,530 @@ class SchedulerRepository:
             payload_digest=payload_digest,
             downstream_receipt_digest=None,
         )
+
+    # ------------------------------------------------------------------
+    # 088.007 optional job policy, episode admission and terminal Stop.
+    #
+    # A definition without a policy row keeps every pre-088.007 semantic;
+    # nothing below is consulted by the due scan, claims, runs or effects.
+    # Lock order: definition (scheduled_job) -> policy -> occurrence ->
+    # binding. The caller creates or locks the episode's persistent
+    # assignment BEFORE calling admission, which keeps the documented
+    # assignment-before-admission order of the assignment repository.
+    # ------------------------------------------------------------------
+
+    def get_job_policy(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+    ) -> ScheduledJobPolicy | None:
+        """Read one owner-scoped policy row; ``None`` means legacy semantics."""
+
+        _required("owner_id", owner_id)
+        _uuid("job_id", job_id, version=4)
+        row = transaction.fetch_one(
+            "SELECT * FROM scheduled_job_policy WHERE job_id = %s AND owner_id = %s",
+            (job_id, owner_id),
+        )
+        return None if row is None else _policy(row)
+
+    def put_job_policy(
+        self,
+        transaction: Transaction,
+        *,
+        policy: ScheduledJobPolicy,
+        expected_version: int,
+    ) -> ScheduledJobPolicy:
+        """Create (``expected_version`` 0) or replace a policy under version CAS.
+
+        Limits are validated by :class:`ScheduledJobPolicy` before any SQL.
+        ``admitted_runs``, ``terminal_stop`` and ``last_assignment_id`` are
+        scheduler-owned: a create must start them unset and a replace must
+        carry the observed values unchanged, so a charge is never lowered and
+        a Stop is never cleared through this method.
+        """
+
+        if not isinstance(policy, ScheduledJobPolicy):
+            raise ValueError("policy must be a ScheduledJobPolicy")
+        if (
+            not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)
+            or not 0 <= expected_version < 9007199254740991
+        ):
+            raise ValueError("expected_version must be a non-negative integer")
+        if policy.version != expected_version + 1:
+            raise ValueError("policy version must advance the expected version by one")
+        if expected_version == 0 and (
+            policy.admitted_runs != 0 or policy.terminal_stop or policy.last_assignment_id
+        ):
+            raise ValueError("scheduler-owned policy fields must start unset")
+        self._lock_job(transaction, owner_id=policy.owner_id, job_id=policy.job_id)
+        current = self._lock_policy(transaction, owner_id=policy.owner_id, job_id=policy.job_id)
+        if expected_version == 0:
+            if current is not None:
+                raise _policy_version_conflict(policy.owner_id, current.version)
+            row = transaction.fetch_one(
+                """
+                INSERT INTO scheduled_job_policy (
+                    job_id, owner_id, version, max_runs, admitted_runs,
+                    per_episode_limits, max_outstanding_episodes, monitor_changes,
+                    definition_revision, terminal_stop, last_assignment_id, updated_at
+                ) VALUES (%s, %s, %s, %s, 0, %s::jsonb, %s, %s, %s, FALSE, NULL, %s)
+                ON CONFLICT (job_id) DO NOTHING
+                RETURNING *
+                """,
+                (
+                    policy.job_id,
+                    policy.owner_id,
+                    policy.version,
+                    policy.max_runs,
+                    _limits_json(policy),
+                    policy.max_outstanding_episodes,
+                    policy.monitor_changes,
+                    policy.definition_revision,
+                    policy.updated_at,
+                ),
+            )
+            if row is None:
+                raise _policy_version_conflict(policy.owner_id, None)
+            return _policy(row)
+        if current is None:
+            raise PlaneError(
+                "scheduled job policy is missing",
+                code="scheduled_job_policy_missing",
+                metadata={"owner_id": policy.owner_id},
+            )
+        if current.version != expected_version:
+            raise _policy_version_conflict(policy.owner_id, current.version)
+        if (
+            policy.admitted_runs != current.admitted_runs
+            or policy.terminal_stop != current.terminal_stop
+            or policy.last_assignment_id != current.last_assignment_id
+        ):
+            raise PlaneError(
+                "scheduler-owned policy fields cannot be rewritten",
+                code="scheduled_job_policy_charge_rewrite",
+                metadata={"owner_id": policy.owner_id},
+            )
+        row = transaction.fetch_one(
+            """
+            UPDATE scheduled_job_policy
+            SET version = %s, max_runs = %s, per_episode_limits = %s::jsonb,
+                max_outstanding_episodes = %s, monitor_changes = %s,
+                definition_revision = %s, updated_at = %s
+            WHERE job_id = %s AND owner_id = %s AND version = %s
+            RETURNING *
+            """,
+            (
+                policy.version,
+                policy.max_runs,
+                _limits_json(policy),
+                policy.max_outstanding_episodes,
+                policy.monitor_changes,
+                policy.definition_revision,
+                policy.updated_at,
+                policy.job_id,
+                policy.owner_id,
+                expected_version,
+            ),
+        )
+        if row is None:
+            raise _policy_version_conflict(policy.owner_id, None)
+        return _policy(row)
+
+    def list_outstanding_episodes(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+    ) -> tuple[str, ...]:
+        """Assignment ids bound to this job whose episode is still unresolved.
+
+        Delete precondition: a policy job may be deleted only when this is
+        empty. Completed and stopped episodes keep their bindings and charges.
+        """
+
+        _required("owner_id", owner_id)
+        _uuid("job_id", job_id, version=4)
+        return self._outstanding(transaction, owner_id=owner_id, job_id=job_id)
+
+    def admit_assignment_episode(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+        occurrence_id: str,
+        claim_generation: int,
+        lease_token: str,
+        lease_owner: str,
+        assignment_id: str,
+        admitted_at: int,
+        spend: int = 1,
+    ) -> EpisodeAdmission:
+        """Bind one claimed occurrence to one episode and charge the allowance.
+
+        Admission, spend and binding commit together in the caller's
+        transaction. Every refusal (``policy_missing``, ``terminal_stop``,
+        ``episode_outstanding``, ``allowance_exhausted``) writes nothing. An
+        exact replay of a committed binding is ``replayed`` and charges nothing.
+        A stale claim, a foreign or resolved assignment, or a binding to a
+        different assignment fails closed with :class:`PlaneError`.
+        """
+
+        _claim_identity(
+            owner_id=owner_id,
+            occurrence_id=occurrence_id,
+            claim_generation=claim_generation,
+            lease_token=lease_token,
+            lease_owner=lease_owner,
+        )
+        _uuid("job_id", job_id, version=4)
+        _uuid("assignment_id", assignment_id, version=4)
+        _millisecond("admitted_at", admitted_at)
+        if not isinstance(spend, int) or isinstance(spend, bool) or not 0 <= spend <= MAX_SPEND:
+            raise ValueError("spend must be an integer between 0 and the run allowance limit")
+        self.assert_claim_job_active(transaction, owner_id=owner_id, job_id=job_id)
+        policy = self._lock_policy(transaction, owner_id=owner_id, job_id=job_id)
+        if policy is None:
+            return _refusal(
+                owner_id, job_id, occurrence_id, assignment_id, spend, "policy_missing", None
+            )
+        occurrence = self.assert_current_claim(
+            transaction,
+            owner_id=owner_id,
+            occurrence_id=occurrence_id,
+            claim_generation=claim_generation,
+            lease_token=lease_token,
+            lease_owner=lease_owner,
+            states=(OccurrenceState.CLAIMED, OccurrenceState.RUNNING),
+        )
+        if occurrence.job_id != job_id:
+            raise PlaneError(
+                "scheduled occurrence belongs to a different definition",
+                code="scheduled_occurrence_job_mismatch",
+                metadata={"owner_id": owner_id},
+            )
+        if policy.terminal_stop:
+            return _refusal(
+                owner_id, job_id, occurrence_id, assignment_id, spend, "terminal_stop", policy
+            )
+        existing = transaction.fetch_one(
+            """
+            SELECT assignment_id, spend FROM scheduled_occurrence_assignment
+            WHERE occurrence_id = %s AND owner_id = %s
+            FOR UPDATE
+            """,
+            (occurrence_id, owner_id),
+        )
+        if existing is not None:
+            if str(existing["assignment_id"]) != assignment_id:
+                raise PlaneError(
+                    "scheduled occurrence is already bound to another episode",
+                    code="scheduled_occurrence_binding_conflict",
+                    metadata={"owner_id": owner_id},
+                )
+            return EpisodeAdmission(
+                job_id=job_id,
+                owner_id=owner_id,
+                occurrence_id=occurrence_id,
+                assignment_id=assignment_id,
+                admitted=True,
+                created=False,
+                reason="replayed",
+                spend=int(existing["spend"]),
+                policy=policy,
+            )
+        assignment = transaction.fetch_one(
+            "SELECT lifecycle FROM persistent_assignment WHERE id = %s AND owner_user_id = %s",
+            (assignment_id, owner_id),
+        )
+        if assignment is None:
+            raise PlaneError(
+                "episode assignment is missing or foreign",
+                code="scheduled_episode_assignment_missing",
+                metadata={"owner_id": owner_id},
+            )
+        if str(assignment["lifecycle"]) not in {"active", "paused"}:
+            raise PlaneError(
+                "episode assignment is already resolved",
+                code="scheduled_episode_assignment_resolved",
+                metadata={"owner_id": owner_id},
+            )
+        outstanding = self._outstanding(transaction, owner_id=owner_id, job_id=job_id)
+        if len(outstanding) >= policy.max_outstanding_episodes:
+            return _refusal(
+                owner_id, job_id, occurrence_id, assignment_id, spend, "episode_outstanding", policy
+            )
+        if policy.max_runs is not None and policy.admitted_runs + spend > policy.max_runs:
+            return _refusal(
+                owner_id, job_id, occurrence_id, assignment_id, spend, "allowance_exhausted", policy
+            )
+        bound = transaction.fetch_one(
+            """
+            INSERT INTO scheduled_occurrence_assignment (
+                occurrence_id, owner_id, job_id, assignment_id, spend, admitted_at
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (occurrence_id, owner_id) DO NOTHING
+            RETURNING occurrence_id
+            """,
+            (occurrence_id, owner_id, job_id, assignment_id, spend, admitted_at),
+        )
+        if bound is None:
+            raise PlaneError(
+                "scheduled occurrence binding lost its lock fence",
+                code="scheduled_occurrence_binding_conflict",
+                metadata={"owner_id": owner_id},
+            )
+        charged = transaction.fetch_one(
+            """
+            UPDATE scheduled_job_policy
+            SET admitted_runs = admitted_runs + %s, last_assignment_id = %s,
+                version = version + 1, updated_at = %s
+            WHERE job_id = %s AND owner_id = %s AND version = %s
+              AND terminal_stop = FALSE
+              AND (max_runs IS NULL OR admitted_runs + %s <= max_runs)
+            RETURNING *
+            """,
+            (spend, assignment_id, admitted_at, job_id, owner_id, policy.version, spend),
+        )
+        if charged is None:
+            raise PlaneError(
+                "scheduled job policy lost its lock fence during admission",
+                code="scheduled_job_policy_version_conflict",
+                metadata={"owner_id": owner_id},
+            )
+        return EpisodeAdmission(
+            job_id=job_id,
+            owner_id=owner_id,
+            occurrence_id=occurrence_id,
+            assignment_id=assignment_id,
+            admitted=True,
+            created=True,
+            reason="admitted",
+            spend=spend,
+            policy=_policy(charged),
+        )
+
+    def stop_assignment_job(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+        expected_version: int,
+        stopped_at: int,
+    ) -> JobStopOutcome:
+        """Terminally stop one policy job without erasing history or charges.
+
+        Atomically: ``terminal_stop`` is set under version CAS, the definition
+        leaves ``active`` so the due scan never materializes it again, every
+        unstarted occurrence is cancelled through
+        :meth:`cancel_unstarted_occurrence`, and the still-outstanding episode
+        assignment ids are returned so the host stops each family. A repeat
+        Stop returns ``stopped=False`` with the same outstanding families.
+        Pausing a policy job is the ordinary status transition and never
+        touches the policy row.
+        """
+
+        _required("owner_id", owner_id)
+        _uuid("job_id", job_id, version=4)
+        if (
+            not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)
+            or not 1 <= expected_version <= 9007199254740991
+        ):
+            raise ValueError("expected_version must be a positive integer")
+        _millisecond("stopped_at", stopped_at)
+        self._lock_job(transaction, owner_id=owner_id, job_id=job_id)
+        current = self._lock_policy(transaction, owner_id=owner_id, job_id=job_id)
+        if current is None:
+            raise PlaneError(
+                "scheduled job policy is missing",
+                code="scheduled_job_policy_missing",
+                metadata={"owner_id": owner_id},
+            )
+        if current.version != expected_version:
+            raise _policy_version_conflict(owner_id, current.version)
+        if current.terminal_stop:
+            return JobStopOutcome(
+                job_id=job_id,
+                owner_id=owner_id,
+                stopped=False,
+                policy=current,
+                cancelled_occurrence_ids=(),
+                cancelled_operation_ids=(),
+                outstanding_assignment_ids=self._outstanding(
+                    transaction, owner_id=owner_id, job_id=job_id
+                ),
+            )
+        row = transaction.fetch_one(
+            """
+            UPDATE scheduled_job_policy
+            SET terminal_stop = TRUE, version = version + 1, updated_at = %s
+            WHERE job_id = %s AND owner_id = %s AND version = %s AND terminal_stop = FALSE
+            RETURNING *
+            """,
+            (stopped_at, job_id, owner_id, expected_version),
+        )
+        if row is None:
+            raise _policy_version_conflict(owner_id, None)
+        result = transaction.execute(
+            """
+            UPDATE scheduled_job
+            SET status = 'completed', next_run_at = NULL, updated_at = %s
+            WHERE id = %s AND user_id = %s
+            """,
+            (stopped_at, job_id, owner_id),
+        )
+        if result.rowcount != 1:
+            raise PlaneError(
+                "scheduled definition status fence was lost",
+                code="scheduled_job_status_conflict",
+                metadata={"owner_id": owner_id},
+            )
+        unstarted = transaction.fetch_all(
+            """
+            SELECT occurrence.* FROM scheduled_occurrence AS occurrence
+            JOIN scheduled_job AS job ON job.id = occurrence.job_id
+            WHERE occurrence.job_id = %s
+              AND occurrence.owner_user_id = %s
+              AND job.user_id = %s
+              AND occurrence.state IN ('pending', 'retryable', 'claimed')
+            ORDER BY occurrence.occurrence_id
+            FOR UPDATE OF occurrence
+            """,
+            (job_id, owner_id, owner_id),
+        )
+        cancelled: list[str] = []
+        operations: list[str] = []
+        for occurrence in (_occurrence(item) for item in unstarted):
+            if not self.cancel_unstarted_occurrence(
+                transaction,
+                owner_id=owner_id,
+                occurrence_id=occurrence.occurrence_id,
+                expected_operation_id=occurrence.operation_id,
+                terminal_code="cancelled_job_stopped",
+            ):
+                raise PlaneError(
+                    "scheduled occurrence cancellation lost its state fence",
+                    code="stale_occurrence_fence",
+                    metadata={"owner_id": owner_id},
+                )
+            cancelled.append(occurrence.occurrence_id)
+            if occurrence.operation_id is not None and occurrence.operation_id not in operations:
+                operations.append(occurrence.operation_id)
+        return JobStopOutcome(
+            job_id=job_id,
+            owner_id=owner_id,
+            stopped=True,
+            policy=_policy(row),
+            cancelled_occurrence_ids=tuple(cancelled),
+            cancelled_operation_ids=tuple(operations),
+            outstanding_assignment_ids=self._outstanding(
+                transaction, owner_id=owner_id, job_id=job_id
+            ),
+        )
+
+    def _lock_job(self, transaction: Transaction, *, owner_id: str, job_id: str) -> None:
+        row = transaction.fetch_one(
+            "SELECT id FROM scheduled_job WHERE id = %s AND user_id = %s FOR UPDATE",
+            (job_id, owner_id),
+        )
+        if row is None:
+            raise PlaneError(
+                "scheduled job is missing or foreign",
+                code="scheduled_job_missing",
+                metadata={"owner_id": owner_id},
+            )
+
+    def _lock_policy(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+    ) -> ScheduledJobPolicy | None:
+        row = transaction.fetch_one(
+            "SELECT * FROM scheduled_job_policy WHERE job_id = %s AND owner_id = %s FOR UPDATE",
+            (job_id, owner_id),
+        )
+        return None if row is None else _policy(row)
+
+    def _outstanding(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        job_id: str,
+    ) -> tuple[str, ...]:
+        rows = transaction.fetch_all(
+            """
+            SELECT binding.assignment_id FROM scheduled_occurrence_assignment AS binding
+            JOIN persistent_assignment AS assignment
+              ON assignment.id = binding.assignment_id
+             AND assignment.owner_user_id = binding.owner_id
+            WHERE binding.job_id = %s AND binding.owner_id = %s
+              AND assignment.lifecycle IN ('active', 'paused')
+            ORDER BY binding.admitted_at, binding.assignment_id
+            """,
+            (job_id, owner_id),
+        )
+        return tuple(dict.fromkeys(str(row["assignment_id"]) for row in rows))
+
+
+def _scan_rows(
+    transaction: Transaction,
+    query: str,
+    parameters: tuple[object, ...],
+    *,
+    columns: str,
+    position: tuple[object, str] | None,
+    limit: int,
+) -> list[Record]:
+    """Read a bounded circular keyset page using only code-owned SQL fragments."""
+
+    predicate = "" if position is None else f"AND {columns} > (%s, %s)"
+    values = parameters if position is None else (*parameters, *position)
+    rows = list(transaction.fetch_all(query.format(position=predicate), (*values, limit)))
+    if position is not None and len(rows) < limit:
+        rows.extend(transaction.fetch_all(
+            query.format(position=f"AND {columns} <= (%s, %s)"),
+            (*parameters, *position, limit - len(rows)),
+        ))
+    return rows
+
+
+def _rotate_owners(
+    candidates: list[tuple[ScheduledJob, Record]],
+    *,
+    limit: int,
+    last_owner: str | None,
+) -> tuple[list[tuple[ScheduledJob, Record]], str | None]:
+    """Select one eligible row per owner per round, retaining per-owner due order."""
+
+    by_owner: dict[str, deque[tuple[ScheduledJob, Record]]] = {}
+    for candidate in candidates:
+        by_owner.setdefault(candidate[0].owner_id, deque()).append(candidate)
+    owners = sorted(by_owner)
+    if last_owner is not None:
+        owners = [owner for owner in owners if owner > last_owner] + [
+            owner for owner in owners if owner <= last_owner
+        ]
+    ring = deque(owners)
+    selected: list[tuple[ScheduledJob, Record]] = []
+    while ring and len(selected) < limit:
+        owner = ring.popleft()
+        selected.append(by_owner[owner].popleft())
+        last_owner = owner
+        if by_owner[owner]:
+            ring.append(owner)
+    return selected, last_owner
+
+
 def _required(name: str, value: str, *, maximum: int = 512) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a non-empty string of at most {maximum} characters")
@@ -2508,6 +3127,80 @@ def _job(row: Record) -> ScheduledJob:
             else str(row["offline_grant_id"])
         ),
     )
+
+
+def _policy_version_conflict(owner_id: str, observed_version: int | None) -> PlaneError:
+    return PlaneError(
+        "scheduled job policy version fence was lost",
+        code="scheduled_job_policy_version_conflict",
+        metadata={
+            "owner_id": owner_id,
+            "observed_version": "<none>" if observed_version is None else observed_version,
+        },
+    )
+
+
+def _limits_json(policy: ScheduledJobPolicy) -> str:
+    return json.dumps(dict(policy.per_episode_limits), separators=(",", ":"), sort_keys=True)
+
+
+def _refusal(
+    owner_id: str,
+    job_id: str,
+    occurrence_id: str,
+    assignment_id: str,
+    spend: int,
+    reason: str,
+    policy: ScheduledJobPolicy | None,
+) -> EpisodeAdmission:
+    return EpisodeAdmission(
+        job_id=job_id,
+        owner_id=owner_id,
+        occurrence_id=occurrence_id,
+        assignment_id=assignment_id,
+        admitted=False,
+        created=False,
+        reason=reason,
+        spend=spend,
+        policy=policy,
+    )
+
+
+def _policy(row: Record) -> ScheduledJobPolicy:
+    raw_limits = row.get("per_episode_limits")
+    if raw_limits is None:
+        limits: object = {}
+    elif isinstance(raw_limits, str):
+        limits = json.loads(raw_limits)
+    else:
+        limits = raw_limits
+    if not isinstance(limits, Mapping):
+        raise PlaneError(
+            "scheduled job policy limits are not a JSON object",
+            code="scheduler_record_invalid",
+        )
+    try:
+        return ScheduledJobPolicy(
+            job_id=str(row["job_id"]),
+            owner_id=str(row["owner_id"]),
+            version=int(row["version"]),
+            max_runs=None if row.get("max_runs") is None else int(row["max_runs"]),
+            admitted_runs=int(row["admitted_runs"]),
+            per_episode_limits=tuple(limits.items()),
+            max_outstanding_episodes=int(row["max_outstanding_episodes"]),
+            monitor_changes=bool(row["monitor_changes"]),
+            definition_revision=int(row["definition_revision"]),
+            terminal_stop=bool(row["terminal_stop"]),
+            last_assignment_id=(
+                None if row.get("last_assignment_id") is None else str(row["last_assignment_id"])
+            ),
+            updated_at=int(row["updated_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PlaneError(
+            "scheduled job policy record is invalid",
+            code="scheduler_record_invalid",
+        ) from exc
 
 
 def _run_now(row: Record, *, created: bool) -> RunNowMaterialization:

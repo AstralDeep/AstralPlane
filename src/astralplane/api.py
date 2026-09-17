@@ -109,6 +109,7 @@ from astralplane.repositories.drafts import (
     DraftAgentRepository,
     DraftPublicationRecord,
 )
+from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
 from astralplane.repositories.generated_agent_publications import (
     GENERATED_AGENT_BUNDLE_CONTRACT,
     GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE,
@@ -224,6 +225,12 @@ def create_offline_grant_repository() -> OfflineGrantRepository:
     """Create owner-isolated encrypted offline-grant storage."""
 
     return OfflineGrantRepository()
+
+
+def create_framework_credential_repository() -> FrameworkCredentialRepository:
+    """Create owner-isolated hash-only framework-credential storage."""
+
+    return FrameworkCredentialRepository()
 
 
 def create_share_grant_repository() -> ShareGrantRepository:
@@ -446,6 +453,7 @@ class RepositoryCatalog:
     tool_policy_state: ToolPolicyStateRepository
     credentials: CredentialRepository
     offline_grants: OfflineGrantRepository
+    framework_credentials: FrameworkCredentialRepository
     share_grants: ShareGrantRepository
     chat_steps: ChatStepRepository
     conversation_files: ConversationFileRepository
@@ -496,6 +504,7 @@ class RepositoryCatalog:
                 "draft_agents": self.draft_agents,
                 "generated_agent_publications": self.generated_agent_publications,
                 "encrypted_llm_config": self.encrypted_llm_config,
+                "framework_credentials": self.framework_credentials,
                 "history": self.history,
                 "harness_cleanup": self.harness_cleanup,
                 "identity": self.identity,
@@ -543,6 +552,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         tool_policy_state=create_tool_policy_state_repository(),
         credentials=create_credential_repository(),
         offline_grants=create_offline_grant_repository(),
+        framework_credentials=create_framework_credential_repository(),
         share_grants=create_share_grant_repository(),
         chat_steps=create_chat_step_repository(),
         conversation_files=create_conversation_file_repository(),

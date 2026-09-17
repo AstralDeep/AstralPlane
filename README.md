@@ -42,7 +42,8 @@ privileges; any other predecessor owner or ACL shape remains a fail-closed misma
 
 Revision `079.001` adds persistent assignments with durable owner controls, source deduplication,
 bounded task graphs, resource reservations, execution permits and immutable approval/effect
-records. See [persistent assignment contracts](docs/persistent-assignment-contracts.md) and
+records. See [persistent assignment contracts](docs/persistent-assignment-contracts.md),
+[result publication contracts](docs/result-publication-contracts.md) and
 [migration and recovery](docs/migration-and-recovery.md).
 
 The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, API, UI, agent,

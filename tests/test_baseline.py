@@ -212,7 +212,10 @@ def test_schema_meta_only_shell_is_recoverable_as_empty(
     assert transaction.metadata == {"revision": BASELINE_REVISION}
 
 
-@pytest.mark.parametrize("revision", ["067.001", "079.001", "088.001", "088.002", "088.003"])
+@pytest.mark.parametrize(
+    "revision",
+    ["067.001", "079.001", "088.001", "088.002", "088.003", "088.006", "088.007", "088.008"],
+)
 def test_existing_structurally_complete_database_is_not_rewritten(revision: str) -> None:
     database = _compatible_database(revision=revision)
 

@@ -45,12 +45,25 @@ class OfflineGrantRecord:
     revoked_at: int | None
     created_at: int | None
     updated_at: int | None
+    # Additive (088.008): a finite admission allowance. Both None on every
+    # pre-088.008 grant and on any grant created without one — unlimited
+    # admissions, unchanged legacy semantics.
+    max_admissions: int | None = None
+    consumed_admissions: int | None = None
 
     @property
     def active(self) -> bool:
         """Whether the durable record has not been explicitly revoked."""
 
         return self.revoked_at is None
+
+    @property
+    def admissions_remaining(self) -> int | None:
+        """Remaining admissions, or ``None`` when the grant has no finite allowance."""
+
+        if self.max_admissions is None:
+            return None
+        return self.max_admissions - (self.consumed_admissions or 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +82,7 @@ class OfflineGrantRepository:
 
     _FIELDS = (
         "id, user_id, agent_id, refresh_token_enc, issued_at, expires_at, "
-        "revoked_at, created_at, updated_at"
+        "revoked_at, created_at, updated_at, max_admissions, consumed_admissions"
     )
 
     def create_grant(
@@ -82,8 +95,14 @@ class OfflineGrantRepository:
         encrypted_refresh_token: bytes,
         issued_at: int,
         expires_at: int,
+        max_admissions: int | None = None,
     ) -> OfflineGrantRecord:
-        """Insert a grant or accept an exact immutable replay of its identity."""
+        """Insert a grant or accept an exact immutable replay of its identity.
+
+        ``max_admissions`` is optional and additive: omitted (the default),
+        the grant keeps unlimited-admissions legacy semantics. Given, the
+        grant starts with zero consumed admissions and a finite allowance.
+        """
 
         grant = _uuid_text(grant_id, "grant_id")
         owner = _required_id(owner_id, "owner_id")
@@ -93,16 +112,18 @@ class OfflineGrantRepository:
         expires = _non_negative_int(expires_at, "expires_at")
         if expires <= issued:
             raise RepositoryValidationError("expires_at must be later than issued_at")
+        limit = _optional_admission_limit(max_admissions)
+        consumed = None if limit is None else 0
         row = transaction.fetch_one(
             f"""
             INSERT INTO user_offline_grant (
                 id, user_id, agent_id, refresh_token_enc, issued_at, expires_at,
-                revoked_at, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s)
+                revoked_at, created_at, updated_at, max_admissions, consumed_admissions
+            ) VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING
             RETURNING {self._FIELDS}
             """,
-            (grant, owner, agent, ciphertext, issued, expires, issued, issued),
+            (grant, owner, agent, ciphertext, issued, expires, issued, issued, limit, consumed),
         )
         if row is None:
             row = transaction.fetch_one(
@@ -124,6 +145,52 @@ class OfflineGrantRepository:
         ):
             raise RepositoryConflictError("offline grant replay changed immutable semantics")
         return record
+
+    def consume_admission(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        grant_id: str,
+        as_of: int,
+    ) -> OfflineGrantRecord:
+        """Atomically charge one admission against a finite grant allowance.
+
+        A grant with no configured allowance (``max_admissions IS NULL``) has
+        unlimited admissions and this call always succeeds for it. Two
+        concurrent callers racing a grant's last unit see exactly one success;
+        the loser is refused, never double-charged.
+        """
+        owner = _required_id(owner_id, "owner_id")
+        grant = _uuid_text(grant_id, "grant_id")
+        observed_at = _non_negative_int(as_of, "as_of")
+        row = transaction.fetch_one(
+            f"""
+            UPDATE user_offline_grant
+               SET consumed_admissions = CASE
+                       WHEN max_admissions IS NOT NULL
+                           THEN COALESCE(consumed_admissions, 0) + 1
+                       ELSE consumed_admissions
+                   END,
+                   updated_at = %s
+             WHERE id = %s AND user_id = %s AND revoked_at IS NULL AND expires_at > %s
+               AND (max_admissions IS NULL OR COALESCE(consumed_admissions, 0) < max_admissions)
+            RETURNING {self._FIELDS}
+            """,
+            (observed_at, grant, owner, observed_at),
+        )
+        if row is not None:
+            return _grant(row)
+        existing = transaction.fetch_one(
+            f"SELECT {self._FIELDS} FROM user_offline_grant WHERE id = %s AND user_id = %s",
+            (grant, owner),
+        )
+        if existing is None:
+            raise RepositoryConflictError("offline grant is unavailable")
+        record = _grant(existing)
+        if record.revoked_at is not None or not record.issued_at <= observed_at < record.expires_at:
+            raise RepositoryConflictError("offline grant is unavailable")
+        raise RepositoryConflictError("offline grant allowance exhausted")
 
     def get_grant(
         self,
@@ -162,6 +229,59 @@ class OfflineGrantRepository:
             (grant, owner, observed_at),
         )
         return None if row is None else _grant(row)
+
+    def assert_current_grant(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        grant_id: str,
+    ) -> OfflineGrantRecord:
+        """Read a locked active owner/grant at fresh database time, without exchange.
+
+        Canonical callers hold owner 79 before session/occurrence/operation/slot
+        locks, and take this grant lock before guidance rows. The nonblocking
+        owner check also refuses a misordered standalone caller rather than
+        waiting upstream. Failed NOWAIT checks roll back only this savepoint.
+        Compare the returned complete record to the original captured grant;
+        this method does not authorize adoption, decrypt, refresh or renew.
+        """
+        owner = str(_required_id(owner_id, "owner_id"))
+        grant = _uuid_text(grant_id, "grant_id")
+        try:
+            with transaction.savepoint("offline_grant_current_read"):
+                locked = transaction.fetch_one(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,79)) AS acquired",
+                    (owner,),
+                )
+                if locked is None or locked["acquired"] is not True:
+                    raise RepositoryConflictError("offline grant is unavailable")
+                state = transaction.fetch_one(
+                    "SELECT state FROM astralplane_blob_owner_state "
+                    "WHERE owner_id=%s FOR UPDATE NOWAIT", (owner,),
+                )
+                if state is not None and state["state"] != "active":
+                    raise RepositoryConflictError("offline grant is unavailable")
+                row = transaction.fetch_one(
+                    f"SELECT {self._FIELDS} FROM user_offline_grant "
+                    "WHERE id=%s AND user_id=%s FOR UPDATE", (grant, owner),
+                )
+                clock = transaction.fetch_one(
+                    "SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms"
+                )
+                if clock is None or type(clock["now_ms"]) is not int:
+                    raise RepositoryDataError("offline grant clock is unavailable")
+                if row is None:
+                    raise RepositoryConflictError("offline grant is unavailable")
+                record = _grant(row)
+                if (record.revoked_at is not None
+                        or not record.issued_at <= clock["now_ms"] < record.expires_at):
+                    raise RepositoryConflictError("offline grant is unavailable")
+                return record
+        except Exception as exc:
+            if getattr(exc, "pgcode", None) == "55P03":
+                raise RepositoryConflictError("offline grant is unavailable") from None
+            raise
 
     def replace_refresh_token_if_current(
         self,
@@ -289,6 +409,16 @@ def _optional_id(value: object, field: str) -> str | None:
     return None if value is None else _required_id(value, field)
 
 
+def _optional_admission_limit(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RepositoryValidationError("max_admissions must be an integer")
+    if not 1 <= value <= 10000:
+        raise RepositoryValidationError("max_admissions must be between 1 and 10000")
+    return value
+
+
 def _opaque_bytes(value: object) -> bytes:
     if not isinstance(value, (bytes, bytearray, memoryview)):
         raise RepositoryValidationError("encrypted_refresh_token must be bytes")
@@ -309,6 +439,14 @@ def _grant(row: Mapping[str, Any]) -> OfflineGrantRecord:
         ciphertext = _opaque_bytes(_row_value(row, "refresh_token_enc"))
     except RepositoryValidationError as exc:
         raise RepositoryDataError("persisted offline grant ciphertext is invalid") from exc
+    max_admissions = _optional_stored_int(row.get("max_admissions"), "max_admissions")
+    consumed_admissions = _optional_stored_int(
+        row.get("consumed_admissions"), "consumed_admissions"
+    )
+    if (max_admissions is None) != (consumed_admissions is None) or (
+        max_admissions is not None and consumed_admissions > max_admissions
+    ):
+        raise RepositoryDataError("persisted offline grant allowance is inconsistent")
     return OfflineGrantRecord(
         grant_id=_stored_uuid(_row_value(row, "id")),
         owner_id=str(_row_value(row, "user_id")),
@@ -319,6 +457,8 @@ def _grant(row: Mapping[str, Any]) -> OfflineGrantRecord:
         revoked_at=_optional_stored_int(row.get("revoked_at"), "revoked_at"),
         created_at=_optional_stored_int(row.get("created_at"), "created_at"),
         updated_at=_optional_stored_int(row.get("updated_at"), "updated_at"),
+        max_admissions=max_admissions,
+        consumed_admissions=consumed_admissions,
     )
 
 

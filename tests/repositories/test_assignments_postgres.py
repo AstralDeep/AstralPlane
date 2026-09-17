@@ -297,6 +297,64 @@ def session_observation(tx, *, owner_id="owner", session_id="session-reference")
     )
 
 
+def framework_credential_observation(tx, *, owner_id="owner", credential_id=None):
+    """Issue a real framework credential and its matching fresh execution observation."""
+    from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
+    from astralplane.repositories.history import (
+        FrameworkCredentialFence,
+        FrameworkCredentialObservation,
+        SessionRecord,
+        SessionRepository,
+    )
+
+    sessions = SessionRepository()
+    session_id = "framework-issuer-" + owner_id
+    if sessions.get(tx, owner_id=owner_id, session_id=session_id) is None:
+        now = int(tx.fetch_one("SELECT clock_timestamp() AS now")["now"].timestamp())
+        sessions.put(
+            tx,
+            SessionRecord(
+                session_id,
+                owner_id,
+                "synthetic-encrypted-access",
+                "synthetic-encrypted-refresh",
+                now,
+                now + 3600,
+                now,
+                False,
+                now,
+            ),
+        )
+    incarnation = sessions.get(tx, owner_id=owner_id, session_id=session_id).incarnation_id
+    token_hash = "a" * 64
+    record = FrameworkCredentialRepository().issue(
+        tx,
+        owner_id=owner_id,
+        credential_id=credential_id or uid(),
+        name="test framework credential",
+        scopes=("operations.submit",),
+        token_hash=token_hash,
+        token_prefix="afk_test",
+        issuer_kind="session_incarnation",
+        issuer_reference=incarnation,
+        max_admissions=10,
+        ttl_seconds=3600,
+    )
+    started = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    fence = FrameworkCredentialFence(
+        owner_id=owner_id,
+        credential_id=record.credential_id,
+        token_hash=token_hash,
+        scopes=record.scopes,
+        max_admissions=record.max_admissions,
+        consumed_admissions=record.consumed_admissions,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+        revoked_at=record.revoked_at,
+    )
+    return record, FrameworkCredentialObservation(fence, started, started + timedelta(seconds=15))
+
+
 def create_operation(repo, tx, **changes):
     """Use only application-owned opaque references, never synthetic bearer claims."""
     from astralplane.repositories.assignment_models import (
@@ -667,20 +725,60 @@ def test_one_shot_framework_receipt_is_bound_to_issuing_reference(tx, repo):
         AssignmentOperationSpec,
     )
 
+    credential, observation = framework_credential_observation(tx)
     now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
     authority = AssignmentOperationAuthority(
-        "owner", "framework", "credential", "framework-id", now + timedelta(minutes=5)
+        "owner", "framework", "credential", credential.credential_id, now + timedelta(minutes=5)
     )
     operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
     with pytest.raises(RepositoryValidationError, match="credential reference mismatch"):
-        create_operation(repo, tx, operation=operation)
-    record = create_operation(repo, tx, operation=operation, credential_id="framework-id")
+        create_operation(repo, tx, authority=observation, operation=operation)
+    record = create_operation(
+        repo, tx, authority=observation, operation=operation, credential_id=credential.credential_id
+    )
     assert (
-        create_operation(repo, tx, definition=None, operation=None, credential_id="framework-id")
+        create_operation(
+            repo,
+            tx,
+            authority=observation,
+            definition=None,
+            operation=None,
+            credential_id=credential.credential_id,
+        )
         == record
     )
     with pytest.raises(RepositoryConflictError, match="assignment_idempotency_conflict"):
-        create_operation(repo, tx, definition=None, operation=None, credential_id="other-id")
+        create_operation(
+            repo,
+            tx,
+            authority=observation,
+            definition=None,
+            operation=None,
+            credential_id="other-id",
+        )
+
+
+def test_one_shot_framework_authority_refuses_an_unverified_observation(tx, repo):
+    """The execution guard admits framework origin but still refuses the wrong observation."""
+    from astralplane.repositories.assignment_models import (
+        AssignmentOperationAuthority,
+        AssignmentOperationSpec,
+    )
+
+    now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
+    authority = AssignmentOperationAuthority(
+        "owner", "framework", "credential", "unissued-credential-id", now + timedelta(minutes=5)
+    )
+    operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
+    # A session observation is the wrong authority type for a framework-origin operation.
+    with pytest.raises(RepositoryConflictError, match="assignment_authorization_unavailable"):
+        create_operation(
+            repo,
+            tx,
+            authority=session_observation(tx),
+            operation=operation,
+            credential_id="unissued-credential-id",
+        )
 
 
 @pytest.mark.parametrize("change", ["deadline", "long_deadline", "research_without_source"])
@@ -730,7 +828,9 @@ def test_profile_and_receipt_structure_repeat_verification(database):
     runner = MigrationRunner(
         database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
     )
-    assert runner.run(expected_revision="088.003").applied_steps == ()
+    assert runner.run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == ()
     with database.transaction() as transaction:
         rows = transaction.fetch_all("SELECT execution_profile,data FROM persistent_assignment")
         for row in rows:
@@ -812,12 +912,21 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
         runner = m.MigrationRunner(
             upgrade_database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
         )
-        assert runner.run(expected_revision="088.003").applied_steps == (
+        assert runner.run(
+            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+        ).applied_steps == (
             "astralplane-088-one-shot-operations",
             "astralplane-088-session-incarnation",
             "astralplane-088-session-issuer",
+            "astralplane-088-declarative-agents",
+            "astralplane-088-owner-guidance",
+            "astralplane-088-selected-input",
+            "astralplane-088-scheduler-policy",
+            "astralplane-088-framework-credentials",
         )
-        assert runner.run(expected_revision="088.003").already_current
+        assert runner.run(
+            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+        ).already_current
         with upgrade_database.transaction() as transaction:
             migrated = transaction.fetch_one(
                 "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
@@ -830,7 +939,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
                 "DROP CONSTRAINT assignment_operation_receipt_pkey"
             )
         with pytest.raises(SchemaRevisionError):
-            runner.run(expected_revision="088.003")
+            runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     finally:
         pool.close()
         connection.rollback()
@@ -1013,6 +1122,51 @@ def test_usage_reservation_start_outcome_replay_and_stop_fence(tx, repo):
     assert stored.usage["outstanding"]["tool_calls"] == 0
     assert stored.usage["money_status"] == "unknown"
     assert "dispatch_token" not in repr(result)
+
+
+def test_usage_basis_persists_through_settlement_and_is_absent_from_legacy_rows(tx, repo):
+    record = create(repo, tx)
+    current = claim(repo, tx)
+    binding = bind(repo, tx, current.fence)
+    created = action(repo, tx, current.fence)
+    reserved = reserve(repo, tx, current.fence, created)
+    permit = start(repo, tx, current.fence, reserved, binding)
+    outcome(
+        repo,
+        tx,
+        permit,
+        record.assignment_id,
+        outcome=AssignmentActionOutcome(
+            "succeeded",
+            digest("done"),
+            {"text": "done"},
+            actual=AssignmentResourceAmount(
+                model_calls=0,
+                tool_calls=1,
+                tokens=10,
+                elapsed_ms=5,
+                basis={"tool_calls": "observed", "tokens": "estimated"},
+            ),
+        ),
+    )
+    row = tx.fetch_one(
+        "SELECT data FROM persistent_assignment_action WHERE id=%s", (created.action_id,)
+    )
+    persisted_actual = row["data"]["result"]["actual"]
+    assert persisted_actual["basis"] == {"tool_calls": "observed", "tokens": "estimated"}
+    # A legacy action's result predates 088.008 and simply has no "actual" key
+    # at all, let alone a basis map — record_action_outcome never synthesizes one.
+    other = create(repo, tx, assignment_id=uid())
+    other_current = claim(repo, tx)
+    other_binding = bind(repo, tx, other_current.fence)
+    other_action = action(repo, tx, other_current.fence)
+    other_reserved = reserve(repo, tx, other_current.fence, other_action)
+    other_permit = start(repo, tx, other_current.fence, other_reserved, other_binding)
+    outcome(repo, tx, other_permit, other.assignment_id)
+    other_row = tx.fetch_one(
+        "SELECT data FROM persistent_assignment_action WHERE id=%s", (other_action.action_id,)
+    )
+    assert "basis" not in (other_row["data"]["result"].get("actual") or {})
 
 
 def test_reservation_denies_shared_limit_and_zero_retries_allows_first_call(tx, repo):

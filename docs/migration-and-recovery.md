@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -113,6 +113,124 @@ Assignments retain bounded JSON checkpoints and task graphs; indexed event and a
 protect replay independently of working memory. Existing voice, audit, conversation, grant, and
 blob data remain unchanged. The current structural verifier checks the four tables, constraints,
 indexes, and immutable remote-proposal association index on every startup.
+
+### `088.004` declarative definitions and recovery
+
+This edge requires the exact `088.003` registry digest and catalog. Every existing
+agent and revision is classified `executable`; existing artifact fields, revision
+states, host/runtime records, ownership, trust, grants, and outstanding assignment
+liabilities remain unchanged. No historical definition is inferred. A new
+`declarative` agent stores immutable versioned definition snapshots, including the
+host-validated policy, in the existing revision table. Its selection uses
+`selected_definition_revision_id`; executable promotion pointers remain empty.
+Runtime instances and artifact publications have explicit executable-only foreign
+keys. An authored definition cannot become an executable fallback.
+
+The public agent facade exposes closed `DeclarativeAgentCommand` preparation and
+application, plus the existing owner-scoped revision read/history API. Preparation
+only reads and locks. The host retains current identity, policy validation, audit,
+and final caller checks in the same transaction. Application independently repeats
+preparation and uses a savepoint for every lifecycle/receipt write. A failure after
+the host's audit still requires rollback of the enclosing transaction; returned
+records are provisional until commit succeeds. Activation selects metadata only:
+it creates no assignment, consent, grant, tool permission, trust, or runnable host.
+Revision clears the selection and advances the head state fence. A consumer must
+check that fence and exact selected revision before using unfinished references;
+this storage change does not register an execution consumer.
+
+New metadata operations lock shared owner domain 79, the owner-retirement row,
+then agent-owner domain 0. Any caller session lock must precede agent-owner 0.
+Sorted agent-identity locks in the distinct two-integer advisory namespace
+`_AGENT_IDENTITY_LOCK_NAMESPACE` follow and prevent absent-row
+creation races with legacy trust/ownership writers. Those legacy writers never
+acquire owner/session locks after an identity lock and take it only when no
+immutable-kind head exists. This preserves legacy head-then-ownership transitions;
+their next SQL statement checks kind again after any absence lock wait. Composed
+callers must take owner locks before legacy identity writes and sort multiple
+identities. Executable creation itself takes owner 0 before its identity lock.
+New metadata methods do not
+acquire Work, session, configuration, or guidance locks after agent locks. A future
+definition consumer must preserve that order; no guidance SQL belongs in Deep.
+
+Accepted metadata-only receipts bind owner, command UUID4, target, request digest,
+and resulting revision/state. Identical replay returns the original receipt with
+the current head, including an archived/deleted head; it never activates or audits
+again and still requires a current owner. There are at most 4096 receipts per
+target: ordinary commands stop at 4094, leaving one state-changing archive and one
+delete slot. A new ID for an already archived/deleted state is refused; accepted
+IDs remain replayable. Receipts are never evicted to permit repeated mutation.
+
+Before deployment, quiesce writers and record the exact joint database/root backup,
+component identity, and predecessor digest. Apply the guarded edge and verify the
+complete current catalog, populated executable/legacy/remote compatibility,
+declarative lifecycle/denials, and repeat startup before opening authoring. A failed
+transaction must leave predecessor data and metadata intact. Prefer a guarded
+forward repair; if restoration is necessary, keep admission closed and restore the
+verified database and durable roots together with the matching application. Do not
+drop definitions/receipts, rewrite revision markers, infer a downgrade, or activate
+definitions during startup. Apply the existing governed session-retirement restore
+procedure before reopening restored authority. The migration itself does not
+qualify Deep policy, UI, runtime adoption, or institutional staging.
+
+### `088.005` owner guidance and recovery
+
+This additive edge requires the exact `088.004` registry and catalog. It creates
+skill heads/immutable revisions/cutover markers, current encrypted-note rows, and
+an assignment guidance selection header/reference index. Existing executable and
+declarative agents, automatic memory, grants, issued permits, usage, and uncertain
+liabilities remain byte-for-byte unchanged. The migration does not import files,
+infer note values, bind assignments, or enable a host/UI consumer.
+
+Before applying it, close writers and record the joint database/root backup and
+component identities. Run the guarded registry, complete current-catalog check,
+populated upgrade/repeat and rollback/corruption checks before reopening admission.
+A failed edge rolls back its DDL and registry metadata. Prefer a guarded forward
+repair; do not drop new tables or rewrite the schema marker to simulate downgrade.
+Restore database and roots with their exact matching application and keys under
+closed admission, then apply governed session retirement and account for any
+post-backup note Forget/expiry before allowing reads. Logical current-row deletion
+does not erase MVCC, WAL, replicas, or old backups.
+
+The [owner guidance storage contract](owner-guidance-contracts.md) defines controlled
+file cutover, receipt/CAS semantics, note erasure and fair expiry, and ordered
+assignment invalidation. A successful schema qualification alone does not qualify
+Deep privacy/authentication, filesystem materialization, UI, T036 guidance adoption,
+or institutional staging.
+
+### `088.007` scheduler policy and recovery
+
+This additive edge requires the exact `088.006` registry and catalog. It adds
+the optional `scheduled_job_policy` row and the `scheduled_occurrence_assignment`
+binding described in `knowledge-scheduler-and-async-contracts.md`. No existing
+scheduler, occurrence, run or effect row changes, no policy row is inferred for
+an existing definition, and no run limit is imposed on old jobs. Charges and
+bindings created after the upgrade are never decremented or rewritten by Stop.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+After committed upgrade, recover with the matching database and application;
+a `088.006` binary must not be asserted compatible with policy rows or bindings.
+Schema qualification does not establish Deep's admission wiring, the monitoring
+outcome classification, or the schedule-surface Stop.
+
+### `088.006` selected input and recovery
+
+This additive edge requires the exact `088.005` registry and catalog. It adds a
+nullable immutable selected-input envelope and a separate owned declarative-agent
+revision index. Existing headers keep a null envelope; no historical selected
+definition, expansion, or private value is inferred. Existing action accounting,
+skill history, encrypted notes and declarative revisions remain unchanged.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+After committed upgrade, recover with the matching database, durable roots and
+application; apply governed session retirement and post-backup Forget/expiry
+reconciliation before admission. Never drop references or rewrite the schema
+marker to make stale selected guidance executable. The
+[selected input contract](selected-input-contracts.md) defines immutable binding,
+ordered invalidation and final database-clock assertions. Schema qualification
+does not establish host authentication, keyed binding verification or T036
+execution/publication integration.
 
 ### `079.001` deployment and recovery
 

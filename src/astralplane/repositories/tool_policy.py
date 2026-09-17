@@ -14,6 +14,7 @@ from typing import Any
 
 from astralplane.contracts import Transaction
 from astralplane.repositories import (
+    RepositoryConflictError,
     RepositoryDataError,
     RepositoryValidationError,
     _bounded_limit,
@@ -57,8 +58,91 @@ class ScopedAgentOwnerRecord:
     agent_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class FixedReaderPolicySnapshot:
+    """Detached facts for the closed fixed-reader admission boundary."""
+
+    owner_id: str
+    scopes: tuple[ScopeState, ...]
+    overrides: tuple[ToolOverrideState, ...]
+    disabled: bool
+    is_safe: bool
+    is_public: bool | None
+    user_agent_owner: str | None
+    user_agent_deleted: bool
+    draft_status: str | None
+
+
 class ToolPolicyStateRepository:
     """Store explicit grants, overrides, selections, and agent opt-outs."""
+
+    def lock_fixed_reader_policy_snapshot(
+        self, transaction: Transaction, *, owner_id: str
+    ) -> FixedReaderPolicySnapshot:
+        """Fence fixed-reader facts through the caller's short atomic commit.
+
+        Acquire LAST, after all potentially waiting record/configuration locks.
+        The caller must do no subsequent policy-row lock/write or external I/O.
+        SHARE NOWAIT covers ordinary writers, including absent-row insertions,
+        without waiting in the reverse writer lock order. Any contention aborts
+        the enclosing transaction; callers must never reuse an earlier decision.
+        This deliberately coarse, opt-in fence can refuse unrelated-owner writes.
+        READ COMMITTED is mandatory so earlier reads cannot freeze stale policy.
+        No product permission decision is made here, and no schema is added.
+        """
+        owner_id = _required_id(owner_id, "owner_id")
+        try:
+            isolation = transaction.fetch_one(
+                "SELECT current_setting('transaction_isolation') AS isolation"
+            )
+            if isolation is None or isolation["isolation"] != "read committed":
+                raise RepositoryConflictError("fixed reader policy unavailable")
+            transaction.execute(
+                "LOCK TABLE agent_ownership, agent_scopes, agent_trust, draft_agents, "
+                "tool_overrides, user_agent, user_preferences IN SHARE MODE NOWAIT"
+            )
+            scopes = transaction.fetch_all(
+                "SELECT user_id, agent_id, scope, enabled, updated_at FROM agent_scopes "
+                "WHERE user_id = %s AND agent_id = 'web-research-1' AND scope = 'tools:read'",
+                (owner_id,),
+            )
+            overrides = transaction.fetch_all(
+                "SELECT user_id, agent_id, tool_name, permission_kind, enabled, updated_at "
+                "FROM tool_overrides WHERE user_id = %s AND agent_id = 'web-research-1' "
+                "AND tool_name = 'fetch_page' "
+                "AND (permission_kind IS NULL OR permission_kind = 'tools:read') "
+                "ORDER BY permission_kind NULLS FIRST",
+                (owner_id,),
+            )
+            trust = transaction.fetch_one(
+                "SELECT is_safe FROM agent_trust WHERE agent_id = 'web-research-1'"
+            )
+            ownership = transaction.fetch_one(
+                "SELECT is_public FROM agent_ownership WHERE agent_id = 'web-research-1'"
+            )
+            agent = transaction.fetch_one(
+                "SELECT owner_user_id, deleted_at FROM user_agent WHERE agent_id = 'web-research-1'"
+            )
+            draft = transaction.fetch_one(
+                "SELECT status FROM draft_agents WHERE agent_slug = 'web_research' "
+                "ORDER BY created_at DESC NULLS LAST, id ASC LIMIT 1"
+            )
+            disabled = self.list_disabled_agents(transaction, owner_id=owner_id)
+            return FixedReaderPolicySnapshot(
+                owner_id=owner_id,
+                scopes=tuple(_scope(row) for row in scopes),
+                overrides=tuple(_override(row) for row in overrides),
+                disabled="web-research-1" in disabled,
+                is_safe=trust is not None and bool(trust["is_safe"]),
+                is_public=None if ownership is None else bool(ownership["is_public"]),
+                user_agent_owner=None if agent is None else str(agent["owner_user_id"]),
+                user_agent_deleted=agent is not None and agent["deleted_at"] is not None,
+                draft_status=None if draft is None else str(draft["status"]),
+            )
+        except Exception:
+            # Driver messages and persisted preference contents are not diagnostics.
+            # The caller must leave the transaction, even for an isolation refusal.
+            raise RepositoryConflictError("fixed reader policy unavailable") from None
 
     def list_scopes(
         self, transaction: Transaction, *, owner_id: str, agent_id: str
@@ -546,6 +630,7 @@ def _write_preferences(
 
 
 __all__ = (
+    "FixedReaderPolicySnapshot",
     "LegacyToolPermission",
     "ScopeState",
     "ScopedAgentOwnerRecord",

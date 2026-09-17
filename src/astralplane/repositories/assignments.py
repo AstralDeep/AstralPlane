@@ -12,7 +12,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import asdict, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,6 +27,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentActionIntent,
     AssignmentActionOutcome,
     AssignmentActionReconciliation,
+    AssignmentActionReconciliationPreparation,
     AssignmentActionRecord,
     AssignmentActionReservation,
     AssignmentActivityRecord,
@@ -43,6 +44,7 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentOperationRead,
     AssignmentOperationSpec,
     AssignmentOwnerRetirementResult,
+    AssignmentOwnerWaitPreparation,
     AssignmentRecord,
     AssignmentRecoveryResult,
     AssignmentResourceAmount,
@@ -54,11 +56,51 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentTaskClaim,
     AssignmentTaskResult,
     AssignmentTransientInput,
+    AssignmentWakePreparation,
 )
-from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
+from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
+from astralplane.repositories.history import (
+    FrameworkCredentialObservation,
+    SessionExecutionObservation,
+    SessionRepository,
+)
+from astralplane.repositories.result_publication_models import (
+    ResultPublicationContent,
+    ResultPublicationPreparation,
+    ResultPublicationProposal,
+    ResultPublicationReceipt,
+)
+from astralplane.repositories.selected_input_models import (  # noqa: F401
+    AssignmentSelectedInput,
+    SelectedAgentReference,
+    SelectedInputEnvelope,
+    copy_envelope,
+    decode_envelope,
+)
 from astralplane.repositories.work_admission import ExecutionFence, WorkAdmissionRepository
 
 _DIMENSIONS = ("model_calls", "tool_calls", "tokens", "elapsed_ms")
+_USAGE_BASIS_VALUES = frozenset({"observed", "estimated", "uncertain", "none"})
+
+
+def _validate_usage_basis(basis):
+    """Validate an additive, optional per-dimension charge-provenance map.
+
+    Unknown price vs. a genuine zero stays distinguishable via ``None`` in the
+    amount itself (unchanged); ``basis`` only annotates HOW a populated
+    dimension's value was determined. It never introduces a duplicate counter.
+    """
+    if not isinstance(basis, Mapping):
+        raise RepositoryValidationError("usage basis must be a mapping")
+    allowed_keys = frozenset((*_DIMENSIONS, "spend_micro_units"))
+    if not basis:
+        raise RepositoryValidationError("usage basis must not be empty when present")
+    for key, value in basis.items():
+        if key not in allowed_keys:
+            raise RepositoryValidationError("unknown usage basis dimension")
+        if value not in _USAGE_BASIS_VALUES:
+            raise RepositoryValidationError("invalid usage basis value")
+    canonical(basis, 1024)
 _PHASES = {
     "awaiting_event",
     "waiting",
@@ -155,6 +197,18 @@ def _now(transaction):
     return transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
 
 
+def _guidance_cutoff(value):
+    if value is None:
+        return None
+    try:
+        if type(value) is not datetime or value.utcoffset() is None:
+            raise ValueError
+        # Detach any caller-owned tzinfo before the first database wait.
+        return value.astimezone(UTC)
+    except (TypeError, ValueError, OverflowError):
+        raise RepositoryValidationError("aware authority cutoff required") from None
+
+
 def _conflict(code):
     raise RepositoryConflictError(code, code=code)
 
@@ -185,14 +239,15 @@ def _supported(data):
 
 
 def _executable(data):
-    """Only v2's qualified incarnation authority can continue one-shot work."""
+    """Only v2's qualified incarnation or framework-credential authority continues one-shot work."""
     if data.get("execution_profile") != "one_shot":
         return True
-    return (
-        _supported(data)
-        and data["operation"]["version"] == 2
-        and data["operation"]["authority"]["origin"] == "interactive"
-        and data["operation"]["authority"]["reference_kind"] == "session_incarnation"
+    if not (_supported(data) and data["operation"]["version"] == 2):
+        return False
+    authority = data["operation"]["authority"]
+    return (authority["origin"], authority["reference_kind"]) in (
+        ("interactive", "session_incarnation"),
+        ("framework", "credential"),
     )
 
 
@@ -552,6 +607,522 @@ class AssignmentRepository:
         except (KeyError, TypeError, ValueError, RepositoryValidationError) as exc:
             raise RepositoryDataError("invalid persisted assignment") from exc
 
+    def bind_guidance_references(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        references,
+    ):
+        """Bind the initial exact selection, never silently rebind stale guidance.
+
+        The host already holds current caller/session authority. This storage
+        boundary grants none. Explicit instruction-revision replacement is a
+        separate host contract; this initial binding refuses any prior selection.
+        """
+        return self._bind_guidance_references(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            references=references,
+        )
+
+    def bind_selected_input(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        envelope,
+    ):
+        """Bind one immutable initial expansion; host verifies its key and MAC.
+
+        No header (including an old empty 005 header) may be upgraded/reselected.
+        Exact new-envelope replay is read-only and still checks current inputs.
+        """
+        envelope = copy_envelope(envelope)
+        return self._bind_guidance_references(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            references=envelope.references,
+            envelope=envelope,
+        )
+
+    def _bind_guidance_references(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        references,
+        envelope=None,
+    ):
+        from astralplane.repositories.guidance_models import GuidanceReference
+
+        if type(references) is not tuple or any(
+            type(ref) is not GuidanceReference for ref in references
+        ):
+            raise RepositoryValidationError("typed guidance references required")
+        references = tuple(
+            GuidanceReference(ref.kind, ref.resource_id, ref.revision) for ref in references
+        )
+        if (
+            sum(ref.kind == "skill" for ref in references) > 20
+            or sum(ref.kind == "note" for ref in references) > 8
+            or len({(ref.kind, ref.resource_id) for ref in references}) != len(references)
+        ):
+            raise RepositoryValidationError("guidance selection exceeds bounds")
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        existing = transaction.fetch_all(
+            (
+                "SELECT * FROM assignment_guidance_reference WHERE owner_id=%s AND assi"
+                "gnment_id=%s ORDER BY kind,resource_id"
+            ),
+            (owner_id, assignment_id),
+        )
+        requested = sorted((ref.kind, ref.resource_id, ref.revision) for ref in references)
+        selection = transaction.fetch_one(
+            "SELECT * FROM assignment_guidance_selection WHERE owner_id=%s AND assignment_id=%s",
+            (owner_id, assignment_id),
+        )
+        if selection is not None:
+            stored = self._selected_input_snapshot(transaction, data)[0]
+            if stored.envelope != envelope:
+                _conflict("assignment_guidance_revision_conflict")
+            if selection["reference_digest"] != digest(requested):
+                _conflict("assignment_guidance_revision_conflict")
+            actual = [(row["kind"], str(row["resource_id"]), row["revision"]) for row in existing]
+            if actual != requested or any(
+                row["instruction_revision"] != data["instruction_revision"] for row in existing
+            ):
+                _conflict("assignment_guidance_revision_conflict")
+            self._assert_guidance_current(transaction, data)
+            return _record(data)
+        if (
+            data["lifecycle"] != "active"
+            or data["phase"] != "waiting"
+            or data["instruction_revision"] != 1
+            or data["claim_generation"] != 0
+            or data["claim_token"] is not None
+            or data["tasks"]
+            or transaction.fetch_one(
+                "SELECT id FROM persistent_assignment_action WHERE assignment_id=%s LIMIT 1",
+                (assignment_id,),
+            )
+        ):
+            _conflict("assignment_guidance_binding_closed")
+        if existing or self._selected_input_snapshot(transaction, data)[0] is not None:
+            raise RepositoryDataError("guidance references have no selection header")
+        with transaction.savepoint("assignment_guidance_bind"):
+            if envelope is not None:
+                _require_executable(data)
+                # Refuse unavailable/foreign references with a closed repository
+                # error before a foreign-key failure can expose database detail.
+                self._assert_selected_agent_current(
+                    transaction,
+                    data,
+                    AssignmentSelectedInput(
+                        owner_id,
+                        assignment_id,
+                        data["instruction_revision"],
+                        envelope,
+                        envelope.references,
+                    ),
+                    {"invalidated_at": None},
+                )
+            transaction.execute(
+                (
+                    "INSERT INTO assignment_guidance_selection(owner_id,assignment_id,instr"
+                    "uction_revision,reference_digest,created_at,selected_input) "
+                    "VALUES(%s,%s,%s,%s,floor("
+                    "extract(epoch FROM clock_timestamp())*1000)::bigint,%s::jsonb)"
+                ),
+                (
+                    owner_id,
+                    assignment_id,
+                    data["instruction_revision"],
+                    digest(requested),
+                    None if envelope is None else canonical(asdict(envelope)),
+                ),
+            )
+            for ref in references:
+                transaction.execute(
+                    (
+                        "INSERT INTO assignment_guidance_reference(owner_id,assignment_id,instr"
+                        "uction_revision,kind,resource_id,revision) VALUES(%s,%s,%s,%s,%s,%s)"
+                    ),
+                    (
+                        owner_id,
+                        assignment_id,
+                        data["instruction_revision"],
+                        ref.kind,
+                        ref.resource_id,
+                        ref.revision,
+                    ),
+                )
+            if envelope is not None and envelope.agent is not None:
+                agent = envelope.agent
+                transaction.execute(
+                    "INSERT INTO assignment_selected_agent(owner_id,assignment_id,"
+                    "instruction_revision,agent_id,revision_id,definition_digest,kind) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        owner_id,
+                        assignment_id,
+                        data["instruction_revision"],
+                        agent.agent_id,
+                        agent.revision_id,
+                        agent.definition_digest,
+                        agent.kind,
+                    ),
+                )
+            self._assert_guidance_current(transaction, data)
+            return self._save(transaction, data)
+
+    def get_selected_input(self, transaction, *, owner_id, assignment_id):
+        """Read typed immutable metadata; None means no header or reference at all.
+
+        Old 005 headers return envelope=None, never an inferred expansion. This
+        read grants no input/execution authority and does not require live values.
+        """
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        return self._selected_input_snapshot(transaction, data)[0]
+
+    def assert_selected_input_current(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        expected,
+        authority_valid_until: datetime | None = None,
+    ):
+        """Compare originals and final DB-time expiry under owner/assignment locks.
+
+        This is not an execution capability. Completion callers pass the returned
+        current counters after retiring their claim. expected=None refuses even
+        an empty legacy header. Host verifies the named key and opaque MAC. The
+        optional cutoff adds an original lifetime bound, never authority itself.
+        """
+        authority_valid_until = _guidance_cutoff(authority_valid_until)
+        if expected is not None:
+            if type(expected) is not AssignmentSelectedInput:
+                raise RepositoryValidationError("typed selected input snapshot required")
+            expected = AssignmentSelectedInput(
+                expected.owner_id,
+                expected.assignment_id,
+                expected.instruction_revision,
+                expected.envelope,
+                expected.references,
+            )
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if self._selected_input_snapshot(transaction, data)[0] != expected:
+            _conflict("assignment_guidance_changed")
+        self._assert_guidance_current(transaction, data, authority_valid_until)
+        return _record(data)
+
+    @staticmethod
+    def _selected_input_snapshot(transaction, data):
+        from astralplane.repositories.guidance_models import GuidanceReference, integer
+
+        rows = transaction.fetch_all(
+            "SELECT * FROM assignment_guidance_reference WHERE owner_id=%s AND "
+            "assignment_id=%s ORDER BY kind,resource_id",
+            (data["owner_id"], data["assignment_id"]),
+        )
+        header = transaction.fetch_one(
+            "SELECT * FROM assignment_guidance_selection WHERE owner_id=%s AND assignment_id=%s",
+            (data["owner_id"], data["assignment_id"]),
+        )
+        agent = transaction.fetch_one(
+            "SELECT * FROM assignment_selected_agent WHERE owner_id=%s AND assignment_id=%s",
+            (data["owner_id"], data["assignment_id"]),
+        )
+        if header is None:
+            if rows or agent is not None:
+                raise RepositoryDataError("selected references have no header")
+            return None, rows, agent
+        try:
+            refs = tuple(
+                GuidanceReference(r["kind"], str(r["resource_id"]), r["revision"]) for r in rows
+            )
+            if header["reference_digest"] != digest(
+                [(r.kind, r.resource_id, r.revision) for r in refs]
+            ):
+                raise ValueError
+            for row in (*rows, *((agent,) if agent is not None else ())):
+                integer(row["instruction_revision"], minimum=1)
+                if (
+                    row["instruction_revision"] != header["instruction_revision"]
+                    or type(row["active"]) is not bool
+                ):
+                    raise ValueError
+                if row["invalidated_at"] is not None:
+                    integer(row["invalidated_at"], maximum=2**63 - 1)
+            envelope = (
+                None
+                if header["selected_input"] is None
+                else decode_envelope(plain(header["selected_input"]))
+            )
+            reference = (
+                None
+                if agent is None
+                else SelectedAgentReference(
+                    agent["agent_id"],
+                    str(agent["revision_id"]),
+                    agent["definition_digest"],
+                    agent["kind"],
+                )
+            )
+            if reference != (None if envelope is None else envelope.agent):
+                raise ValueError
+            snapshot = AssignmentSelectedInput(
+                data["owner_id"],
+                data["assignment_id"],
+                header["instruction_revision"],
+                envelope,
+                refs,
+            )
+            return snapshot, rows, agent
+        except (KeyError, TypeError, ValueError, RepositoryValidationError) as exc:
+            raise RepositoryDataError("invalid stored selected input") from exc
+
+    @staticmethod
+    def _assert_selected_agent_current(transaction, data, snapshot, agent):
+        if snapshot is None or snapshot.envelope is None or snapshot.envelope.agent is None:
+            return
+        ref = snapshot.envelope.agent
+        current = transaction.fetch_one(
+            "SELECT a.agent_kind,a.status,a.deleted_at,a.selected_definition_revision_id,"
+            "r.revision_kind,r.state,r.compatibility_state,r.definition_digest "
+            "FROM user_agent a JOIN user_agent_revision r ON r.agent_id=a.agent_id "
+            "AND r.owner_user_id=a.owner_user_id AND r.revision_id=%s "
+            "WHERE a.owner_user_id=%s AND a.agent_id=%s",
+            (ref.revision_id, data["owner_id"], ref.agent_id),
+        )
+        if (
+            agent["invalidated_at"] is not None
+            or current is None
+            or current["agent_kind"] != "declarative"
+            or current["status"] != "active"
+            or current["deleted_at"] is not None
+            or str(current["selected_definition_revision_id"]) != ref.revision_id
+            or current["revision_kind"] != "declarative"
+            or current["state"] != "definition"
+            or current["compatibility_state"] != "declarative"
+            or current["definition_digest"] != ref.definition_digest
+        ):
+            _conflict("assignment_guidance_changed")
+
+    def assert_guidance_current(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        authority_valid_until: datetime | None = None,
+    ):
+        """Read exact selected revisions under owner/assignment locks, no authority."""
+        authority_valid_until = _guidance_cutoff(authority_valid_until)
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        self._assert_guidance_current(transaction, data, authority_valid_until)
+        return _record(data)
+
+    @staticmethod
+    def _assert_guidance_current(transaction, data, authority_valid_until=None):
+        from astralplane.repositories.guidance import ExplicitNotesRepository, SkillsRepository
+        from astralplane.repositories.guidance_models import ExplicitNoteRecord, GuidanceReference
+
+        snapshot, rows, agent = AssignmentRepository._selected_input_snapshot(transaction, data)
+        if snapshot is not None and snapshot.instruction_revision != data["instruction_revision"]:
+            _conflict("assignment_guidance_changed")
+        AssignmentRepository._assert_selected_agent_current(transaction, data, snapshot, agent)
+        expiries = []
+        for row in rows:
+            ref = GuidanceReference(row["kind"], str(row["resource_id"]), row["revision"])
+            if (
+                row["invalidated_at"] is not None
+                or row["instruction_revision"] != data["instruction_revision"]
+            ):
+                _conflict("assignment_guidance_changed")
+            if ref.kind == "skill":
+                current = SkillsRepository().get(
+                    transaction, owner_id=data["owner_id"], skill_id=ref.resource_id
+                )
+                valid = current is not None and current.enabled and current.revision == ref.revision
+            else:
+                current = ExplicitNotesRepository().get_explicit_note(
+                    transaction,
+                    owner_id=data["owner_id"],
+                    note_id=ref.resource_id,
+                    include_disabled=False,
+                )
+                valid = type(current) is ExplicitNoteRecord and current.revision == ref.revision
+                if valid and current.expires_at is not None:
+                    expiries.append(current.expires_at)
+            if not valid:
+                _conflict("assignment_guidance_changed")
+        if authority_valid_until is not None:
+            # One final observation bounds both selected note lifetimes and the
+            # original caller/operation cutoff, including absent selections.
+            observed_at = _now(transaction)
+            observed_ms = (observed_at - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(
+                milliseconds=1
+            )
+            if observed_at >= authority_valid_until or (expiries and min(expiries) <= observed_ms):
+                _conflict("assignment_guidance_changed")
+        elif expiries:
+            from astralplane.repositories.guidance import _clock
+
+            if min(expiries) <= _clock(transaction):
+                _conflict("assignment_guidance_changed")
+
+    def _lock_guidance_dependants(self, transaction, owner_id, kind, resource_id):
+        """Caller holds owner 79. Lock every affected assignment, then all actions.
+
+        All resource writers and reference binding share that owner lock, so the
+        reference set cannot grow while the caller later locks a resource head.
+        No head is locked here; opaque rows are retained without reinterpretation.
+        """
+        rows = transaction.fetch_all(
+            (
+                "SELECT a.* FROM persistent_assignment a WHERE a.owner_user_id=%s AND a"
+                ".lifecycle IN ('active','paused') AND EXISTS(SELECT 1 FROM assignment_"
+                "guidance_reference r WHERE r.owner_id=a.owner_user_id AND r.assignment"
+                "_id=a.id AND r.kind=%s AND r.resource_id=%s AND r.active AND r.invalid"
+                "ated_at IS NULL) ORDER BY a.id FOR UPDATE"
+            ),
+            (owner_id, kind, resource_id),
+        )
+        identities = [str(row["id"]) for row in rows]
+        if identities:
+            transaction.fetch_all(
+                (
+                    "SELECT id FROM persistent_assignment_action WHERE owner_user_id=%s AND"
+                    " assignment_id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE"
+                ),
+                (owner_id, identities),
+            )
+        return rows
+
+    def _invalidate_guidance_dependants(self, transaction, owner_id, kind, resource_id):
+        rows = self._lock_guidance_dependants(transaction, owner_id, kind, resource_id)
+        self._invalidate_guidance_assignments(transaction, rows, owner_id)
+        transaction.execute(
+            "UPDATE assignment_guidance_reference SET invalidated_at=floor(extract("
+            "epoch FROM clock_timestamp())*1000)::bigint WHERE owner_id=%s AND kind"
+            "=%s AND resource_id=%s AND active AND invalidated_at IS NULL",
+            (owner_id, kind, resource_id),
+        )
+
+    def _lock_selected_agent_dependants(self, transaction, owner_id):
+        """Owner 79 is held; lock all indexed assignments/actions before agent 0.
+
+        The owner-wide prelock supports existing callers that acquire the public
+        declarative owner lock before selecting a command target. No terminal
+        row participates, and no new references can appear under owner 79.
+        """
+        rows = transaction.fetch_all(
+            "SELECT a.* FROM persistent_assignment a WHERE a.owner_user_id=%s "
+            "AND a.lifecycle IN ('active','paused') AND EXISTS(SELECT 1 FROM "
+            "assignment_selected_agent r WHERE r.owner_id=a.owner_user_id "
+            "AND r.assignment_id=a.id AND r.active AND r.invalidated_at IS NULL) "
+            "ORDER BY a.id FOR UPDATE",
+            (owner_id,),
+        )
+        if rows:
+            transaction.fetch_all(
+                "SELECT id FROM persistent_assignment_action WHERE owner_user_id=%s "
+                "AND assignment_id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE",
+                (owner_id, [str(row["id"]) for row in rows]),
+            )
+
+    def _invalidate_selected_agent_dependants(self, transaction, owner_id, agent_id):
+        # lock_declarative_owner already locked this stable set before owner 0.
+        rows = transaction.fetch_all(
+            "SELECT a.* FROM persistent_assignment a JOIN assignment_selected_agent r "
+            "ON r.owner_id=a.owner_user_id AND r.assignment_id=a.id WHERE r.owner_id=%s "
+            "AND r.agent_id=%s AND r.active AND r.invalidated_at IS NULL "
+            "AND a.lifecycle IN ('active','paused') ORDER BY a.id",
+            (owner_id, agent_id),
+        )
+        self._invalidate_guidance_assignments(transaction, rows, owner_id)
+        transaction.execute(
+            "UPDATE assignment_selected_agent SET invalidated_at=floor(extract("
+            "epoch FROM clock_timestamp())*1000)::bigint WHERE owner_id=%s "
+            "AND agent_id=%s AND active AND invalidated_at IS NULL",
+            (owner_id, agent_id),
+        )
+
+    def _invalidate_guidance_assignments(self, transaction, rows, owner_id):
+        for row in rows:
+            data = self._validated_assignment_row(row, owner_id, str(row["id"]))
+            if not _supported(data):
+                # Preserve opaque future records and all accounting. Their exact
+                # reference is still invalidated; no supported reader can adopt it.
+                continue
+            data["control_epoch"] += 1
+            self._clear_claim(data)
+            _, begun = self._invalidate_actions(transaction, data, conservative=True)
+            for task in data["tasks"]:
+                if task["state"] in {"pending", "running"}:
+                    task["task_generation"] += 1
+                    task["state"] = "pending"
+            phase = data["phase"]
+            if phase not in {
+                "waiting_authorization",
+                "awaiting_event",
+                "waiting_approval",
+                "budget_exhausted",
+                "reconciliation",
+            }:
+                phase = "reconciliation" if begun else "waiting"
+            data.update(
+                lifecycle="paused",
+                phase=phase,
+                safe_error_code="guidance_changed",
+                next_wake_at=None,
+                next_retry_at=None,
+            )
+            self._save(transaction, data)
+
     def _save(self, transaction, data):
         old_version = data["state_version"]
         data["state_version"] += 1
@@ -573,6 +1144,17 @@ class AssignmentRepository:
         )
         if row is None:
             _conflict("assignment_revision_conflict")
+        if data["lifecycle"] in _TERMINAL:
+            transaction.execute(
+                "UPDATE assignment_guidance_reference SET active=FALSE WHERE owner_id=%s "
+                "AND assignment_id=%s AND active",
+                (data["owner_id"], data["assignment_id"]),
+            )
+            transaction.execute(
+                "UPDATE assignment_selected_agent SET active=FALSE WHERE owner_id=%s "
+                "AND assignment_id=%s AND active",
+                (data["owner_id"], data["assignment_id"]),
+            )
         return _record(data)
 
     def _fenced(self, transaction, fence, *, action_id=None):
@@ -606,6 +1188,7 @@ class AssignmentRepository:
         )
 
     def _claim(self, transaction, data, worker_id, lease_seconds, action_id=None):
+        self._assert_guidance_current(transaction, data)
         _text(worker_id, 128)
         _integer(lease_seconds, 5, 60)
         previous = data.get("operation_binding")
@@ -951,13 +1534,13 @@ class AssignmentRepository:
             operation = self._operation_spec(operation, owner_id)
             if operation.version != 2:
                 _conflict("assignment_version_unsupported")
-            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
             if (
                 operation.authority.reference_id
                 if operation.authority.origin == "framework"
                 else None
             ) != credential_id:
                 raise RepositoryValidationError("framework credential reference mismatch")
+            self._assert_creation_authority(transaction, owner_id, definition, operation, authority)
             self._check_operation_time(transaction, operation)
             if _time(operation.deadline_at) > _now(transaction) + timedelta(days=1):
                 raise RepositoryValidationError("one-shot deadline exceeds one day")
@@ -1016,8 +1599,9 @@ class AssignmentRepository:
             return record
 
     def _assert_creation_authority(self, transaction, owner_id, definition, operation, authority):
-        """Bind interactive creation to its original issued session, including expiry."""
-        if operation.authority.origin != "interactive":
+        """Bind interactive/framework creation to its original issued authority, incl. expiry."""
+        origin = operation.authority.origin
+        if origin not in {"interactive", "framework"}:
             return
         data = {
             "owner_id": owner_id,
@@ -1032,7 +1616,11 @@ class AssignmentRepository:
         expiry_microseconds = (
             elapsed.days * 86400 + elapsed.seconds
         ) * 1_000_000 + elapsed.microseconds
-        if expiry_microseconds > authority.credential.hard_expires_at * 1_000_000:
+        if origin == "interactive":
+            bound_microseconds = authority.credential.hard_expires_at * 1_000_000
+        else:
+            bound_microseconds = authority.credential.expires_at * 1_000_000
+        if expiry_microseconds > bound_microseconds:
             _conflict("assignment_authorization_unavailable")
 
     @staticmethod
@@ -1226,6 +1814,7 @@ class AssignmentRepository:
             # Capacity must never make pause, stop or revocation unavailable.
             data["controls"].pop(next(iter(data["controls"])))
         if control == AssignmentControl.REVISE:
+            self._assert_guidance_current(transaction, data)
             if replacement is None:
                 raise RepositoryValidationError("replacement definition required")
             if one_shot:
@@ -1304,6 +1893,7 @@ class AssignmentRepository:
             if one_shot:
                 _operation_control(data["operation"])["wait"] = None
         elif control == AssignmentControl.RESUME:
+            self._assert_guidance_current(transaction, data)
             if data["lifecycle"] != "paused":
                 _conflict("assignment_not_paused")
             if one_shot:
@@ -1351,6 +1941,17 @@ class AssignmentRepository:
         invalidated, begun = self._invalidate_actions(
             transaction, data, conservative=control == AssignmentControl.STOP
         )
+        if one_shot and _supported(data) and self._operation_continuation_held(transaction, data):
+            # Controls retire unstarted authority, never an issued effect's
+            # liability. Stale settlement need not have changed the phase label.
+            if data["phase"] not in {
+                "waiting_authorization",
+                "awaiting_event",
+                "waiting_approval",
+                "budget_exhausted",
+            }:
+                data["phase"] = "reconciliation"
+            data.update(next_wake_at=None, next_retry_at=None)
         for task in data["tasks"]:
             if task["state"] in {"pending", "running"}:
                 task["state"] = "cancelled" if control in {"stop", "revise"} else "pending"
@@ -1369,6 +1970,7 @@ class AssignmentRepository:
 
     def _validate_operation_continuation(self, transaction, data, definition=None):
         """Local lineage checks supplement, never replace, current host authentication."""
+        self._assert_guidance_current(transaction, data)
         _require_executable(data)
         if data["phase"] == "waiting_authorization":
             _conflict("assignment_authorization_unavailable")
@@ -1396,6 +1998,198 @@ class AssignmentRepository:
             (owner_id,),
         )
         return not retired or retired["state"] == "active"
+
+    def _prepare_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version,
+    ):
+        _uuid(submission_id)
+        _digest(submission_digest)
+        _integer(control_version, 1, 1)
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _integer(expected_state_version, 1)
+        _text(event_key, 128)
+        _integer(source_revision)
+        self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_profile_mismatch")
+        signature = [
+            "wait",
+            control_version,
+            event_key,
+            source_revision,
+            expected_instruction_revision,
+            expected_control_epoch,
+            expected_state_version,
+            submission_digest,
+        ]
+        prior = data["controls"].get(submission_id)
+        if prior is not None:
+            if canonical(prior) != canonical(
+                {
+                    "signature": signature,
+                    "submission_digest": submission_digest,
+                    "command": "wait",
+                }
+            ):
+                _conflict("assignment_idempotency_conflict")
+            return data, signature, True, (), ()
+        if data["submission_id"] == submission_id:
+            _conflict("assignment_idempotency_conflict")
+        _require_executable(data)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if (
+            data["lifecycle"] not in {"active", "paused"}
+            or data["operation"].get("terminal_outcome") is not None
+            or (data["phase"] == "failed" and data["next_retry_at"] is None)
+        ):
+            _conflict("assignment_not_waiting")
+        state = data["operation"].get("control", {"watermarks": {}})
+        if source_revision < state["watermarks"].get(event_key, 0):
+            _conflict("assignment_event_revision_conflict")
+        if len(data["controls"]) >= 256 or (
+            event_key not in state["watermarks"] and len(state["watermarks"]) >= 64
+        ):
+            _conflict("assignment_history_capacity_exhausted")
+        actions, unresolved, _ = self._purge_blockers(transaction, data)
+        # Reserved attempts have no issued effect and can be invalidated. Unknown,
+        # started and uncertain action versions remain conservative liabilities.
+        invalidated = tuple(
+            action["action_id"]
+            for action in actions
+            if action["state"] in {"ready", "proposed", "approved", "reserved"}
+            and not any(a["state"] in {"started", "uncertain"} for a in action["attempts"])
+        )
+        begun = tuple(identity for identity in unresolved if identity not in invalidated)
+        return data, signature, False, invalidated, begun
+
+    def prepare_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version=1,
+    ):
+        """Read/lock the exact owner wait decision without writing or borrowing a claim.
+
+        Owner precedes assignment and sorted action locks. The host authenticates
+        the current owner and may audit these facts, then calls set_owner_event_wait
+        with identical arguments in this same bounded transaction. This safe hold
+        needs no execution session and grants no continuation or output authority.
+        """
+        data, _, replayed, invalidated, begun = self._prepare_owner_event_wait(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            submission_id=submission_id,
+            submission_digest=submission_digest,
+            event_key=event_key,
+            source_revision=source_revision,
+            control_version=control_version,
+        )
+        return AssignmentOwnerWaitPreparation(_record(data), replayed, invalidated, begun)
+
+    def set_owner_event_wait(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        submission_id,
+        submission_digest,
+        event_key,
+        source_revision,
+        control_version=1,
+    ):
+        """Commit an idempotent owner hold and retire every prior worker delivery fence.
+
+        Revalidate after preparation/audit waits. A savepoint protects all mutation
+        if an error is caught; required host audit preceding this call remains in
+        the enclosing transaction, which the caller must abort on final failure.
+        Returned facts are provisional until that transaction commits. Original
+        session authority is still required for later continuation, never borrowed
+        from this safe control. Authentic issued consumption remains settleable.
+        """
+        with transaction.savepoint("assignment_owner_wait_" + uuid.uuid4().hex):
+            data, signature, replayed, _, _ = self._prepare_owner_event_wait(
+                transaction,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+                expected_instruction_revision=expected_instruction_revision,
+                expected_control_epoch=expected_control_epoch,
+                expected_state_version=expected_state_version,
+                submission_id=submission_id,
+                submission_digest=submission_digest,
+                event_key=event_key,
+                source_revision=source_revision,
+                control_version=control_version,
+            )
+            if replayed:
+                return AssignmentControlResult(_record(data), False)
+            data["controls"][submission_id] = {
+                "signature": signature,
+                "submission_digest": submission_digest,
+                "command": "wait",
+            }
+            state = _operation_control(data["operation"])
+            state["wait"] = {"event_key": event_key, "source_revision": source_revision}
+            state["watermarks"].setdefault(event_key, 0)
+            data["control_epoch"] += 1
+            self._clear_claim(data)
+            invalidated, begun = self._invalidate_actions(transaction, data, conservative=True)
+            for task in data["tasks"]:
+                if task["state"] in {"pending", "running"}:
+                    task["state"] = "pending"
+                    task["task_generation"] += 1
+            _, _, held = self._purge_blockers(transaction, data)
+            held = held or data["phase"] == "reconciliation"
+            data.update(
+                phase="reconciliation" if held else "awaiting_event",
+                next_wake_at=None,
+                next_retry_at=None,
+                wake_reason="event_wait",
+            )
+            if not held:
+                data["safe_error_code"] = None
+            self._activity(
+                transaction,
+                data,
+                AssignmentActivityRecord(
+                    f"control:{submission_id}", "control", "Assignment wait", ""
+                ),
+                critical=True,
+            )
+            return AssignmentControlResult(
+                self._save(transaction, data), True, tuple(invalidated), tuple(begun)
+            )
 
     def set_event_wait(
         self,
@@ -1430,6 +2224,134 @@ class AssignmentRepository:
             ),
         )
 
+    def _prepare_wake(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        expected_instruction_revision,
+        expected_control_epoch,
+        event_id,
+        event_key,
+        source_revision,
+        event_digest,
+        control_version,
+    ):
+        _integer(control_version, 1, 1)
+        _integer(expected_state_version, 1)
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _text(event_id, 128)
+        _text(event_key, 128)
+        _integer(source_revision)
+        _digest(event_digest)
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        state = _operation_control(data["operation"])
+        signature = digest([event_key, source_revision, event_digest])
+        prior = state["wake_receipts"].get(event_id)
+        if prior is not None:
+            if prior != signature:
+                _conflict("assignment_idempotency_conflict")
+            return data, signature, True
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if data["lifecycle"] != "active" or data["phase"] != "awaiting_event":
+            _conflict("assignment_not_waiting")
+        if not owner_active:
+            _conflict("assignment_owner_retired")
+        self._validate_operation_continuation(transaction, data)
+        wait = state["wait"]
+        if wait is None or wait["event_key"] != event_key:
+            _conflict("assignment_event_key_conflict")
+        if source_revision <= max(wait["source_revision"], state["watermarks"].get(event_key, 0)):
+            _conflict("assignment_event_revision_conflict")
+        if len(state["wake_receipts"]) >= 128:
+            _conflict("assignment_history_capacity_exhausted")
+        return data, signature, False
+
+    def prepare_wake(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_state_version,
+        expected_instruction_revision,
+        expected_control_epoch,
+        event_id,
+        event_key,
+        source_revision,
+        event_digest,
+        control_version=1,
+    ):
+        """Read/lock a receipt-first wake decision without accepting or scheduling it.
+
+        Uses the same validation and owner→assignment locks as accept_wake. No
+        session/action locks or authority are acquired. A matching receipt precedes
+        new continuation/CAS checks; a miss is only current local decision data.
+        The host must bind current caller and original continuation authority,
+        audit, call accept_wake with identical arguments, and recheck its guards
+        in one bounded transaction. This result is no permission to mutate later.
+        """
+        data, _, replayed = self._prepare_wake(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_state_version=expected_state_version,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            event_id=event_id,
+            event_key=event_key,
+            source_revision=source_revision,
+            event_digest=event_digest,
+            control_version=control_version,
+        )
+        return AssignmentWakePreparation(_record(data), replayed)
+
+    def assert_operation_continuation_clear(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+    ):
+        """Lock current local facts and refuse unresolved one-shot liabilities.
+
+        Owner precedes assignment and sorted action locks. Stored task/authority
+        deadlines are checked again after the scan; no session is selected or
+        authenticated, no claim is granted, and no ledger or schedule is changed.
+        The host must acquire caller/original-session guards before these locks,
+        then recheck them after later waits in the same bounded transaction. This
+        assertion is for a new wake, never a prerequisite to accepted replay or
+        authentic settlement. It is not execution or future mutation authority.
+        """
+        _integer(expected_instruction_revision, 1)
+        _integer(expected_control_epoch, 1)
+        _integer(expected_state_version, 1)
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if data.get("execution_profile") != "one_shot":
+            _conflict("assignment_operation_required")
+        _require_executable(data)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        _state_version(data, expected_state_version)
+        if not owner_active:
+            _conflict("assignment_owner_retired")
+        operation = self._operation_spec(data["operation"], owner_id)
+        self._check_operation_time(transaction, operation)
+        if self._operation_continuation_held(transaction, data):
+            _conflict("assignment_action_uncertain")
+        self._check_operation_time(transaction, operation)
+        return _record(data)
+
     def accept_wake(
         self,
         transaction,
@@ -1449,40 +2371,27 @@ class AssignmentRepository:
 
         Authentication and current remote authority belong to the host. A receipt
         replay acknowledges prior acceptance only; it grants no new continuation.
+        Revalidates after preparation/audit waits. The host must abort its enclosing
+        transaction on required audit/final guard failure; returned facts are
+        provisional until that transaction commits. No execution authority is
+        inferred from preparation or this receipt.
         """
-        _integer(control_version, 1, 1)
-        _integer(expected_state_version, 1)
-        _integer(expected_instruction_revision, 1)
-        _integer(expected_control_epoch, 1)
-        _text(event_id, 128)
-        _text(event_key, 128)
-        _integer(source_revision)
-        _digest(event_digest)
-        owner_active = self._lock_operation_owner(transaction, owner_id)
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        if data.get("execution_profile") != "one_shot":
-            _conflict("assignment_operation_required")
-        state = _operation_control(data["operation"])
-        signature = digest([event_key, source_revision, event_digest])
-        prior = state["wake_receipts"].get(event_id)
-        if prior is not None:
-            if prior != signature:
-                _conflict("assignment_idempotency_conflict")
+        data, signature, replayed = self._prepare_wake(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_state_version=expected_state_version,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            event_id=event_id,
+            event_key=event_key,
+            source_revision=source_revision,
+            event_digest=event_digest,
+            control_version=control_version,
+        )
+        if replayed:
             return AssignmentControlResult(_record(data), False)
-        _version(data, expected_instruction_revision, expected_control_epoch)
-        _state_version(data, expected_state_version)
-        if data["lifecycle"] != "active" or data["phase"] != "awaiting_event":
-            _conflict("assignment_not_waiting")
-        if not owner_active:
-            _conflict("assignment_owner_retired")
-        self._validate_operation_continuation(transaction, data)
-        wait = state["wait"]
-        if wait is None or wait["event_key"] != event_key:
-            _conflict("assignment_event_key_conflict")
-        if source_revision <= max(wait["source_revision"], state["watermarks"].get(event_key, 0)):
-            _conflict("assignment_event_revision_conflict")
-        if len(state["wake_receipts"]) >= 128:
-            _conflict("assignment_history_capacity_exhausted")
+        state = _operation_control(data["operation"])
         state["wake_receipts"][event_id] = signature
         state["watermarks"][event_key] = source_revision
         state["wait"] = None
@@ -1604,6 +2513,14 @@ class AssignmentRepository:
                 or _time(data["next_wake_at"]) > _now(transaction)
             ):
                 _conflict("assignment_not_due")
+            if (
+                self._operation_continuation_held(transaction, data)
+                or data["operation"].get("control", {}).get("wait") is not None
+            ):
+                _conflict("assignment_action_uncertain")
+            # The ledger scan can wait on action locks. Check the original
+            # session and DB deadlines again before minting the claim.
+            self._assert_operation_claim_current(transaction, data, authority)
             claim = self._claim(transaction, data, worker_id, lease_seconds)
             self._assert_operation_claim_current(transaction, data, authority)
             return claim
@@ -1693,23 +2610,50 @@ class AssignmentRepository:
         """
         selected, grant_id = self._execution_authority_selection(data)
         if selected is not None:
-            if not _executable(data) or not isinstance(authority, SessionExecutionObservation):
+            if not _executable(data):
                 return False
-            try:
-                state = authority.credential
-                if (
-                    state.owner_id != data["owner_id"]
-                    or state.incarnation_id != selected["reference_id"]
+            origin = selected["origin"]
+            if origin == "interactive":
+                if not isinstance(authority, SessionExecutionObservation):
+                    return False
+                try:
+                    state = authority.credential
+                    if (
+                        state.owner_id != data["owner_id"]
+                        or state.incarnation_id != selected["reference_id"]
+                    ):
+                        return False
+                    SessionRepository().assert_current_execution(transaction, observation=authority)
+                except (
+                    AttributeError,
+                    RepositoryConflictError,
+                    RepositoryDataError,
+                    RepositoryNotFoundError,
+                    RepositoryValidationError,
                 ):
                     return False
-                SessionRepository().assert_current_execution(transaction, observation=authority)
-            except (
-                AttributeError,
-                RepositoryConflictError,
-                RepositoryDataError,
-                RepositoryNotFoundError,
-                RepositoryValidationError,
-            ):
+            elif origin == "framework":
+                if not isinstance(authority, FrameworkCredentialObservation):
+                    return False
+                try:
+                    state = authority.credential
+                    if (
+                        state.owner_id != data["owner_id"]
+                        or state.credential_id != selected["reference_id"]
+                    ):
+                        return False
+                    FrameworkCredentialRepository().assert_current_execution(
+                        transaction, observation=authority
+                    )
+                except (
+                    AttributeError,
+                    RepositoryConflictError,
+                    RepositoryDataError,
+                    RepositoryNotFoundError,
+                    RepositoryValidationError,
+                ):
+                    return False
+            else:
                 return False
         return (
             grant_id is None
@@ -1759,6 +2703,7 @@ class AssignmentRepository:
             selected
         ):
             _conflict("assignment_authorization_unavailable")
+        self._assert_guidance_current(transaction, data)
         self._assert_bound_admission(transaction, data, binding)
         # A lock wait can cross either local lease/authority deadline. Never
         # authorize with the timestamp sampled before the admission lock.
@@ -1769,6 +2714,7 @@ class AssignmentRepository:
             self._validate_operation_continuation(transaction, data)
         else:
             self._validate_references(transaction, fence.owner_id, _definition(data["definition"]))
+        self._assert_guidance_current(transaction, data)
         return _record(data)
 
     @staticmethod
@@ -1800,6 +2746,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.put_action(transaction, fence=fence, intent=intent)
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, authority=authority
@@ -1825,6 +2772,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.reserve_action(
                 transaction,
                 fence=fence,
@@ -1864,6 +2812,7 @@ class AssignmentRepository:
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
             )
+            self._assert_operation_action_continuable(transaction, fence, binding)
             result = self.start_action(
                 transaction,
                 fence=fence,
@@ -1950,6 +2899,10 @@ class AssignmentRepository:
         """
         try:
             action = self._action(transaction, owner_id, assignment_id, action_id)
+            if action["intent"]["request"].get("kind") == "result_publication":
+                from astralplane.repositories.result_publications import known_publication_action
+
+                return known_publication_action(action)
             required = {
                 "action_id",
                 "assignment_id",
@@ -2217,6 +3170,9 @@ class AssignmentRepository:
             _text(values.get("currency"), 8)
         elif values.get("currency") is not None:
             raise RepositoryValidationError("unknown money cannot carry a currency")
+        basis = values.get("basis")
+        if basis is not None:
+            _validate_usage_basis(basis)
         return values
 
     @staticmethod
@@ -2256,7 +3212,134 @@ class AssignmentRepository:
             if amount.get(key) is not None:
                 usage["outstanding"][key] = usage["outstanding"].get(key, 0) + amount[key]
 
+    def read_result_publication_destination(
+        self,
+        transaction,
+        *,
+        owner_id,
+        conversation_id,
+        expected_render_revision,
+        expected_publication_id,
+        maximum_bytes=1048576,
+    ):
+        """Read a complete, byte/count-bounded owner destination; never authority.
+
+        Holds owner, current head and exact child locks through the caller's
+        transaction. Empty content is permitted; an oversized or busy head is
+        refused, never truncated. The host must separately guard publication.
+        """
+        from astralplane.repositories.result_publication_destination import read
+
+        return read(
+            self,
+            transaction,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            expected_render_revision=expected_render_revision,
+            expected_publication_id=expected_publication_id,
+            maximum_bytes=maximum_bytes,
+        )
+
+    def put_result_publication_proposal(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        expected_state_version,
+        proposal: ResultPublicationProposal,
+        content: ResultPublicationContent,
+        expected_selected: AssignmentSelectedInput | None,
+        authority: SessionExecutionObservation,
+        caller_valid_until: datetime,
+    ) -> AssignmentActionRecord:
+        """Propose exact retained result bytes; never revive an execution claim."""
+        from astralplane.repositories.result_publications import put
+
+        return put(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            expected_state_version=expected_state_version,
+            proposal=proposal,
+            content=content,
+            expected_selected=expected_selected,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
+    def prepare_result_publication(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        decision: AssignmentActionDecision,
+        expected_state_version,
+        authority: SessionExecutionObservation | None = None,
+        caller_valid_until: datetime | None = None,
+    ) -> ResultPublicationPreparation:
+        """Receipt-first read/lock only; the host must still guard and audit Save."""
+        from astralplane.repositories.result_publications import prepare
+
+        return prepare(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
+    def commit_result_publication(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        decision: AssignmentActionDecision,
+        expected_state_version,
+        content: ResultPublicationContent,
+        authority: SessionExecutionObservation | None = None,
+        caller_valid_until: datetime | None = None,
+    ) -> ResultPublicationReceipt:
+        """Atomic fresh canvas pointer + one-time receipt, then final current checks.
+
+        The current owner request and its audit belong in this outer transaction.
+        If final validation fails, the caller must abort its audit too. Accepted
+        replay requires current owner access but no retired original capability.
+        """
+        from astralplane.repositories.result_publications import commit
+
+        return commit(
+            self,
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            content=content,
+            authority=authority,
+            caller_valid_until=caller_valid_until,
+        )
+
     def put_action(self, transaction, *, fence, intent):
+        if (
+            isinstance(intent.request, Mapping)
+            and intent.request.get("kind") == "result_publication"
+        ):
+            raise RepositoryValidationError("owner publication cannot use a worker permit")
         data = self._fenced(transaction, fence)
         _text(intent.action_key)
         _digest(intent.request_digest)
@@ -2979,6 +4062,106 @@ class AssignmentRepository:
         self._save(transaction, data)
         return _action_record(action)
 
+    def _prepare_action_reconciliation(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        decision,
+        expected_state_version,
+        authority,
+    ):
+        if type(decision) is not AssignmentActionReconciliation:
+            raise RepositoryValidationError("typed reconciliation decision required")
+        _uuid(decision.submission_id)
+        _digest(decision.submission_digest)
+        _digest(decision.prior_result_digest)
+        _text(decision.evidence_reference, 2048)
+        if type(decision.decision) is not str or decision.decision not in {
+            "confirmed_applied",
+            "confirmed_not_applied",
+        }:
+            raise RepositoryValidationError("invalid reconciliation decision")
+        owner_active = self._lock_operation_owner(transaction, owner_id)
+        selected = self._load(transaction, owner_id, assignment_id)
+        one_shot = selected.get("execution_profile") == "one_shot"
+        authority_current = (
+            owner_active and self._lock_execution_authority(transaction, selected, authority)
+            if one_shot
+            else owner_active
+        )
+        data = self._load(transaction, owner_id, assignment_id, lock=True)
+        if one_shot:
+            _integer(expected_state_version, 1)
+        _version(data, expected_instruction_revision, expected_control_epoch)
+        if one_shot:
+            # Final deadline handling also inspects other liabilities. Acquire all
+            # action rows in stable order before selecting one or appending audit.
+            self._purge_blockers(transaction, data)
+            authority_current = authority_current and (
+                self._execution_authority_selection(selected)
+                == self._execution_authority_selection(data)
+            )
+        action = self._action(transaction, owner_id, assignment_id, action_id)
+        if one_shot and self._known_action(transaction, owner_id, assignment_id, action_id) is None:
+            raise RepositoryDataError("invalid reconciliation action evidence")
+        replayed = action["reconciliation"] is not None
+        if replayed:
+            if action["reconciliation"] != plain(decision):
+                _conflict("assignment_idempotency_conflict")
+        else:
+            if one_shot:
+                _state_version(data, expected_state_version)
+            if (
+                action["state"] != "uncertain"
+                or (action["result"] or {}).get("result_digest") != decision.prior_result_digest
+                or not action["attempts"]
+                or action["attempts"][-1]["state"] != "uncertain"
+                or action["attempts"][-1]["dispatch_token"] is None
+            ):
+                _conflict("assignment_result_conflict")
+        return data, action, owner_active, authority_current, replayed
+
+    def prepare_action_reconciliation(
+        self,
+        transaction,
+        *,
+        owner_id,
+        assignment_id,
+        action_id,
+        expected_instruction_revision,
+        expected_control_epoch,
+        decision,
+        expected_state_version=None,
+        authority=None,
+    ):
+        """Lock and validate exact settlement facts without writing or requiring authority.
+
+        Owner/original session precede assignment and sorted action locks. The
+        caller may then append required audit and call reconcile_action with the
+        identical arguments in THIS transaction. This result is not a permit;
+        final settlement revalidates the decision and samples current DB time.
+        An absent/stale execution observation cannot prevent factual settlement.
+        """
+        data, action, _, _, replayed = self._prepare_action_reconciliation(
+            transaction,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            action_id=action_id,
+            expected_instruction_revision=expected_instruction_revision,
+            expected_control_epoch=expected_control_epoch,
+            decision=decision,
+            expected_state_version=expected_state_version,
+            authority=authority,
+        )
+        return AssignmentActionReconciliationPreparation(
+            _record(data), _action_record(action), replayed
+        )
+
     def reconcile_action(
         self,
         transaction,
@@ -2990,93 +4173,122 @@ class AssignmentRepository:
         expected_control_epoch,
         decision,
         expected_state_version=None,
+        authority=None,
     ):
-        owner_active = self._lock_operation_owner(transaction, owner_id)
-        data = self._load(transaction, owner_id, assignment_id, lock=True)
-        one_shot = data.get("execution_profile") == "one_shot"
-        if one_shot:
-            _integer(expected_state_version, 1)
-        _version(data, expected_instruction_revision, expected_control_epoch)
-        action = self._action(transaction, owner_id, assignment_id, action_id)
-        _uuid(decision.submission_id)
-        _digest(decision.submission_digest)
-        _text(decision.evidence_reference, 2048)
-        if action["reconciliation"] is not None:
-            if action["reconciliation"] != plain(decision):
-                _conflict("assignment_idempotency_conflict")
-            return _action_record(action)
-        if one_shot:
-            _state_version(data, expected_state_version)
-        if (
-            action["state"] != "uncertain"
-            or decision.decision not in {"confirmed_applied", "confirmed_not_applied"}
-            or (action["result"] or {}).get("result_digest") != decision.prior_result_digest
-        ):
-            _conflict("assignment_result_conflict")
-        attempt = action["attempts"][-1]
-        self._release(data, attempt["maximum"])
-        self._day(data, _now(transaction))
-        for key in (*_DIMENSIONS, "spend_micro_units"):
-            if attempt["maximum"].get(key) is not None:
-                for bucket in ("spent", "daily"):
-                    data["usage"][bucket][key] = (
-                        data["usage"][bucket].get(key, 0) + attempt["maximum"][key]
-                    )
-        action["reconciliation"] = plain(decision)
-        action["state"] = (
-            "succeeded" if decision.decision == "confirmed_applied" else "failed_not_started"
-        )
-        attempt["state"] = action["state"]
-        action["result"] = {
-            "outcome": "reconciled_applied"
-            if decision.decision == "confirmed_applied"
-            else "reconciled_not_applied",
-            "result_digest": digest(["reconciliation", plain(decision)]),
-            "result": {},
-            "result_available": False,
-            "evidence_reference": decision.evidence_reference,
-            "reconciliation": {
-                "decision": decision.decision,
-                "prior_result_digest": decision.prior_result_digest,
-            },
-        }
-        self._save_action(transaction, action)
-        if data["lifecycle"] == "active":
-            continuation = True
-            if one_shot:
-                # Settlement is factual even after authority expires. It cannot
-                # manufacture a new wake under expired or retired authority.
-                try:
-                    if _time(data["operation"]["deadline_at"]) <= _now(transaction):
-                        _conflict("assignment_deadline_exceeded")
-                    if not owner_active:
-                        _conflict("assignment_owner_retired")
-                    self._validate_operation_continuation(transaction, data)
-                except RepositoryConflictError as exc:
-                    continuation = False
-                    data.update(
-                        phase="failed"
-                        if exc.code == "assignment_deadline_exceeded"
-                        else "waiting_authorization",
-                        next_wake_at=None,
-                        next_retry_at=None,
-                        safe_error_code=exc.code,
-                    )
-                    if exc.code == "assignment_deadline_exceeded":
-                        self._terminal_operation_failure(transaction, data)
-                        if data["lifecycle"] == "completed":
-                            # Issued attempts retain their exact binding receipts;
-                            # a terminal controller cannot retain an executable lease.
-                            self._clear_claim(data)
-            if continuation:
-                data.update(
-                    phase="waiting",
-                    next_wake_at=plain(_now(transaction)),
-                    wake_reason="reconciled",
-                    wake_generation=data["wake_generation"] + 1,
+        """Settle once; only current original authority may schedule one-shot continuation.
+
+        When audit is required, prepare_action_reconciliation must precede that
+        audit in the same transaction, then this final method follows it. Missing
+        or expired execution authority suppresses a wake, never the authentic
+        charge. Infrastructure errors roll back; replay resolves a lost commit
+        acknowledgment. The savepoint also protects callers that catch failures.
+        """
+        with transaction.savepoint("assignment_reconcile_" + uuid.uuid4().hex):
+            data, action, owner_active, authority_current, replayed = (
+                self._prepare_action_reconciliation(
+                    transaction,
+                    owner_id=owner_id,
+                    assignment_id=assignment_id,
+                    action_id=action_id,
+                    expected_instruction_revision=expected_instruction_revision,
+                    expected_control_epoch=expected_control_epoch,
+                    decision=decision,
+                    expected_state_version=expected_state_version,
+                    authority=authority,
                 )
-        self._save(transaction, data)
-        return _action_record(action)
+            )
+            if replayed:
+                return _action_record(action)
+            attempt = action["attempts"][-1]
+            self._release(data, attempt["maximum"])
+            self._day(data, _now(transaction))
+            for key in (*_DIMENSIONS, "spend_micro_units"):
+                if attempt["maximum"].get(key) is not None:
+                    for bucket in ("spent", "daily"):
+                        data["usage"][bucket][key] = (
+                            data["usage"][bucket].get(key, 0) + attempt["maximum"][key]
+                        )
+            action["reconciliation"] = plain(decision)
+            action["state"] = (
+                "succeeded" if decision.decision == "confirmed_applied" else "failed_not_started"
+            )
+            attempt["state"] = action["state"]
+            action["result"] = {
+                "outcome": "reconciled_applied"
+                if decision.decision == "confirmed_applied"
+                else "reconciled_not_applied",
+                "result_digest": digest(["reconciliation", plain(decision)]),
+                "result": {},
+                "result_available": False,
+                "evidence_reference": decision.evidence_reference,
+                "reconciliation": {
+                    "decision": decision.decision,
+                    "prior_result_digest": decision.prior_result_digest,
+                },
+            }
+            self._save_action(transaction, action)
+            if data["lifecycle"] == "active":
+                continuation = True
+                if data.get("execution_profile") == "one_shot":
+                    continuation = self._reconciliation_continuation(
+                        transaction, data, owner_active, authority_current, authority
+                    )
+                if continuation:
+                    if data.get("execution_profile") == "one_shot":
+                        data.update(next_retry_at=None, safe_error_code=None)
+                    data.update(
+                        phase="waiting",
+                        next_wake_at=plain(_now(transaction)),
+                        wake_reason="reconciled",
+                        wake_generation=data["wake_generation"] + 1,
+                    )
+            self._save(transaction, data)
+            return _action_record(action)
+
+    def _reconciliation_continuation(
+        self,
+        transaction,
+        data,
+        owner_active,
+        authority_current,
+        authority,
+    ):
+        # The action is already factually settled. Denial below must persist that
+        # charge with a hold, not raise and erase it due to expired authority.
+        actions, _, held = self._purge_blockers(transaction, data)
+        if held or any(action["state"] in {"proposed", "approved"} for action in actions):
+            data.update(phase="reconciliation", next_wake_at=None, next_retry_at=None)
+            return False
+        if data["operation"].get("control", {}).get("wait") is not None:
+            data.update(phase="awaiting_event", next_wake_at=None, next_retry_at=None)
+            return False
+        if data["phase"] == "budget_exhausted":
+            data.update(next_wake_at=None, next_retry_at=None)
+            return False
+        try:
+            if _time(data["operation"]["deadline_at"]) <= _now(transaction):
+                _conflict("assignment_deadline_exceeded")
+            if not owner_active:
+                _conflict("assignment_owner_retired")
+            self._validate_operation_continuation(transaction, data)
+            if not authority_current or not self._lock_execution_authority(
+                transaction, data, authority
+            ):
+                _conflict("assignment_authorization_unavailable")
+        except RepositoryConflictError as exc:
+            data.update(
+                phase="failed"
+                if exc.code == "assignment_deadline_exceeded"
+                else "waiting_authorization",
+                next_wake_at=None,
+                next_retry_at=None,
+                safe_error_code=exc.code,
+            )
+            self._clear_claim(data)
+            if exc.code == "assignment_deadline_exceeded":
+                self._terminal_operation_failure(transaction, data)
+            return False
+        return True
 
     @staticmethod
     def _event(transaction, owner_id, assignment_id, event_id):
@@ -3936,6 +5148,42 @@ class AssignmentRepository:
             or any(task["state"] == "reconciliation" for task in data["tasks"])
         )
         return actions, unresolved, retained
+
+    def _operation_continuation_held(self, transaction, data):
+        """Read actual obligations under assignment then sorted action locks."""
+        actions, _, held = self._purge_blockers(transaction, data)
+        return held or any(action["state"] in {"proposed", "approved"} for action in actions)
+
+    def _assert_operation_action_continuable(self, transaction, fence, binding):
+        """Permit live sibling work, but never bypass unknown or stale consumption.
+
+        The caller already holds owner/session/assignment authority. The sorted
+        inventory locks remain held through its mutation and final authority
+        check. Settlement deliberately does not call this preparation guard.
+        """
+        data = self._load(transaction, fence.owner_id, fence.assignment_id)
+        if data.get("execution_profile") != "one_shot":
+            return
+        actions, unresolved, _ = self._purge_blockers(transaction, data)
+        known = {action["action_id"] for action in actions}
+        if (
+            data["phase"] == "reconciliation"
+            or any(identity not in known for identity in unresolved)
+            or any(task["state"] == "reconciliation" for task in data["tasks"])
+        ):
+            _conflict("assignment_action_uncertain")
+        for action in actions:
+            if action["state"] == "uncertain":
+                _conflict("assignment_action_uncertain")
+            for attempt in action["attempts"]:
+                if attempt["state"] == "uncertain" or (
+                    attempt["state"] == "started"
+                    and (
+                        canonical(attempt.get("assignment_fence")) != canonical(fence)
+                        or canonical(attempt["binding"]) != canonical(binding)
+                    )
+                ):
+                    _conflict("assignment_action_uncertain")
 
     def delete_for_owner(
         self,

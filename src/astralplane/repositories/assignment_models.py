@@ -206,6 +206,10 @@ class AssignmentResourceAmount(_Record):
     elapsed_ms: int = 0
     spend_micro_units: int | None = None
     currency: str | None = None
+    # Additive (FR-022): per-dimension charge provenance, e.g. {"tokens": "estimated"}.
+    # Absent for every pre-088.008 row; never a duplicate counter. One of
+    # observed|estimated|uncertain|none per populated dimension key.
+    basis: Mapping[str, str] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +319,33 @@ class AssignmentActionReconciliation(_Record):
     evidence_reference: str
     submission_id: str
     submission_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentActionReconciliationPreparation(_Record):
+    """Read/lock-only current facts; never authority outside the caller's transaction."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    action: AssignmentActionRecord = field(repr=False)
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentOwnerWaitPreparation(_Record):
+    """Locked safe-control facts, valid only in the caller's current transaction."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    replayed: bool
+    invalidated_action_ids: tuple[str, ...] = ()
+    begun_action_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentWakePreparation(_Record):
+    """Locked receipt/current-state facts, never authority to continue execution."""
+
+    assignment: AssignmentRecord = field(repr=False)
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
