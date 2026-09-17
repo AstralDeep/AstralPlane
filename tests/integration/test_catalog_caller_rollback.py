@@ -615,6 +615,18 @@ def _write_encrypted_llm_config(catalog: api.RepositoryCatalog, transaction: Tra
     )
 
 
+def _write_encrypted_typesafe_credential(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.encrypted_typesafe_credential.upsert_user(
+        transaction,
+        owner_id=_OWNER,
+        api_key_ciphertext="opaque-ciphertext",
+        key_fingerprint="0123456789ab",
+        verified_at=datetime(2026, 9, 17, tzinfo=UTC),
+    )
+
+
 _FRAMEWORK_ISSUER: dict[str, str] = {}
 
 
@@ -1164,6 +1176,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "encrypted_typesafe_credential",
+        _write_encrypted_typesafe_credential,
+        _count("user_typesafe_credential", "user_id", _OWNER),
+        1,
+        0,
+    ),
+    RollbackCase(
         "framework_credentials",
         _write_framework_credentials,
         _count("framework_credential", "id", "5b8e0000-0000-4000-8000-0000000f8acc"),
@@ -1325,7 +1344,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 38
+    assert len(applicable_keys) == len(set(applicable_keys)) == 39
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

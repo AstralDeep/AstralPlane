@@ -275,6 +275,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "draft_agents",
         "generated_agent_publications",
         "encrypted_llm_config",
+        "encrypted_typesafe_credential",
         "framework_credentials",
         "history",
         "harness_cleanup",

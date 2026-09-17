@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -196,6 +196,57 @@ file cutover, receipt/CAS semantics, note erasure and fair expiry, and ordered
 assignment invalidation. A successful schema qualification alone does not qualify
 Deep privacy/authentication, filesystem materialization, UI, T036 guidance adoption,
 or institutional staging.
+
+### `089.001` TypeSafe credentials, consent and recovery
+
+This additive edge requires the exact `088.008` registry and catalog. It adds
+two independent owner-keyed tables and alters nothing that exists.
+
+`user_typesafe_credential` holds one owner's TypeSafe System One key as
+ciphertext. AstralPlane never sees the plaintext: the product encrypts with the
+credential key it already owns and stores the opaque token. The row also carries
+`key_fingerprint`, a 12-hex-character digest of the plaintext, and a
+`last_verification_outcome` constrained to `unverified`, `valid`, `rejected` or
+`unavailable`. The fingerprint is a write condition, not a display value:
+`record_outcome` updates a row only when the stored fingerprint still matches
+the key the outcome was observed on, so a slow rejection from a revoked key
+cannot mark its freshly saved replacement rejected.
+
+There is deliberately no `system_typesafe_credential`. A deployment-wide key is
+not representable, which is what makes the bring-your-own-key rule enforceable
+rather than advisory. There is also no foreign key to `user_llm_config`:
+clearing an LLM configuration never removes a TypeSafe credential, and clearing
+a credential never removes an LLM configuration.
+
+`user_data_sharing_acknowledgment` records that an owner accepted a specific
+version of the third-party data-sharing notice, keeping both the first and the
+latest acknowledgment time. Acknowledgment means the stored `notice_version`
+equals the version the product currently shows, so changing the wording requires
+a fresh acknowledgment instead of inheriting the old one. It is consent
+evidence, not a setting: it has no delete path outside account-level purge, and
+it survives clearing either credential.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Rollback.** Both tables are additive with no dependents, so recovery is:
+
+```sql
+DROP TABLE user_typesafe_credential;
+DROP TABLE user_data_sharing_acknowledgment;
+UPDATE schema_meta SET value = '088.008' WHERE key = 'revision';
+```
+
+with the migration-digest marker restored to the `088.008` registry digest. Every
+owner then reverts to standard routing and no other data is affected. Stored
+credentials are lost by design: they are ciphertext the owner can re-enter, and
+keeping them under an `088.008` binary that cannot read the table would be worse.
+Rehearse the drop on a restored copy before running it on a live database.
+
+Schema qualification does not establish the product's probe path, its encryption
+key resolution, the routing adapter's behavior, or the enforcement of
+acknowledgment before a credential save. Those are product concerns verified
+outside this repository.
 
 ### `088.007` scheduler policy and recovery
 

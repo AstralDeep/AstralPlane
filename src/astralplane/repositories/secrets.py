@@ -1,4 +1,4 @@
-"""Opaque encrypted LLM-configuration persistence.
+"""Opaque encrypted LLM- and TypeSafe-credential persistence.
 
 AstralPlane stores ciphertext and routing metadata only.  Encryption,
 decryption, provider validation, and credential policy remain caller-owned.
@@ -6,10 +6,11 @@ decryption, provider validation, and credential policy remain caller-owned.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from astralplane.contracts import QueryExecutor, Transaction
 from astralplane.repositories import (
@@ -21,6 +22,9 @@ from astralplane.repositories import (
     _row_value,
     _single_returned,
 )
+
+TYPESAFE_OUTCOMES: Final = ("unverified", "valid", "rejected", "unavailable")
+_FINGERPRINT_PATTERN: Final = re.compile(r"^[0-9a-f]{12}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,4 +289,251 @@ class EncryptedLLMConfigRepository:
             )
 
 
-__all__ = ("EncryptedLLMConfigRecord", "EncryptedLLMConfigRepository")
+
+
+@dataclass(frozen=True, slots=True)
+class EncryptedTypeSafeCredentialRecord:
+    """One owner's opaque TypeSafe credential and its verification state.
+
+    ``api_key_ciphertext`` is excluded from ``repr`` so a record can be logged
+    or carried in an exception's metadata without leaking the token.
+    """
+
+    owner_id: str
+    api_key_ciphertext: str = field(repr=False)
+    key_fingerprint: str = ""
+    last_verified_at: datetime | None = None
+    last_verification_outcome: str = "unverified"
+    last_outcome_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+def _optional_time(value: object, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    return _stored_time(value, field_name)
+
+
+def _fingerprint(value: object) -> str:
+    text = _bounded_text(value, "key fingerprint", maximum=12)
+    if _FINGERPRINT_PATTERN.fullmatch(text) is None:
+        raise RepositoryValidationError(
+            "key fingerprint must be 12 lowercase hexadecimal characters"
+        )
+    return text
+
+
+def _outcome(value: object) -> str:
+    text = _bounded_text(value, "verification outcome", maximum=16)
+    if text not in TYPESAFE_OUTCOMES:
+        raise RepositoryValidationError(
+            "verification outcome is not a declared value",
+            metadata={"accepted": list(TYPESAFE_OUTCOMES)},
+        )
+    return text
+
+
+def _aware_time(value: object, field_name: str) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        raise RepositoryValidationError(
+            f"{field_name} must be a timezone-aware datetime"
+        )
+    return value
+
+
+def _ciphertext_text(value: object) -> str:
+    if value is None:
+        raise RepositoryDataError(
+            "persisted TypeSafe credential has no ciphertext",
+            metadata={"field": "api_key_enc"},
+        )
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            value = bytes(value).decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise RepositoryDataError(
+                "persisted TypeSafe ciphertext is not an ASCII Fernet token",
+                metadata={"field": "api_key_enc"},
+            ) from exc
+    return _bounded_text(value, "api key ciphertext", maximum=65_536)
+
+
+def _typesafe_record(row: Mapping[str, Any]) -> EncryptedTypeSafeCredentialRecord:
+    return EncryptedTypeSafeCredentialRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        api_key_ciphertext=_ciphertext_text(_row_value(row, "api_key_enc")),
+        key_fingerprint=_fingerprint(_row_value(row, "key_fingerprint")),
+        last_verified_at=_optional_time(
+            row.get("last_verified_at"), "last_verified_at"
+        ),
+        last_verification_outcome=_outcome(
+            _row_value(row, "last_verification_outcome")
+        ),
+        last_outcome_at=_optional_time(row.get("last_outcome_at"), "last_outcome_at"),
+        created_at=_stored_time(_row_value(row, "created_at"), "created_at"),
+        updated_at=_stored_time(_row_value(row, "updated_at"), "updated_at"),
+    )
+
+
+class EncryptedTypeSafeCredentialRepository:
+    """Owner-scoped TypeSafe credential storage. There is no system scope.
+
+    A deployment-wide TypeSafe key is deliberately not representable here: the
+    089 contract requires every routing request to be paid for by the user who
+    made it, so the table has one owner primary key and no ``system_*``
+    counterpart.
+
+    The repository never sees plaintext. The caller encrypts and hands over the
+    ciphertext plus a 12-hex-character fingerprint of the plaintext. That
+    fingerprint exists only so :meth:`record_outcome` can refuse to apply an
+    outcome belonging to a key the owner has since replaced.
+    """
+
+    _FIELDS = (
+        "user_id, api_key_enc, key_fingerprint, last_verified_at, "
+        "last_verification_outcome, last_outcome_at, created_at, updated_at"
+    )
+
+    def get_user(
+        self,
+        executor: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> EncryptedTypeSafeCredentialRecord | None:
+        owner = _required_id(owner_id, "owner id")
+        row = executor.fetch_one(
+            f"SELECT {self._FIELDS} FROM user_typesafe_credential WHERE user_id = %s",
+            (owner,),
+        )
+        return None if row is None else _typesafe_record(row)
+
+    def get_user_for_update(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+    ) -> EncryptedTypeSafeCredentialRecord | None:
+        """Select and hold the owner's credential row until transaction end."""
+        owner = _required_id(owner_id, "owner id")
+        row = transaction.fetch_one(
+            f"SELECT {self._FIELDS} FROM user_typesafe_credential "
+            "WHERE user_id = %s FOR UPDATE",
+            (owner,),
+        )
+        return None if row is None else _typesafe_record(row)
+
+    def upsert_user(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        api_key_ciphertext: str,
+        key_fingerprint: str,
+        verified_at: datetime,
+    ) -> EncryptedTypeSafeCredentialRecord:
+        """Insert or replace the owner's credential after a successful probe.
+
+        A save only happens behind a probe that already succeeded, so the row
+        lands as ``valid`` with both timestamps set. A failed probe never
+        reaches this method, which is what stops a rejected new key from
+        destroying a working stored one.
+        """
+        owner = _required_id(owner_id, "owner id")
+        ciphertext = _bounded_text(
+            api_key_ciphertext, "api key ciphertext", maximum=65_536
+        )
+        fingerprint = _fingerprint(key_fingerprint)
+        verified = _aware_time(verified_at, "verified_at")
+        result = transaction.execute(
+            f"""
+            INSERT INTO user_typesafe_credential (
+                user_id, api_key_enc, key_fingerprint, last_verified_at,
+                last_verification_outcome, last_outcome_at, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, 'valid', %s, clock_timestamp(), clock_timestamp()
+            )
+            ON CONFLICT (user_id) DO UPDATE SET
+                api_key_enc = EXCLUDED.api_key_enc,
+                key_fingerprint = EXCLUDED.key_fingerprint,
+                last_verified_at = EXCLUDED.last_verified_at,
+                last_verification_outcome = 'valid',
+                last_outcome_at = EXCLUDED.last_outcome_at,
+                updated_at = clock_timestamp()
+            RETURNING {self._FIELDS}
+            """,
+            (owner, ciphertext.encode("ascii"), fingerprint, verified, verified),
+        )
+        return _typesafe_record(
+            _single_returned(result, "upsert user TypeSafe credential")
+        )
+
+    def delete_user(self, transaction: Transaction, *, owner_id: str) -> bool:
+        """Remove the owner's credential. Returns False when there was none."""
+        owner = _required_id(owner_id, "owner id")
+        result = transaction.execute(
+            "DELETE FROM user_typesafe_credential WHERE user_id = %s",
+            (owner,),
+        )
+        if result.rowcount > 1:
+            raise RepositoryDataError(
+                "delete removed more than one owner-scoped credential",
+                metadata={"operation": "delete user TypeSafe credential"},
+            )
+        return result.rowcount == 1
+
+    def record_outcome(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        outcome: str,
+        at: datetime,
+        expected_fingerprint: str,
+    ) -> bool:
+        """Apply a verification outcome, but only to the key it was observed on.
+
+        The fingerprint is part of the WHERE clause, so an outcome still in
+        flight while the owner saves a different key updates nothing and
+        returns False. Without that condition a slow 401 from a revoked key
+        would mark its freshly saved replacement rejected.
+        """
+        owner = _required_id(owner_id, "owner id")
+        value = _outcome(outcome)
+        if value == "unverified":
+            raise RepositoryValidationError(
+                "unverified is the initial state, not a recordable outcome"
+            )
+        observed_at = _aware_time(at, "at")
+        fingerprint = _fingerprint(expected_fingerprint)
+        result = transaction.execute(
+            """
+            UPDATE user_typesafe_credential SET
+                last_verification_outcome = %s,
+                last_outcome_at = %s,
+                last_verified_at =
+                    CASE WHEN %s = 'valid' THEN %s ELSE last_verified_at END,
+                updated_at = clock_timestamp()
+            WHERE user_id = %s AND key_fingerprint = %s
+            """,
+            (value, observed_at, value, observed_at, owner, fingerprint),
+        )
+        if result.rowcount > 1:
+            raise RepositoryDataError(
+                "outcome update touched more than one owner-scoped credential",
+                metadata={"operation": "record TypeSafe verification outcome"},
+            )
+        return result.rowcount == 1
+
+
+__all__ = (
+    "TYPESAFE_OUTCOMES",
+    "EncryptedLLMConfigRecord",
+    "EncryptedLLMConfigRepository",
+    "EncryptedTypeSafeCredentialRecord",
+    "EncryptedTypeSafeCredentialRepository",
+)
