@@ -1,4 +1,4 @@
-"""Feedback, onboarding-state, and personalization persistence."""
+"""Feedback, onboarding-state, personalization, and consent persistence."""
 
 from __future__ import annotations
 
@@ -283,6 +283,61 @@ def _persona(row: Mapping[str, Any]) -> PersonaRecord:
         persona=str(_row_value(row, "persona")),
         score=float(_row_value(row, "score")),
         updated_at=int(_row_value(row, "updated_at")),
+    )
+
+
+
+@dataclass(frozen=True, slots=True)
+class DataSharingAcknowledgmentRecord:
+    """One owner's acknowledgment of the third-party data-sharing notice.
+
+    ``first_acknowledged_at`` survives every later acknowledgment so an audit
+    can tell when the owner first consented, even after a notice version bump
+    moved ``acknowledged_at`` forward.
+    """
+
+    owner_id: str
+    notice_version: str
+    acknowledged_at: datetime
+    first_acknowledged_at: datetime
+
+
+
+def _acknowledged_time(value: object) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        raise RepositoryValidationError(
+            "acknowledgment time must be a timezone-aware datetime"
+        )
+    return value
+
+
+def _stored_acknowledgment_time(value: object, field_name: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise RepositoryDataError(
+            "persisted timestamp is not timezone-aware",
+            metadata={"field": field_name},
+        )
+    return value
+
+
+def _acknowledgment_record(
+    row: Mapping[str, Any],
+) -> DataSharingAcknowledgmentRecord:
+    return DataSharingAcknowledgmentRecord(
+        owner_id=str(_row_value(row, "user_id")),
+        notice_version=_bounded_text(
+            _row_value(row, "notice_version"), "notice_version", maximum=64
+        ),
+        acknowledged_at=_stored_acknowledgment_time(
+            _row_value(row, "acknowledged_at"), "acknowledged_at"
+        ),
+        first_acknowledged_at=_stored_acknowledgment_time(
+            _row_value(row, "first_acknowledged_at"), "first_acknowledged_at"
+        ),
     )
 
 
@@ -1437,6 +1492,87 @@ class ThemePreferenceRepository:
         return _theme_preference(row)
 
 
+
+class DataSharingAcknowledgmentRepository:
+    """Owner-scoped record that a data-sharing notice version was accepted.
+
+    This is consent evidence, not a setting: there is no delete path, because
+    the fact that an owner consented on a date does not stop being true when
+    they later clear a credential. Account-level purge flows remove it with the
+    rest of the owner's data.
+
+    "Acknowledged" means the stored ``notice_version`` equals the version the
+    product is currently showing. Bumping the notice text therefore requires a
+    fresh acknowledgment rather than silently inheriting the old one.
+    """
+
+    _FIELDS = "user_id, notice_version, acknowledged_at, first_acknowledged_at"
+
+    def get_user(
+        self,
+        executor: QueryExecutor,
+        *,
+        owner_id: str,
+    ) -> DataSharingAcknowledgmentRecord | None:
+        owner = _required_id(owner_id, "owner_id")
+        row = executor.fetch_one(
+            f"SELECT {self._FIELDS} FROM user_data_sharing_acknowledgment "
+            "WHERE user_id = %s",
+            (owner,),
+        )
+        return None if row is None else _acknowledgment_record(row)
+
+    def acknowledge(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        notice_version: str,
+        at: datetime,
+    ) -> DataSharingAcknowledgmentRecord:
+        """Upsert the owner's acknowledgment, preserving the first one.
+
+        ``first_acknowledged_at`` is taken from the existing row on conflict, so
+        re-acknowledging -- whether the same version or a newer one -- never
+        rewrites when the owner first consented.
+        """
+        owner = _required_id(owner_id, "owner_id")
+        version = _bounded_text(notice_version, "notice_version", maximum=64)
+        moment = _acknowledged_time(at)
+        result = transaction.execute(
+            f"""
+            INSERT INTO user_data_sharing_acknowledgment (
+                user_id, notice_version, acknowledged_at, first_acknowledged_at
+            ) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                notice_version = EXCLUDED.notice_version,
+                acknowledged_at = GREATEST(
+                    EXCLUDED.acknowledged_at,
+                    user_data_sharing_acknowledgment.first_acknowledged_at
+                ),
+                first_acknowledged_at =
+                    user_data_sharing_acknowledgment.first_acknowledged_at
+            RETURNING {self._FIELDS}
+            """,
+            (owner, version, moment, moment),
+        )
+        return _acknowledgment_record(
+            _single_returned(result, "acknowledge data sharing notice")
+        )
+
+    def has_acknowledged(
+        self,
+        executor: QueryExecutor,
+        *,
+        owner_id: str,
+        notice_version: str,
+    ) -> bool:
+        """True only when the owner accepted this exact notice version."""
+        version = _bounded_text(notice_version, "notice_version", maximum=64)
+        record = self.get_user(executor, owner_id=owner_id)
+        return record is not None and record.notice_version == version
+
+
 class PreferencesRepository:
     """Grouping of preferences stores without connection or policy ownership."""
 
@@ -1446,6 +1582,7 @@ class PreferencesRepository:
         self.onboarding = OnboardingRepository()
         self.personalization = PersonalizationRepository()
         self.theme = ThemePreferenceRepository()
+        self.data_sharing = DataSharingAcknowledgmentRepository()
 
     def get_chat_phi_notice_enabled(self, query: QueryExecutor, *, owner_id: str) -> bool:
         """Read the owner's optional chat notice setting; absent means enabled."""
@@ -1496,6 +1633,8 @@ class PreferencesRepository:
 
 
 __all__ = (
+    "DataSharingAcknowledgmentRecord",
+    "DataSharingAcknowledgmentRepository",
     "FeedbackCommentCandidate",
     "FeedbackCursor",
     "FeedbackPage",

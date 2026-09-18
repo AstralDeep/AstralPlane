@@ -275,6 +275,13 @@ def _encrypted_llm_config(
     catalog.encrypted_llm_config.get_user(transaction, owner_id=_OWNER)
 
 
+def _encrypted_typesafe_credential(
+    catalog: api.RepositoryCatalog,
+    transaction: FailingExecutor,
+) -> None:
+    catalog.encrypted_typesafe_credential.get_user(transaction, owner_id=_OWNER)
+
+
 def _audit(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.audit.list_page(transaction, owner_id=_OWNER, limit=1)
 
@@ -541,6 +548,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("DO UPDATE SET",),
         None,
         ("RepositoryDataError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
+        "encrypted_typesafe_credential",
+        api.create_encrypted_typesafe_credential_repository,
+        "src/astralplane/repositories/secrets.py",
+        _encrypted_typesafe_credential,
+        _OWNER,
+        "user_id = %s",
+        ("ON CONFLICT",),
+        ("DO UPDATE SET",),
+        None,
+        ("RepositoryDataError", "RepositoryValidationError"),
     ),
     RepositoryContract(
         "framework_credentials",
@@ -954,6 +973,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_secrets:test_user_upsert_uses_native_parameters_and_returns_detached_record",
         "tests.repositories.test_secrets:test_user_upsert_before_deadline_is_one_fenced_statement",
         "tests.repositories.test_secrets:test_write_requires_exactly_one_returned_record",
+    ),
+    BehavioralEvidence(
+        "encrypted_typesafe_credential",
+        "tests.repositories.test_typesafe_credential:"
+        "test_read_is_owner_scoped_and_ciphertext_is_redacted",
+        "tests.repositories.test_typesafe_credential:"
+        "test_upsert_lands_valid_and_binds_the_fingerprint",
+        "tests.repositories.test_typesafe_credential:"
+        "test_record_outcome_conditions_on_the_fingerprint",
+        "tests.repositories.test_typesafe_credential:"
+        "test_multi_row_writes_are_refused_as_data_errors",
     ),
     BehavioralEvidence(
         "framework_credentials",

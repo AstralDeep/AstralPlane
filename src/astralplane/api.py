@@ -139,7 +139,10 @@ from astralplane.repositories.remote_proposals import RemoteOperationProposalRep
 from astralplane.repositories.revocations import RevocationQueueRepository
 from astralplane.repositories.saved_components import SavedComponentRepository
 from astralplane.repositories.scheduler import SchedulerRepository
-from astralplane.repositories.secrets import EncryptedLLMConfigRepository
+from astralplane.repositories.secrets import (
+    EncryptedLLMConfigRepository,
+    EncryptedTypeSafeCredentialRepository,
+)
 from astralplane.repositories.share_grants import ShareGrantRepository
 from astralplane.repositories.tool_policy import ToolPolicyStateRepository
 from astralplane.repositories.tracked_jobs import TrackedJobRepository
@@ -386,6 +389,18 @@ def create_encrypted_llm_config_repository() -> EncryptedLLMConfigRepository:
     return EncryptedLLMConfigRepository()
 
 
+def create_encrypted_typesafe_credential_repository() -> (
+    EncryptedTypeSafeCredentialRepository
+):
+    """Return the owner-scoped TypeSafe credential repository (089.001).
+
+    Ciphertext in, ciphertext out: the caller owns encryption, decryption
+    and every policy decision about the key.
+    """
+
+    return EncryptedTypeSafeCredentialRepository()
+
+
 def create_audit_repository() -> AuditRepository:
     """Create the append-only audit store."""
 
@@ -478,6 +493,7 @@ class RepositoryCatalog:
     remote_operation_proposals: RemoteOperationProposalRepository
     revocations: RevocationQueueRepository
     encrypted_llm_config: EncryptedLLMConfigRepository
+    encrypted_typesafe_credential: EncryptedTypeSafeCredentialRepository
     audit: AuditRepository
     audit_retention: AuditRetentionRepository
     authority: AuthorityRepository
@@ -504,6 +520,7 @@ class RepositoryCatalog:
                 "draft_agents": self.draft_agents,
                 "generated_agent_publications": self.generated_agent_publications,
                 "encrypted_llm_config": self.encrypted_llm_config,
+                "encrypted_typesafe_credential": self.encrypted_typesafe_credential,
                 "framework_credentials": self.framework_credentials,
                 "history": self.history,
                 "harness_cleanup": self.harness_cleanup,
@@ -577,6 +594,9 @@ def create_repository_catalog() -> RepositoryCatalog:
         remote_operation_proposals=create_remote_operation_proposal_repository(),
         revocations=create_revocation_repository(),
         encrypted_llm_config=create_encrypted_llm_config_repository(),
+        encrypted_typesafe_credential=(
+            create_encrypted_typesafe_credential_repository()
+        ),
         audit=create_audit_repository(),
         audit_retention=create_audit_retention_repository(),
         authority=create_authority_repository(),
@@ -868,6 +888,7 @@ __all__ = (
     "create_draft_agent_repository",
     "create_durable_purge_executor",
     "create_encrypted_llm_config_repository",
+    "create_encrypted_typesafe_credential_repository",
     "create_generated_agent_publication_repository",
     "create_harness_cleanup_repository",
     "create_history_repository",

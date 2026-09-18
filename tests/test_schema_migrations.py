@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
     # 088.008 (framework credentials) now follows this edge in the registry.
-    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -701,7 +701,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.005", "088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "088.008")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.001")
 
 
 def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_registry() -> None:
@@ -711,7 +711,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -737,9 +737,9 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "088.008"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.001"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "c99faec61a4a8b4b362550cb12074aefb7e610e3775fa276daf9d2df1d7cbbe1"
+        "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('framework_credential')" in query_tables
@@ -748,7 +748,54 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "088.008")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.001")
+
+
+def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.typesafe_credential_schema import (
+        TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS,
+    )
+
+    edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
+    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert edge.name == "astralplane-089-typesafe-credentials"
+    assert edge.source_revisions == ("088.008",)
+    assert edge.target_revision == "089.001"
+    assert edge.checksum == canonical._statements_checksum(
+        TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS
+    )
+
+    ddl = "\n".join(TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS)
+    assert "CREATE TABLE user_typesafe_credential" in ddl
+    assert "CREATE TABLE user_data_sharing_acknowledgment" in ddl
+    assert "api_key_enc BYTEA NOT NULL" in ddl
+    assert "key_fingerprint TEXT NOT NULL CHECK(key_fingerprint ~ '^[0-9a-f]{12}$')" in ddl
+    assert (
+        "CHECK(last_verification_outcome IN "
+        "('unverified','valid','rejected','unavailable'))"
+    ) in ddl
+    # Additive only: no existing table is altered and nothing is conditional.
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+    # No system-wide counterpart may exist (FR-005).
+    assert "system_typesafe" not in ddl
+    # No foreign key ties the credential to an LLM configuration (FR-004).
+    assert "REFERENCES" not in ddl
+
+    # The 088.008 predecessor is pinned by its exact registry and catalog digests.
+    assert canonical.PLANE_SCHEMA_088_008_REGISTRY_DIGEST == (
+        "4cddbddbc3eed66232f35bc24452451f92aa2b3e90968eb6fd6754f9a64358d8"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["088.008"] == (
+        "c99faec61a4a8b4b362550cb12074aefb7e610e3775fa276daf9d2df1d7cbbe1",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.008") == (
+        canonical.PLANE_SCHEMA_088_008_REGISTRY_DIGEST
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    assert "('user_typesafe_credential')" in query_tables
+    assert "('user_data_sharing_acknowledgment')" in query_tables
 
 
 class _NoStructure:
