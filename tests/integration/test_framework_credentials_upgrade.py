@@ -78,8 +78,11 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)
-    report = current_runner(db).run(expected_revision="088.008")
-    assert report.applied_steps == ("astralplane-088-framework-credentials",)
+    report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+    assert report.applied_steps == (
+        "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
+    )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
         # user_offline_grant gains two additive nullable columns; every other
@@ -102,7 +105,9 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
         assert grant.max_admissions is None
         assert grant.consumed_admissions is None
         assert grant.admissions_remaining is None
-    assert current_runner(db).run(expected_revision="088.008").already_current
+    assert current_runner(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).already_current
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="088.007")
 
@@ -112,7 +117,9 @@ def test_after_088_008_a_fresh_owner_session_can_issue_and_execute_a_credential(
 ):
     """Live evidence that the new table and the execution adapter compose end to end."""
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision="088.008")
+    BaselineMigrationRunner(db, current_runner(db)).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
     incarnation = str(uuid.uuid4())
     sid = uuid.uuid4().hex
     with db.transaction() as tx:

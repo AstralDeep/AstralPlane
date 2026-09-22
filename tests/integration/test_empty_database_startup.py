@@ -340,6 +340,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -641,6 +642,7 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
     trial_count = 50
     migration_owner_violations = 0
@@ -1028,6 +1030,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
 
     cursor = fixture.connection.cursor()
