@@ -295,6 +295,7 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
     assert not report.already_current
     assert _metadata(fixture.connection) == {
@@ -544,6 +545,7 @@ def test_transactional_failure_rolls_back_both_edges_and_retry_recovers(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
     assert _metadata(fixture.connection)["revision"] == CURRENT_DATA_PLANE_REVISION.schema_revision
 
@@ -655,6 +657,7 @@ def test_075_failure_rolls_back_backend_column_and_forward_retry_recovers(
         "astralplane-088-selected-input",
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
+        "astralplane-089-typesafe-credentials",
     )
     assert _query_one(
         fixture.connection,

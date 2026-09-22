@@ -229,19 +229,22 @@ it survives clearing either credential.
 Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
 rollback checks described above. Failed DDL rolls back with registry metadata.
 
-**Rollback.** Both tables are additive with no dependents, so recovery is:
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.001` revision/digest intact. A matching qualified application may disable
+TypeSafe routing through its governed product policy; doing so does not erase
+encrypted credentials or the durable data-sharing acknowledgment. An `088.008`
+binary is not compatible merely because these tables are additive.
 
-```sql
-DROP TABLE user_typesafe_credential;
-DROP TABLE user_data_sharing_acknowledgment;
-UPDATE schema_meta SET value = '088.008' WHERE key = 'revision';
-```
-
-with the migration-digest marker restored to the `088.008` registry digest. Every
-owner then reverts to standard routing and no other data is affected. Stored
-credentials are lost by design: they are ciphertext the owner can re-enter, and
-keeping them under an `088.008` binary that cannot read the table would be worse.
-Rehearse the drop on a restored copy before running it on a live database.
+Prefer a reviewed forward repair through the guarded migration registry. If the
+previous composition must be restored, close admission and quiesce every writer,
+then restore the verified pre-upgrade PostgreSQL backup and all paired durable
+roots together, with the exact prior application and unchanged credential/audit
+keys. Account for post-backup revocations, Forget/expiry and acknowledged consent,
+retire restored sessions through the governed recovery contract, and reconcile
+external LETS authority, receipt/replay and uncertain-effect state before reopening
+admission. A database snapshot must not roll back external authority or replay state.
+Rehearse this paired restore and re-upgrade on an isolated copy first. Never drop
+these tables, rewrite revision/digest markers, or execute ad-hoc downgrade SQL.
 
 Schema qualification does not establish the product's probe path, its encryption
 key resolution, the routing adapter's behavior, or the enforcement of
