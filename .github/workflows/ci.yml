@@ -63,7 +63,9 @@ jobs:
       - name: Run the complete Python suite against PostgreSQL
         run: |
           uv run --frozen --group ci pytest -q -p no:cacheprovider \
-            --cov=astralplane --cov-branch --cov-report=xml --cov-fail-under=88.75
+            --cov=astralplane --cov=scripts.import_staging_fixture \
+            --cov=scripts.migrate_qualification_database \
+            --cov-branch --cov-report=xml --cov-fail-under=88.75
       - run: uv run --frozen --group ci diff-cover coverage.xml --compare-branch origin/main --fail-under=90
 
   package-compatibility:
