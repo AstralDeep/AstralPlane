@@ -382,6 +382,88 @@ def test_recovery_deadline_terminal_only_without_issued_liability(tx, repo, liab
         assert after.safe_error_code == "assignment_deadline_exceeded"
 
 
+@pytest.mark.parametrize("authority_expired", [False, True])
+def test_unclaimed_deadline_expires_without_execution_authority(tx, repo, authority_expired):
+    record = create_operation(repo, tx)
+    expire_authority(tx, record, "deadline")
+    if authority_expired:
+        expire_authority(tx, record, "authority")
+    before = current(repo, tx, record)
+    recovered = repo.recover_expired_operations_for_administration(tx)
+    after = current(repo, tx, record)
+    assert recovered.reclaimed_assignment_ids == (record.assignment_id,)
+    assert recovered.operation_bindings == ()
+    assert recovered.uncertain_action_ids == ()
+    assert after.lifecycle == "completed"
+    assert after.operation["terminal_outcome"] == "failed"
+    assert after.safe_error_code == "assignment_deadline_exceeded"
+    assert after.next_wake_at is None
+    persisted = tx.fetch_one(
+        "SELECT data FROM persistent_assignment WHERE id=%s", (record.assignment_id,)
+    )["data"]
+    assert persisted["claim_token"] is None
+    assert persisted["claim_generation"] == 0
+    assert after.usage == before.usage
+    assert tx.fetch_one("SELECT count(*) AS n FROM persistent_assignment_action")["n"] == 0
+    assert tx.fetch_one(
+        "SELECT data->'consecutive_failures' AS failures FROM persistent_assignment WHERE id=%s",
+        (record.assignment_id,),
+    )["failures"] == 0
+    assert repo.recover_expired_operations_for_administration(tx).reclaimed_assignment_ids == ()
+    assert current(repo, tx, record) == after
+    assert claim_operations(repo, tx, worker_id="late") == ()
+
+
+@pytest.mark.parametrize("excluded", ["not_due", "claimed", "stopped", "unknown_version"])
+def test_unclaimed_expiry_does_not_mutate_ineligible_work(tx, repo, excluded):
+    record = create_operation(repo, tx)
+    if excluded == "claimed":
+        operation_claim(repo, tx)
+    elif excluded == "stopped":
+        control(repo, tx, record, "stop")
+    if excluded != "not_due":
+        expire_authority(tx, record, "deadline")
+    if excluded == "unknown_version":
+        mutate(tx, record, lambda d: d["operation"].update(version=3, deadline_at={"opaque": 1}))
+    before = tx.fetch_one(
+        "SELECT data FROM persistent_assignment WHERE id=%s", (record.assignment_id,)
+    )["data"]
+    assert repo.recover_expired_operations_for_administration(tx).reclaimed_assignment_ids == ()
+    assert tx.fetch_one(
+        "SELECT data FROM persistent_assignment WHERE id=%s", (record.assignment_id,)
+    )["data"] == before
+
+
+@pytest.mark.parametrize("liability", ["orphan", "approval", "uncertain"])
+def test_unclaimed_deadline_retains_liability_for_reconciliation(tx, repo, liability):
+    if liability in {"approval", "uncertain"}:
+        record, _, _ = (proposed if liability == "approval" else uncertain)(repo, tx)
+        # Simulate the durable unclaimed state after a normal yield. Recovery
+        # must retain approval data rather than treating expiry as permission.
+        data = plain(tx.fetch_one(
+            "SELECT data FROM persistent_assignment WHERE id=%s", (record.assignment_id,)
+        )["data"])
+        repo._clear_claim(data)
+        data["phase"] = "waiting"
+        repo._save(tx, data)
+    else:
+        record = create_operation(repo, tx)
+        mutate(tx, record, lambda d: d["usage"]["outstanding"].update(tool_calls=1))
+    expire_authority(tx, record, "deadline")
+    before = current(repo, tx, record)
+    action_rows = tx.fetch_all("SELECT data FROM persistent_assignment_action ORDER BY id")
+    result = repo.recover_expired_operations_for_administration(tx)
+    assert result.reclaimed_assignment_ids == (record.assignment_id,)
+    after = current(repo, tx, record)
+    assert after.lifecycle == "active"
+    assert after.phase == "reconciliation"
+    assert after.operation.get("terminal_outcome") is None
+    assert after.usage == before.usage
+    assert tx.fetch_all("SELECT data FROM persistent_assignment_action ORDER BY id") == action_rows
+    assert repo.recover_expired_operations_for_administration(tx).reclaimed_assignment_ids == ()
+    assert current(repo, tx, record) == after
+
+
 @pytest.mark.parametrize(
     "case",
     [

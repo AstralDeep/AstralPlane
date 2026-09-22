@@ -21,8 +21,9 @@ audit can correlate a save with the exact wording that was shown.
 Both tables are additive and stand alone. Neither has a foreign key into
 ``user_llm_config``: clearing an LLM configuration never deletes a TypeSafe
 credential or an acknowledgment, and clearing a TypeSafe credential never
-touches the other two. Rollback drops both tables and restores the 088.008
-registry marker; no other data is affected.
+touches the other two. After upgrade, retain both tables and registry metadata.
+Recovery uses guarded forward repair or a complete paired pre-upgrade backup
+restore under closed admission; never drop tables or rewrite schema markers.
 """
 
 TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS = (

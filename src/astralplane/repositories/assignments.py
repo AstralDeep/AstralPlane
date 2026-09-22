@@ -4869,25 +4869,34 @@ class AssignmentRepository:
         return self._recover_expired(transaction, limit=limit, profile="persistent")
 
     def recover_expired_operations_for_administration(self, transaction, *, limit=100):
-        """Recover one-shot work without borrowing persistent recurrence policy."""
+        """Recover stale leases and expire unclaimed one-shots without new authority."""
         return self._recover_expired(transaction, limit=limit, profile="one_shot")
 
     def _recover_expired(self, transaction, *, limit, profile):
         _integer(limit, 1, 100)
         rows = transaction.fetch_all(
             "SELECT id,owner_user_id FROM persistent_assignment "
-            "WHERE execution_profile=%s AND lease_expires_at<=clock_timestamp() "
+            "WHERE execution_profile=%s AND (lease_expires_at<=clock_timestamp() "
+            "OR (execution_profile='one_shot' AND lease_expires_at IS NULL "
+            "AND lifecycle='active' AND data->>'phase'<>'reconciliation' "
+            "AND (data->>'safe_error_code') IS DISTINCT FROM 'assignment_version_unsupported' "
+            "AND CASE WHEN data->'operation'->'version' IN ('1'::jsonb,'2'::jsonb) "
+            "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
+            "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb "
+            "THEN (data->'operation'->>'deadline_at')::timestamptz<=clock_timestamp() "
+            "ELSE FALSE END)) "
             "AND (execution_profile='persistent' OR (data->'operation'->'version' "
             "IN ('1'::jsonb,'2'::jsonb) "
             "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
             "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
-            "ORDER BY lease_expires_at,id "
+            "ORDER BY lease_expires_at NULLS FIRST,id "
             "LIMIT %s FOR UPDATE SKIP LOCKED",
             (profile, limit),
         )
         reclaimed, bindings, uncertain = [], [], []
         for row in rows:
             data = self._load(transaction, row["owner_user_id"], str(row["id"]), lock=True)
+            unclaimed_deadline = profile == "one_shot" and data["lease_expires_at"] is None
             reclaimed.append(data["assignment_id"])
             if data["operation_binding"]:
                 bindings.append(data["operation_binding"])
@@ -4947,7 +4956,10 @@ class AssignmentRepository:
                 if task["state"] == "running":
                     task["state"] = "reconciliation" if held else "pending"
                     task["task_generation"] += 1
-            data["consecutive_failures"] += 1
+            # Expiry before a claim is not an execution attempt and must not
+            # consume retries or obtain fresh authority merely to record failure.
+            if not unclaimed_deadline:
+                data["consecutive_failures"] += 1
             if data["lifecycle"] == "active":
                 exhausted = (
                     data["consecutive_failures"] > data["definition"]["limits"]["max_retries"]
@@ -4985,6 +4997,14 @@ class AssignmentRepository:
                         )
                     elif exhausted:
                         data.update(safe_error_code="assignment_retry_exhausted")
+                if unclaimed_deadline:
+                    data.update(
+                        phase="reconciliation" if held else "failed",
+                        safe_error_code="assignment_action_uncertain"
+                        if held
+                        else "assignment_deadline_exceeded",
+                        next_wake_at=None,
+                    )
                 data["next_retry_at"] = data["next_wake_at"]
                 if profile == "one_shot":
                     if not _executable(data):

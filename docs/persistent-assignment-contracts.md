@@ -501,6 +501,12 @@ reservations, conservatively charges interrupted read-only calls and holds uncer
 `recover_expired_for_administration` selects only the persistent profile;
 `recover_expired_operations_for_administration` selects only one-shot work. Both filter before
 the batch limit so expired work in one profile cannot block the other's recovery.
+One-shot recovery also expires active, unclaimed work whose original deadline has
+elapsed, including work that never obtained a worker slot. This administrative
+settlement obtains no execution authority, creates no claim or action, and consumes
+no retry attempt. A current unexpired lease is left to its holder. Unresolved
+liability or approval remains in reconciliation; unsupported versions remain held.
+Terminal and held rows are not repeatedly rewritten by subsequent recovery ticks.
 The one-shot recovery domain includes known outer versions 1 and 2, unlike new claim
 eligibility. Legacy v1 liabilities are not excluded before settlement. Recovery clears
 their old executable lease, retains uncertain/opaque effects and never schedules a
