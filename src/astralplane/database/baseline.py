@@ -1,4 +1,6 @@
-"""Guarded fresh-install baseline and structural compatibility inspection."""
+"""Guarded fresh-install baseline installer and structural compatibility inspector, used
+by database/bootstrap.py and api.py before any migration runs.
+"""
 
 from __future__ import annotations
 
@@ -143,8 +145,6 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 
 
 class BaselineCompatibilityState(StrEnum):
-    """Structural state observed before guarded startup."""
-
     EMPTY = "empty"
     COMPATIBLE = "compatible"
     INCOMPATIBLE = "incompatible"
@@ -152,8 +152,6 @@ class BaselineCompatibilityState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class BaselineCompatibilityReport:
-    """Detached, non-sensitive evidence about the current application schema."""
-
     state: BaselineCompatibilityState
     observed_revision: str | None
     table_count: int
@@ -182,16 +180,12 @@ class BaselineCompatibilityReport:
 
 @dataclass(frozen=True, slots=True)
 class BaselineInitializationReport:
-    """Proof that startup either installed or recognized the 066 baseline."""
-
     initialized: bool
     compatibility: BaselineCompatibilityReport
     source_blob: str = LEGACY_BASELINE_SOURCE_BLOB
 
 
 class _LegacyCursorAdapter:
-    """Cursor-shaped adapter over a caller-owned detached Plane transaction."""
-
     def __init__(self, transaction: Transaction) -> None:
         self._transaction = transaction
         self._records: tuple[object, ...] = ()
@@ -236,8 +230,7 @@ def _inspect_transaction(transaction: Transaction) -> BaselineCompatibilityRepor
     revision = metadata.get(_SCHEMA_META_REVISION)
     application_tables = tables - {_SCHEMA_META_TABLE}
     if not application_tables and not metadata:
-        # A prior interrupted/legacy inspector may have committed only the
-        # metadata table. Treat that repeat-safe shell as an empty database.
+        # Metadata-only table counts as empty (partial prior run)
         return BaselineCompatibilityReport(
             state=BaselineCompatibilityState.EMPTY,
             observed_revision=None,
@@ -269,8 +262,6 @@ def _inspect_transaction(transaction: Transaction) -> BaselineCompatibilityRepor
 def inspect_baseline_compatibility(
     database: PlaneDatabaseContract,
 ) -> BaselineCompatibilityReport:
-    """Inspect an empty or existing database without mutating its schema."""
-
     with database.transaction() as transaction:
         return _inspect_transaction(transaction)
 
@@ -278,8 +269,6 @@ def inspect_baseline_compatibility(
 def initialize_empty_database(
     database: PlaneDatabaseContract,
 ) -> BaselineInitializationReport:
-    """Install the 066.001 baseline only when the locked schema is truly empty."""
-
     with database.transaction() as transaction:
         transaction.fetch_one(_ADVISORY_LOCK_SQL, _SCHEMA_MIGRATION_LOCK)
         before = _inspect_transaction(transaction)
@@ -308,8 +297,6 @@ def initialize_empty_database(
 
 
 class BaselineMigrationRunner:
-    """Prepend guarded empty-database initialization to a migration runner."""
-
     def __init__(self, database: PlaneDatabaseContract, runner: object) -> None:
         if not callable(getattr(runner, "run", None)):
             raise TypeError("runner must expose run(expected_revision=...)")

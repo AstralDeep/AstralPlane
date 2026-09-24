@@ -1,8 +1,6 @@
-"""Immutable snapshot share-grant persistence.
-
-Token generation and hashing, PHI policy, rendering, public HTTP behavior, and
-audit emission remain caller-owned.  AstralPlane stores only a token digest and
-an immutable rendition, and binds public opens back to the same live digest.
+"""Immutable-snapshot share-grant persistence keyed by token digest, with revocation and
+an open counter. Token hashing, PHI policy, and public HTTP handling stay with the
+caller; digest lookups keep inactive states indistinguishable.
 """
 
 from __future__ import annotations
@@ -32,8 +30,6 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ShareGrantRevocationState(StrEnum):
-    """Idempotent result of an owner-scoped share revocation."""
-
     REVOKED = "revoked"
     ALREADY_REVOKED = "already_revoked"
     MISSING = "missing"
@@ -41,8 +37,6 @@ class ShareGrantRevocationState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ShareGrantRecord:
-    """Detached full snapshot record for mint/replay and public resolution."""
-
     share_id: int
     token_sha256: str = field(repr=False)
     owner_id: str
@@ -59,8 +53,6 @@ class ShareGrantRecord:
 
 @dataclass(frozen=True, slots=True)
 class ShareGrantMetadata:
-    """Owner-listable metadata that omits digest and immutable snapshot bytes."""
-
     share_id: int
     owner_id: str
     chat_id: str
@@ -73,8 +65,6 @@ class ShareGrantMetadata:
 
 
 class ShareGrantRepository:
-    """Persist capability digests and immutable snapshots with uniform refusal."""
-
     _FIELDS = (
         "id, token_sha256, user_id, chat_id, scope, component_id, snapshot_html, "
         "snapshot_json, created_at, expires_at, revoked_at, open_count"
@@ -97,8 +87,6 @@ class ShareGrantRepository:
         snapshot_json: object,
         expires_at: datetime | None,
     ) -> ShareGrantRecord:
-        """Insert one immutable snapshot or accept an exact digest replay."""
-
         digest = _digest(token_sha256)
         owner = _required_id(owner_id, "owner_id")
         chat = _required_id(chat_id, "chat_id")
@@ -153,8 +141,6 @@ class ShareGrantRepository:
         owner_id: str,
         limit: int = 200,
     ) -> tuple[ShareGrantMetadata, ...]:
-        """Return owner-visible metadata only, never the digest or snapshot."""
-
         owner = _required_id(owner_id, "owner_id")
         limit = _bounded_limit(limit, maximum=1000)
         rows = transaction.fetch_all(
@@ -203,8 +189,6 @@ class ShareGrantRepository:
         token_sha256: str,
         as_of: datetime,
     ) -> ShareGrantRecord | None:
-        """Resolve a public capability with indistinguishable inactive states."""
-
         digest = _digest(token_sha256)
         observed_at = _aware_datetime(as_of, "as_of")
         row = transaction.fetch_one(
@@ -225,8 +209,6 @@ class ShareGrantRepository:
         token_sha256: str,
         as_of: datetime,
     ) -> ShareGrantRecord | None:
-        """Increment only while the same digest remains unrevoked and unexpired."""
-
         identity = _positive_id(share_id, "share_id")
         digest = _digest(token_sha256)
         observed_at = _aware_datetime(as_of, "as_of")

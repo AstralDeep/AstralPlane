@@ -1,4 +1,7 @@
-"""Focused contract tests for neutral history repositories."""
+"""Tests for astralplane.repositories.history: conversation/message/session CRUD, owner
+scoping, replay-safe append and rename, and session generation/refresh CAS, using a
+fake transaction.
+"""
 
 from __future__ import annotations
 

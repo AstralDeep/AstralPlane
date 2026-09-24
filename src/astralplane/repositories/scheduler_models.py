@@ -1,8 +1,6 @@
-"""Typed records for the optional 088.007 scheduled-job policy contract.
-
-These records validate before any SQL runs. They carry no instruction text,
-no source content and no private value; every field is a bounded identifier,
-counter, flag or limit.
+"""Typed, pre-SQL-validated records for the optional scheduled-job policy contract:
+per-episode allowances, admission results, and Stop outcomes. Carry no instruction or
+source content; consumed by repositories/scheduler.py.
 """
 
 from __future__ import annotations
@@ -63,8 +61,6 @@ def _uuid4(name: str, value: object) -> str:
 
 
 def normalize_per_episode_limits(value: object) -> tuple[tuple[str, int], ...]:
-    """Return the canonical sorted limit pairs or refuse an unbounded shape."""
-
     if isinstance(value, Mapping):
         items = tuple(value.items())
     elif isinstance(value, tuple):
@@ -88,15 +84,9 @@ def normalize_per_episode_limits(value: object) -> tuple[tuple[str, int], ...]:
     return tuple(sorted(normalized.items()))
 
 
+# put_job_policy must never lower a charge or clear a stop
 @dataclass(frozen=True, slots=True)
 class ScheduledJobPolicy:
-    """One optional versioned policy row for a scheduled definition.
-
-    ``admitted_runs``, ``terminal_stop`` and ``last_assignment_id`` are
-    scheduler-owned: admission and Stop move them, ``put_job_policy`` never
-    lowers a charge or clears a stop.
-    """
-
     job_id: str
     owner_id: str
     version: int
@@ -144,13 +134,6 @@ class ScheduledJobPolicy:
 
 @dataclass(frozen=True, slots=True)
 class EpisodeAdmission:
-    """Typed result of one occurrence-to-assignment admission attempt.
-
-    ``admitted`` is false for every policy refusal; the reason names which
-    rule refused. A refusal commits nothing and charges nothing. ``created``
-    is false when an identical binding already existed (exact replay).
-    """
-
     job_id: str
     owner_id: str
     occurrence_id: str
@@ -181,15 +164,6 @@ class EpisodeAdmission:
 
 @dataclass(frozen=True, slots=True)
 class JobStopOutcome:
-    """Result of a terminal Stop on a policy job.
-
-    ``stopped`` is true only for the call that flipped ``terminal_stop``; a
-    repeat returns false with the same outstanding families so the host can
-    finish stopping them. Cancelled occurrences keep their operation ids so
-    the caller can cancel the matching work-admission records in the same
-    transaction. History and charges are retained.
-    """
-
     job_id: str
     owner_id: str
     stopped: bool

@@ -1,4 +1,7 @@
-"""Qualification-audit repository contract tests."""
+"""Tests for astralplane.repositories.quality_audit: run/case/evidence/artifact CRUD and
+replay, hash-chained atomic review transitions, and chain-verifier support for
+bounded subchains.
+"""
 
 from __future__ import annotations
 

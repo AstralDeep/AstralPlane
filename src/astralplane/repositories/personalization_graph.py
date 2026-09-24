@@ -1,4 +1,7 @@
-"""Owner-scoped memory graph, promotion signals, and consolidation history."""
+"""Owner-scoped link graph between personalization memories, plus short-term promotion
+signals and consolidation-sweep history. Used by AstralDeep's
+personalization/repository.py.
+"""
 
 from __future__ import annotations
 
@@ -55,8 +58,6 @@ class ConsolidationSweepRecord:
 
 
 class PersonalizationGraphRepository:
-    """Persist the owner-partitioned graph around Plane's existing memories."""
-
     _LINK_FIELDS = "user_id, memory_id, linked_id, created_at"
     _SIGNAL_FIELDS = (
         "id, user_id, category, value, recall_count, last_seen_at, created_at"
@@ -74,8 +75,6 @@ class PersonalizationGraphRepository:
         linked_id: str,
         created_at: int,
     ) -> tuple[MemoryLinkRecord, MemoryLinkRecord]:
-        """Create both directions only when both live endpoints share the owner."""
-
         owner = _required_id(owner_id, "owner_id")
         left = _required_id(memory_id, "memory_id")
         right = _required_id(linked_id, "linked_id")
@@ -125,8 +124,6 @@ class PersonalizationGraphRepository:
         memory_id: str,
         linked_id: str,
     ) -> bool:
-        """Idempotently remove both directions without crossing owner scope."""
-
         owner = _required_id(owner_id, "owner_id")
         left = _required_id(memory_id, "memory_id")
         right = _required_id(linked_id, "linked_id")

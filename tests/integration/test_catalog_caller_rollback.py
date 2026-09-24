@@ -1,8 +1,6 @@
-"""Catalog-wide real-PostgreSQL evidence for caller-owned rollback.
-
-Each applicable public repository performs a successful durable mutation, the
-caller deliberately aborts the enclosing Plane transaction, and a new
-transaction re-reads persistence to prove that none of the mutation escaped.
+"""Real-PostgreSQL proof that every public repository's mutation rolls back completely
+when the caller aborts its transaction; exercises the full astralplane.repositories
+catalog against one schema.
 """
 
 from __future__ import annotations
@@ -87,7 +85,7 @@ _GENERATED_PUBLICATION_ID = "74000000-0000-4000-8000-000000000020"
 
 
 class _ForcedCallerRollbackError(RuntimeError):
-    """Sentinel raised only after a repository write succeeds visibly."""
+    pass
 
 
 class _DedicatedDriverPool:
@@ -631,7 +629,6 @@ _FRAMEWORK_ISSUER: dict[str, str] = {}
 
 
 def _prepare_framework_credentials(fixture: _CatalogDatabase) -> None:
-    """Seed a committed live web session so issue() has a real issuer to lock."""
     from astralplane.repositories.history import SessionRecord, SessionRepository
 
     with fixture.database.transaction() as transaction:

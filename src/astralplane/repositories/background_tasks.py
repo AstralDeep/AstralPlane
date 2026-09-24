@@ -1,4 +1,7 @@
-"""Owner-scoped compatibility state for durable background operations."""
+"""Owner-scoped compatibility projection of WorkAdmission operations into legacy
+background-task status rows. Read by AstralDeep's orchestrator/async_tasks.py and
+orchestrator.py; advances only forward through queued/running/terminal states.
+"""
 
 from __future__ import annotations
 
@@ -95,8 +98,6 @@ class BackgroundTaskRecord:
 
 
 class BackgroundTaskRepository:
-    """Persist detached background-task projections under an owner/status CAS."""
-
     _FIELDS = (
         "task_id, user_id, chat_id, kind, status, title, summary, created_at, "
         "completed_at, notified, operation_id, operation_execution_generation"
@@ -153,14 +154,6 @@ class BackgroundTaskRepository:
         transaction: Transaction,
         record: BackgroundTaskRecord,
     ) -> BackgroundTaskRecord:
-        """Monotonically project one WorkAdmission operation into compatibility state.
-
-        Immutable task attribution is exact. A projection may advance from queued
-        to running or a terminal state, and from running to a terminal state.
-        Repeating the same terminal state may only enrich a missing summary,
-        completion time, notification flag, or execution generation.
-        """
-
         task = _validated(record)
         result = transaction.execute(
             f"""
@@ -185,7 +178,7 @@ class BackgroundTaskRepository:
             "WHERE task_id = %s FOR UPDATE",
             (task.task_id,),
         )
-        if row is None:  # pragma: no cover - conflict row cannot disappear while locked
+        if row is None:  # pragma: no cover
             raise RepositoryConflictError("background task projection identity disappeared")
         existing = _record(row)
         if existing.owner_id != task.owner_id:
@@ -405,8 +398,6 @@ class BackgroundTaskRepository:
         *,
         cutoff_at: datetime,
     ) -> datetime | None:
-        """Return the oldest retention timestamp for an eligible FK-null row."""
-
         cutoff = _aware_time(cutoff_at, "cutoff_at")
         row = query.fetch_one(
             f"""
@@ -438,8 +429,6 @@ class BackgroundTaskRepository:
         cutoff_at: datetime,
         limit: int = 1000,
     ) -> tuple[str, ...]:
-        """SKIP-LOCKED purge a bounded batch of eligible FK-null rows."""
-
         cutoff = _aware_time(cutoff_at, "cutoff_at")
         bounded = _bounded_limit(limit, maximum=5000)
         result = transaction.execute(
@@ -526,7 +515,7 @@ def _validate_projection_advance(
         }
     elif existing.status is BackgroundTaskStatus.RUNNING:
         allowed = {BackgroundTaskStatus.RUNNING, *_TERMINAL_STATUSES}
-    else:  # pragma: no cover - enum and terminal partitions are exhaustive
+    else:  # pragma: no cover
         allowed = {existing.status}
     if projected.status not in allowed:
         raise RepositoryConflictError("background task operation projection moved backwards")

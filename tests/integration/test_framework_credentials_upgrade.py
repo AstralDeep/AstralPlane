@@ -1,4 +1,7 @@
-"""Populated 088.007 upgrade adds framework credentials without disturbing any row."""
+"""Tests for astralplane.database.migrations: the framework-credentials schema upgrade
+adds no rows to existing offline-grant or session data, and a fresh post-upgrade
+owner can issue and execute a credential.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +30,6 @@ OWNER = "framework-credential-upgrade-owner"
 
 
 def prior_runner(database):
-    # Exact working-tree 088.007 verifier identities, recorded before the 008 mutation.
     registry = m.MigrationRegistry(
         tuple(e for e in m.MIGRATION_REGISTRY.migrations if e.target_revision <= "088.007"),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "088.007"),
@@ -59,10 +61,8 @@ def current_runner(database):
 
 
 def populated(tx):
-    """Real 088.007 offline-grant and session rows, unaware of any allowance column."""
     tables = load_liabilities(tx)
-    # Raw insert on the pre-088.008 column set: the 088.008 repository code now
-    # always names max_admissions/consumed_admissions, which do not exist yet.
+    # Raw SQL only: repo helpers assume columns not yet added
     tx.execute(
         "INSERT INTO user_offline_grant (id, user_id, agent_id, refresh_token_enc, "
         "issued_at, expires_at, revoked_at, created_at, updated_at) "
@@ -85,8 +85,6 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
-        # user_offline_grant gains two additive nullable columns; every other
-        # liability table (and every other field of this one) is byte-identical.
         unaffected = tuple(table for table in tables if table != "user_offline_grant")
         assert {k: after[k] for k in unaffected} == {k: before[k] for k in unaffected}
         assert len(after["user_offline_grant"]) == len(before["user_offline_grant"])
@@ -115,7 +113,6 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
 def test_after_088_008_a_fresh_owner_session_can_issue_and_execute_a_credential(
     empty_postgres_schema,
 ):
-    """Live evidence that the new table and the execution adapter compose end to end."""
     db = empty_postgres_schema.database
     BaselineMigrationRunner(db, current_runner(db)).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision

@@ -1,4 +1,7 @@
-"""Populated 088.006 upgrade keeps every scheduler row and imposes no policy."""
+"""Tests for astralplane.database.migrations: the scheduler-policy schema upgrade keeps
+every scheduled-job row and imposes no policy by default, with rollback-and-retry and
+predecessor checks.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +26,6 @@ SCHEDULER_TABLES = ("scheduled_job", "scheduled_occurrence", "job_run")
 
 
 def prior_runner(database):
-    # Exact 3bc8768 (088.006) verifier identities, recorded before the 007 mutation.
     registry = m.MigrationRegistry(
         tuple(e for e in m.MIGRATION_REGISTRY.migrations if e.target_revision <= "088.006"),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "088.006"),
@@ -54,38 +56,15 @@ def current_runner(database):
     )
 
 
-# Head-relative on purpose: this module only pins the 088.006 -> 088.007
-# scheduler-policy edge, not the data-plane's overall tip. A later feature
-# (e.g. 088.008 framework credentials) legitimately stacks its own edge on
-# top of 088.007, which moves CURRENT_DATA_PLANE_REVISION past "088.007".
-# Hard-coding "088.007" as the run() target would then fail immediately on
-# MigrationRunner's own "composition expected a different data-plane
-# revision" guard -- before any of this module's structural assertions ever
-# execute. Targeting the live head keeps this file correct however many
-# edges land after 088.007, while every assertion below still verifies the
-# 088.007 scheduler-policy tables/behaviour specifically (088.007 remains a
-# pinned predecessor digest; see test_schema_migrations.py).
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
 
 
 def _known_columns(rows_by_table):
-    """Column names actually observed per table in a pre-upgrade snapshot."""
     return {table: set().union(*(set(row) for row in rows)) if rows else set()
             for table, rows in rows_by_table.items()}
 
 
 def _restricted_to(rows_by_table, known_columns):
-    """Project a post-upgrade snapshot onto only the pre-upgrade column set.
-
-    A later, unrelated schema edge stacked past 088.007 (e.g. 088.008's
-    additive nullable ``user_offline_grant`` columns) legitimately adds new
-    columns to a shared "liabilities" table. Comparing raw ``SELECT *``
-    snapshots byte-for-byte would then fail for a reason that has nothing to
-    do with the 088.007 scheduler-policy edge under test here. Restricting
-    to the columns that existed pre-upgrade still catches any real mutation
-    or loss of an EXISTING column/row -- it only tolerates brand-new,
-    additive columns this module never asserted about.
-    """
     restricted = {}
     for table, rows in rows_by_table.items():
         columns = known_columns.get(table)
@@ -98,7 +77,6 @@ def _restricted_to(rows_by_table, known_columns):
 
 
 def populated(tx):
-    """Real 088.006 scheduler rows of every cadence kind plus the shared liabilities."""
     tables = load_liabilities(tx)
     repository = SchedulerRepository()
     base = datetime(2026, 9, 1, 12, tzinfo=UTC)
@@ -187,8 +165,6 @@ def test_populated006_upgrade_keeps_exact_rows_and_imposes_no_policy(empty_postg
             assert (
                 repository.list_outstanding_episodes(tx, owner_id=OWNER, job_id=row["id"]) == ()
             )
-        # A legacy definition gains no run limit: admission simply reports the
-        # absent policy and writes nothing, so Deep keeps the 060 dispatch path.
         active = due_before[0]
         now = datetime.now(UTC)
         occurrence = repository.claim_occurrence(

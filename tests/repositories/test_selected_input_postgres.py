@@ -1,4 +1,7 @@
-"""Selected input identity and invalidation on real PostgreSQL/session ledgers."""
+"""Real-PostgreSQL tests for astralplane.repositories.agents, assignments, and guidance:
+agent changes invalidate selected-input claims without clearing issued liabilities,
+and binding never adopts state after a racing retirement.
+"""
 
 from dataclasses import asdict, replace
 
@@ -135,7 +138,6 @@ def test_agent_changes_invalidate_claims_without_clearing_issued_liability(tx, r
 
     active, agent = selected_agent(tx)
     if command_name == "activate":
-        # Retain an earlier immutable revision, then select a later one before binding.
         newer = apply(
             tx,
             declaration(
@@ -418,8 +420,6 @@ def test_declaration_locks_work_before_agent_owner_with_real_held_boundary(
             future = pool.submit(author)
             assert ready.wait(5)
             _wait_for_lock(tx, state["pid"], blocker)
-            # The authoring transaction must not own agent0 while waiting on
-            # a pre-existing row writer that may already own that agent lock.
             assert tx.fetch_one(
                 "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS ok", ("owner",)
             )["ok"]

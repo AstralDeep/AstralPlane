@@ -1,4 +1,6 @@
-"""The staging importer never selects live storage or accepts arbitrary fixture bytes."""
+"""Tests for scripts/import_staging_fixture.py: the CLI never selects live storage or
+accepts arbitrary fixture bytes without a reviewed fingerprint.
+"""
 
 from __future__ import annotations
 

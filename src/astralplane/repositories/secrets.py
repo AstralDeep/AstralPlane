@@ -1,7 +1,6 @@
-"""Opaque encrypted LLM- and TypeSafe-credential persistence.
-
-AstralPlane stores ciphertext and routing metadata only.  Encryption,
-decryption, provider validation, and credential policy remain caller-owned.
+"""Opaque-ciphertext persistence for encrypted LLM provider config and TypeSafe
+credentials, one owner-scoped row each. Encryption, decryption, and provider
+validation stay with the caller; used by AstralDeep's llm_config/user_store.py.
 """
 
 from __future__ import annotations
@@ -29,8 +28,6 @@ _FINGERPRINT_PATTERN: Final = re.compile(r"^[0-9a-f]{12}$")
 
 @dataclass(frozen=True, slots=True)
 class EncryptedLLMConfigRecord:
-    """Detached provider metadata whose secret remains opaque ciphertext."""
-
     scope: str
     owner_id: str | None
     provider: str
@@ -101,8 +98,6 @@ def _config_values(
 
 
 class EncryptedLLMConfigRepository:
-    """Owner-scoped user configuration plus one explicit system namespace."""
-
     _USER_FIELDS = "user_id, provider, base_url, model, api_key_enc, created_at, updated_at"
     _SYSTEM_FIELDS = "provider, base_url, model, api_key_enc, updated_by, created_at, updated_at"
 
@@ -125,19 +120,6 @@ class EncryptedLLMConfigRepository:
         *,
         owner_id: str,
     ) -> EncryptedLLMConfigRecord | None:
-        """Select and hold the owner's opaque configuration until transaction end.
-
-        Args:
-            transaction: Caller-owned transaction spanning selection, exact
-                comparison and dependent writes. The caller sets SQL wait bounds.
-            owner_id: Exact owner of the selected user configuration.
-
-        Returns:
-            The existing detached record, or None without locking a missing key.
-            Concurrent updates/deletes of an existing row wait for transaction
-            completion. After any lock wait, callers must compare the returned
-            record with their original selection before committing dependent work.
-        """
         owner = _required_id(owner_id, "owner id")
         row = transaction.fetch_one(
             f"SELECT {self._USER_FIELDS} FROM user_llm_config WHERE user_id = %s FOR UPDATE",
@@ -190,8 +172,6 @@ class EncryptedLLMConfigRepository:
         api_key_ciphertext: str | None,
         deadline_at: datetime,
     ) -> EncryptedLLMConfigRecord | None:
-        """Perform one deadline-fenced write inside a caller-owned work transaction."""
-
         owner = _required_id(owner_id, "owner id")
         values = _config_values(
             provider=provider,
@@ -293,12 +273,6 @@ class EncryptedLLMConfigRepository:
 
 @dataclass(frozen=True, slots=True)
 class EncryptedTypeSafeCredentialRecord:
-    """One owner's opaque TypeSafe credential and its verification state.
-
-    ``api_key_ciphertext`` is excluded from ``repr`` so a record can be logged
-    or carried in an exception's metadata without leaking the token.
-    """
-
     owner_id: str
     api_key_ciphertext: str = field(repr=False)
     key_fingerprint: str = ""
@@ -381,19 +355,6 @@ def _typesafe_record(row: Mapping[str, Any]) -> EncryptedTypeSafeCredentialRecor
 
 
 class EncryptedTypeSafeCredentialRepository:
-    """Owner-scoped TypeSafe credential storage. There is no system scope.
-
-    A deployment-wide TypeSafe key is deliberately not representable here: the
-    089 contract requires every routing request to be paid for by the user who
-    made it, so the table has one owner primary key and no ``system_*``
-    counterpart.
-
-    The repository never sees plaintext. The caller encrypts and hands over the
-    ciphertext plus a 12-hex-character fingerprint of the plaintext. That
-    fingerprint exists only so :meth:`record_outcome` can refuse to apply an
-    outcome belonging to a key the owner has since replaced.
-    """
-
     _FIELDS = (
         "user_id, api_key_enc, key_fingerprint, last_verified_at, "
         "last_verification_outcome, last_outcome_at, created_at, updated_at"
@@ -418,7 +379,6 @@ class EncryptedTypeSafeCredentialRepository:
         *,
         owner_id: str,
     ) -> EncryptedTypeSafeCredentialRecord | None:
-        """Select and hold the owner's credential row until transaction end."""
         owner = _required_id(owner_id, "owner id")
         row = transaction.fetch_one(
             f"SELECT {self._FIELDS} FROM user_typesafe_credential "
@@ -436,13 +396,6 @@ class EncryptedTypeSafeCredentialRepository:
         key_fingerprint: str,
         verified_at: datetime,
     ) -> EncryptedTypeSafeCredentialRecord:
-        """Insert or replace the owner's credential after a successful probe.
-
-        A save only happens behind a probe that already succeeded, so the row
-        lands as ``valid`` with both timestamps set. A failed probe never
-        reaches this method, which is what stops a rejected new key from
-        destroying a working stored one.
-        """
         owner = _required_id(owner_id, "owner id")
         ciphertext = _bounded_text(
             api_key_ciphertext, "api key ciphertext", maximum=65_536
@@ -473,7 +426,6 @@ class EncryptedTypeSafeCredentialRepository:
         )
 
     def delete_user(self, transaction: Transaction, *, owner_id: str) -> bool:
-        """Remove the owner's credential. Returns False when there was none."""
         owner = _required_id(owner_id, "owner id")
         result = transaction.execute(
             "DELETE FROM user_typesafe_credential WHERE user_id = %s",
@@ -486,6 +438,7 @@ class EncryptedTypeSafeCredentialRepository:
             )
         return result.rowcount == 1
 
+    # Scoped by fingerprint; a stale result can't clobber a new key
     def record_outcome(
         self,
         transaction: Transaction,
@@ -495,13 +448,6 @@ class EncryptedTypeSafeCredentialRepository:
         at: datetime,
         expected_fingerprint: str,
     ) -> bool:
-        """Apply a verification outcome, but only to the key it was observed on.
-
-        The fingerprint is part of the WHERE clause, so an outcome still in
-        flight while the owner saves a different key updates nothing and
-        returns False. Without that condition a slow 401 from a revoked key
-        would mark its freshly saved replacement rejected.
-        """
         owner = _required_id(owner_id, "owner id")
         value = _outcome(outcome)
         if value == "unverified":

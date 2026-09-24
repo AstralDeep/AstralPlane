@@ -1,8 +1,6 @@
-"""Durable, host-neutral receipt-claim and rollback-anchor values.
-
-AstralPlane persists the final gateway's evidence, uniqueness keys, and
-monotonic sequence fence. Signature, policy, freshness, and effect-admission
-decisions remain with the composition host and the public LETS verifier.
+"""Host-neutral receipt-claim and rollback-anchor values for external authority:
+AstralPlane persists evidence, uniqueness keys, and the sequence fence, while
+signature and policy decisions stay with the composition host.
 """
 
 from __future__ import annotations
@@ -43,12 +41,6 @@ def _optional_lets_digest(value: object, *, field: str) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class ExternalAuthorityAnchorMetadata:
-    """Identity-bound LETS executor checkpoint confirmed outside rollback state.
-
-    Binary values from the public LETS checkpoint are normalized to lowercase
-    hexadecimal before persistence so Plane does not depend on LETS internals.
-    """
-
     anchor_format: str
     audience: str
     tenant_id: str
@@ -101,8 +93,6 @@ class ExternalAuthorityAnchorMetadata:
 
     @property
     def stable_identity(self) -> tuple[str, str, str, int, str, str, int, str]:
-        """Fields that must not change for one admitted external authority."""
-
         return (
             self.audience,
             self.tenant_id,
@@ -116,15 +106,11 @@ class ExternalAuthorityAnchorMetadata:
 
     @property
     def head(self) -> tuple[int, str]:
-        """Monotonic externally acknowledged claim-chain head."""
-
         return (self.claim_sequence, self.claim_digest)
 
 
 @dataclass(frozen=True, slots=True)
 class ReceiptSequenceWatermark:
-    """Latest accepted receipt sequence for one LETS lease and actuator."""
-
     warden_id: str
     lease_id: str
     audience: str
@@ -154,8 +140,6 @@ class ReceiptSequenceWatermark:
         return (self.warden_id, self.lease_id, self.audience)
 
     def require_advance(self, *, key: tuple[str, str, str], sequence: int) -> None:
-        """Reject a cross-domain, equal, or regressing receipt sequence."""
-
         if key != self.key:
             raise DomainValidationError("receipt does not match the sequence watermark")
         candidate = _integer(sequence, field="receipt resulting sequence", minimum=1)
@@ -165,8 +149,6 @@ class ReceiptSequenceWatermark:
 
 @dataclass(frozen=True, slots=True)
 class ReceiptClaim:
-    """One claimed LETS receipt bound to an owner, operation, and anchor head."""
-
     receipt_id: str
     operation_id: str
     owner_id: str
@@ -253,14 +235,10 @@ class ReceiptClaim:
 
     @property
     def receipt_uniqueness_key(self) -> str:
-        """Globally unique receipt identifier within the trusted warden set."""
-
         return self.receipt_id
 
     @property
     def nonce_uniqueness_key(self) -> tuple[str, str, str, str]:
-        """Replay key required by the Astral/LETS integration contract."""
-
         return (self.tenant_id, self.envelope_id, self.audience, self.nonce)
 
     @property

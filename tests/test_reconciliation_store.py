@@ -1,4 +1,7 @@
-"""Concrete PostgreSQL reconciliation coordinator and marker-store tests."""
+"""Tests for src/astralplane/reconciliation_store.py: the PostgreSQL marker-store
+coordinator's session-locked lifecycle, driver-row validation, and unlock/commit
+failure handling.
+"""
 
 from __future__ import annotations
 
@@ -287,7 +290,7 @@ def test_marker_lifecycle_commits_each_transition_under_exact_session_lock() -> 
 
     assert connection.database.lock_acquisitions == 1
     assert connection.database.lock_releases == 1
-    assert connection.commits == 4  # acquire, start, complete, release
+    assert connection.commits == 4
     assert driver.returned == [(connection, False)]
     with pytest.raises(ReconciliationError, match="no longer active"):
         session.get_marker(HOOK)

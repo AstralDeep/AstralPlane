@@ -1,7 +1,6 @@
-"""Closed metadata for an owner-approved, internal canvas publication.
-
-These records are not worker permits or authentication. The host proves the
-public result projection and guards the current human request independently.
+"""Closed metadata types for an owner-approved internal canvas publication: proposal,
+content, receipt, and preparation. Carry no worker permit or authentication; used by
+repositories/result_publications.py and orchestrator/work_publication.py.
 """
 
 from __future__ import annotations

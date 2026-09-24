@@ -1,4 +1,7 @@
-"""Receipt-first wake preparation uses real locked rows, never execution authority."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments and audit: wake
+preparation is read-only until an exact receipt is accepted, never substitutes for
+original session authority, and rechecks prerequisites after every real lock wait.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
@@ -153,7 +156,6 @@ def test_exact_accepted_replay_precedes_new_continuation_prerequisites(tx, repo,
     else:
         expire_authority(tx, record, loss)
     before = stored_rows(tx, record.assignment_id)
-    # Counter values are not part of the legacy event signature; their shape is.
     changed_counters = dict(
         args, expected_instruction_revision=77, expected_control_epoch=88, expected_state_version=99
     )
@@ -276,7 +278,6 @@ def test_unknown_or_corrupt_rows_are_not_reinterpreted_even_for_replay(tx, repo,
     mutate(tx, record, change)
     before = stored_rows(tx, record.assignment_id)
     if version == "v1" and accepted:
-        # Known legacy receipts remain readable; v1 cannot accept a new wake.
         assert repo.prepare_wake(tx, **args).replayed is True
     else:
         with pytest.raises(
@@ -322,8 +323,6 @@ def test_read_preparation_does_not_substitute_for_original_session_authority(tx,
     assert stored_rows(tx, record.assignment_id) == before
     with pytest.raises(RepositoryConflictError):
         sessions.assert_current_execution(tx, observation=observation)
-    # Legacy raw storage still needs the host's authority check. A wake receipt
-    # alone cannot bypass the separately guarded claim or issue any effect.
     repo.accept_wake(tx, **args)
     after = current(repo, tx, record)
     with pytest.raises(RepositoryConflictError, match="assignment_authorization_unavailable"):
@@ -604,7 +603,6 @@ def test_continuation_clear_locks_actions_in_sorted_order(database, repo):
             future = pool.submit(check)
             assert ready.wait(3)
             _wait_for_lock(tx, state["pid"], pid)
-            # A descending inventory would already own higher and deadlock here.
             assert (
                 repo.get_action(
                     tx,
@@ -654,7 +652,6 @@ def test_continuation_clear_checks_db_deadline_after_action_lock_wait(database, 
             future = pool.submit(check)
             assert ready.wait(3)
             _wait_for_lock(tx, state["pid"], pid)
-            # Advance only real DB time past the recorded deadline; no clock mock.
             tx.fetch_one(
                 "SELECT pg_sleep(GREATEST(0,extract(epoch FROM "
                 "(%s::timestamptz-clock_timestamp())))+0.02)",

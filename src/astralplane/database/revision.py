@@ -1,4 +1,7 @@
-"""Declared AstralPlane schema lineage and compatibility metadata."""
+"""Declared AstralPlane schema lineage: DataPlaneRevision names one immutable target
+revision and its readable predecessor range, consulted by compatibility.py and
+database/migrations.py.
+"""
 
 from __future__ import annotations
 
@@ -25,8 +28,6 @@ def validate_revision(value: str, *, field: str = "revision") -> str:
 
 @dataclass(frozen=True, slots=True)
 class DataPlaneRevision:
-    """One immutable schema target and its readable predecessor range."""
-
     schema_revision: str
     read_compatible_from: tuple[str, ...]
     migration_digest: str
@@ -88,8 +89,6 @@ class DataPlaneRevision:
         return observed == self.schema_revision or observed in self.read_compatible_from
 
     def predecessor_digest_for(self, revision: str | None) -> str | None:
-        """Return the sole trusted registry digest for a declared predecessor."""
-
         if revision is None:
             return None
         observed = validate_revision(revision, field="predecessor revision")

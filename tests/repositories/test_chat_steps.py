@@ -1,4 +1,7 @@
-"""Persistent conversation-step repository tests."""
+"""Tests for astralplane.repositories.chat_steps: step creation proves chat/turn
+ownership, exact replay after a terminal transition, owner-scoped reads, and
+status/timestamp-fenced finish transitions.
+"""
 
 from __future__ import annotations
 

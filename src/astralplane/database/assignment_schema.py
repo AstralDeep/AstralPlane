@@ -1,4 +1,6 @@
-"""Additive 079.001 assignment tables; executed only by the migration registry."""
+"""Additive assignment tables, executed only by database/migrations.py's guarded
+registry.
+"""
 
 ASSIGNMENT_SCHEMA_STATEMENTS = (
     """CREATE TABLE persistent_assignment (

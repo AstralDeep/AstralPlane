@@ -1,9 +1,6 @@
-"""Durable audit-sink delivery through the transactional outbox.
-
-Sink calls are intentionally outside database transactions.  A successful call
-is reported as delivered only after its fenced outbox acknowledgement commits.
-Consequently an acknowledgement failure can cause a safe duplicate delivery,
-but can never cause an audit event to be dropped or reported delivered early.
+"""Durable audit-sink delivery through the transactional outbox: a sink call happens
+outside the database transaction, so a delivery is only reported once its fenced
+outbox acknowledgement commits.
 """
 
 from __future__ import annotations
@@ -57,8 +54,6 @@ _SENSITIVE_SUFFIXES = (
 
 @runtime_checkable
 class AuditSink(Protocol):
-    """Product-configured sink; credentials remain in the sink implementation."""
-
     def publish(
         self,
         *,
@@ -69,8 +64,6 @@ class AuditSink(Protocol):
 
 
 class AuditDeliveryState(StrEnum):
-    """A committed durable outcome from one worker attempt."""
-
     NO_WORK = "no_work"
     DELIVERED = "delivered"
     RETRY_SCHEDULED = "retry_scheduled"
@@ -79,8 +72,6 @@ class AuditDeliveryState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AuditDeliveryResult:
-    """Non-sensitive delivery result returned only after transaction exit."""
-
     state: AuditDeliveryState
     entry_id: str | None
     attempt: int | None
@@ -115,8 +106,6 @@ def _safe_json_value(value: object, *, path: str = "$") -> object:
 
 
 def canonical_audit_payload(event: Mapping[str, object]) -> bytes:
-    """Produce stable UTF-8 JSON after rejecting credential-bearing fields."""
-
     if not isinstance(event, Mapping):
         raise SQLContractError("audit event must be a mapping")
     sanitized = _safe_json_value(event)
@@ -150,8 +139,6 @@ def _require_applied(
 
 
 class AuditOutboxDelivery:
-    """Queue and deliver audit events without a lossy local retry file."""
-
     def __init__(
         self,
         *,
@@ -185,8 +172,6 @@ class AuditOutboxDelivery:
         event: Mapping[str, object],
         available_at: datetime,
     ) -> CommandResultContract:
-        """Enqueue in the same caller-owned transaction as the audit append."""
-
         if not isinstance(event_id, str) or not event_id or len(event_id) > 220:
             raise SQLContractError("event_id must be a non-empty bounded string")
         if any(ord(character) < 33 for character in event_id):
@@ -220,16 +205,12 @@ class AuditOutboxDelivery:
                 lease_duration=lease_duration,
                 limit=limit,
             )
-            # Validation must happen before the claim transaction commits.  A
-            # corrupt durable payload therefore cannot become a committed lease
-            # that cycles forever through expiry and reclaim.
+            # Validate before commit or a bad payload loops forever
             for item in claimed:
                 self._validate_claim(item)
         return claimed
 
     def deliver(self, claim: ClaimedOutboxEntry, *, now: datetime) -> AuditDeliveryResult:
-        """Attempt one sink call and durably settle its lease before reporting."""
-
         self._validate_claim(claim)
         exact_now = _aware_utc(now)
         if exact_now >= claim.lease_expires_at:

@@ -1,4 +1,7 @@
-"""Complete explicit restore retirement on private PostgreSQL, without host startup."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments, audit, and history:
+explicit session restore retires every owner completely, never migrates damaged
+metadata, and survives an interrupted retry.
+"""
 
 from __future__ import annotations
 
@@ -24,15 +27,12 @@ from astralplane.repositories.history import SessionRepository
 
 
 class RecoveryTarget(dict):
-    """Keep the private test DSN out of failed-assertion representations."""
-
     def __repr__(self):
         return "RecoveryTarget(<private test connection>)"
 
 
 @pytest.fixture
 def target(database):
-    """Select only this module's unique schema within the disposable test database."""
     from psycopg2.extensions import make_dsn
 
     with database.transaction() as tx:
@@ -77,8 +77,6 @@ def test_public_entry_retires_all_owners_without_decoding_or_initializing(
         issued(tx, owner_id="missing-identity-owner", resumed=True)
         issued(tx, owner_id="retired-owner")
         issued(tx, owner_id="expired-owner", hard_expires_at=1)
-        # Restored legacy rows can contain owner/credential values ordinary
-        # issuance now rejects. Complete retirement must never parse/filter them.
         tx.execute(
             "UPDATE web_session SET user_id='',access_token_enc='' WHERE sid=%s",
             (active.session_id,),
@@ -207,8 +205,6 @@ def test_same_snapshot_restored_again_is_retired_again_without_marker_skip(datab
         original = issued(tx)
         row = dict(tx.fetch_one("SELECT * FROM web_session WHERE sid=%s", (original.session_id,)))
     assert retire_restored_sessions(**target).retired_sessions == 1
-    # Explicit synthetic backup restoration copies the DB-issued incarnation.
-    # This fixture operation is intentionally not normal session issuance.
     with database.transaction() as tx:
         columns = tuple(row)
         tx.execute(
@@ -261,7 +257,6 @@ def test_restore_retirement_preserves_liabilities_and_authentic_settlement(
         assert tx.fetch_all("SELECT * FROM audit_events") == audit
         with pytest.raises(RepositoryConflictError):
             guard(tx, repository, values)
-        # Same SID/timestamps/ciphertexts still produces a distinct issuance.
         replacement = SessionRepository().put(tx, replace(values[1], incarnation_id=None))
         assert replacement.incarnation_id != values[1].incarnation_id
         with pytest.raises(RepositoryConflictError):
@@ -359,8 +354,6 @@ def test_restored_shadow_functions_and_metadata_view_are_never_executed(
             retire_restored_sessions(**target)
         assert sessions(database) == before
         with database.transaction() as tx:
-            # Sequence effects survive rollback, so this witnesses non-execution
-            # even if the recovery transaction subsequently refused or rolled back.
             assert tx.fetch_one("SELECT is_called FROM recovery_side_effect")["is_called"] is False
     finally:
         with database.transaction() as tx:

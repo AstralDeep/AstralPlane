@@ -1,4 +1,6 @@
-"""Owner-isolated durable state for externally executed tracked jobs."""
+"""Owner-isolated durable state for jobs executed on external remote machines, with
+owner and poll-generation fences. Used by orchestrator/remote_jobs.py.
+"""
 
 from __future__ import annotations
 
@@ -44,8 +46,6 @@ class TrackedJobRecord:
 
 
 class TrackedJobRepository:
-    """Persist external job observations with owner and poll-generation fences."""
-
     _FIELDS = (
         "tracked_job_id, owner_user_id, machine_id, chat_id, scheduler_job_id, "
         "submit_marker, output_path, component_id, job_name, state, exit_code, "
@@ -254,8 +254,6 @@ class TrackedJobRepository:
         return result.rowcount == 1
 
     def delete_owner(self, transaction: Transaction, *, owner_id: str) -> int:
-        """Delete all external-job state for an authorized account retirement."""
-
         owner = _required_id(owner_id, "owner_id")
         result = transaction.execute(
             "DELETE FROM tracked_job WHERE owner_user_id = %s",

@@ -1,4 +1,7 @@
-"""Owner-issued framework-credential repository tests (scripted, no real database)."""
+"""Scripted tests for astralplane.repositories.framework_credentials: issuance
+validation against the closed scope vocabulary, owner-scoped revoke/list, CAS
+admission consumption, and unpersisted execution assertion.
+"""
 
 from __future__ import annotations
 
@@ -64,9 +67,6 @@ def _observation(**overrides: object) -> FrameworkCredentialObservation:
     valid_until = overrides.pop("valid_until", started + timedelta(seconds=10))
     fence = overrides.pop("credential", _fence())
     return FrameworkCredentialObservation(fence, started, valid_until)
-
-
-# --- issue(): validation happens before any lock/statement is ever attempted ---
 
 
 def test_issue_rejects_scopes_outside_the_closed_vocabulary() -> None:
@@ -206,9 +206,6 @@ def test_framework_credential_scopes_is_a_small_closed_set() -> None:
     } == FRAMEWORK_CREDENTIAL_SCOPES
 
 
-# --- revoke() / list_for_owner(): owner-scoped, idempotent, no savepoint needed ---
-
-
 def test_revoke_is_owner_scoped_and_idempotent() -> None:
     transaction = ScriptedTransaction(
         one=[{"acquired": True}, None, _row(revoked_epoch=2_000)]
@@ -240,9 +237,6 @@ def test_list_for_owner_returns_detached_records_without_the_token_hash() -> Non
     assert all("a" * 64 not in repr(record) for record in records)
 
 
-# --- consume_admission(): compare-and-set, never double-charges ---
-
-
 def test_consume_admission_returns_the_charged_row() -> None:
     transaction = ScriptedTransaction(one=[_row(consumed_admissions=1)])
     record = FrameworkCredentialRepository().consume_admission(
@@ -259,9 +253,6 @@ def test_consume_admission_refuses_when_the_cas_predicate_misses() -> None:
         FrameworkCredentialRepository().consume_admission(
             transaction, owner_id="owner-1", credential_id=CREDENTIAL_ID  # type: ignore[arg-type]
         )
-
-
-# --- assert_current_execution(): never persisted, locks and re-validates fresh ---
 
 
 def test_assert_current_execution_succeeds_for_a_matching_fresh_observation() -> None:
@@ -324,7 +315,6 @@ def test_assert_current_execution_refuses_an_observation_outside_its_own_freshne
     transaction = ScriptedTransaction(
         one=[_row(), {"now": datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)}]
     )
-    # The database-clock sample lands after the caller's own declared validity window.
     observation = _observation(
         started_at=datetime(2026, 1, 1, tzinfo=UTC),
         valid_until=datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC),

@@ -1,23 +1,6 @@
-"""Owner-issued framework credentials: hash-only bearer tokens for external callers.
-
-A framework credential lets an owner mint a durable, independently-lifetimed
-bearer credential (for an SDK, MCP, or A2A client) while their interactive
-session — or a native client's own already-registered credential — is live.
-It is deliberately unlike a delegation chain: it carries no parent binding,
-its own expiry and scope set are fixed at mint time from the owner's OWN
-authority, and it is never attenuated from another issued credential.
-
-Plane never receives or persists the plaintext token. The caller (Deep) hashes
-the generated secret with SHA-256 before calling :meth:`issue`; only the hex
-digest and a short non-secret display prefix are ever stored.
-
-Issuance closes the donor's pre-lock-authority defect: the previous reference
-implementation read "is the issuer still valid" and computed the expiry BEFORE
-acquiring any lock, so a revoke or owner-retirement racing the mint could lose
-the race and still see a credential appear. Every write below takes the same
-owner advisory-lock domain assignment creation uses, re-reads the issuer and
-owner state INSIDE that lock, and computes ``expires_at`` from the database
-clock only after both checks pass.
+"""Owner-issued, hash-only bearer credentials for external SDK/MCP/A2A callers, minted
+with their own expiry and scope set, independent of the issuing session. Plane never
+stores the plaintext token.
 """
 
 from __future__ import annotations
@@ -45,10 +28,7 @@ from astralplane.repositories.history import (
     _framework_credential_unavailable,
 )
 
-# Closed scope vocabulary a framework credential may ever carry. Deep maps its
-# own tool/verb catalog onto this small, stable set; it is deliberately not
-# every internal permission name, so widening the product's tool catalog
-# never silently widens what an already-issued credential can reach.
+# Kept narrow on purpose; catalog growth can't widen this
 FRAMEWORK_CREDENTIAL_SCOPES: Final = frozenset(
     {
         "operations.submit",
@@ -64,8 +44,6 @@ _ISSUER_KINDS: Final = frozenset({"session_incarnation", "native_credential"})
 
 @dataclass(frozen=True, slots=True)
 class FrameworkCredentialRecord:
-    """Detached durable framework-credential metadata. Never carries the token."""
-
     credential_id: str
     owner_id: str
     name: str
@@ -86,8 +64,6 @@ class FrameworkCredentialRecord:
 
 
 class FrameworkCredentialRepository:
-    """Persist hash-only framework credentials under owner and issuer predicates."""
-
     _FIELDS = (
         "id, owner_id, name, scopes, token_hash, token_prefix, issuer_kind, "
         "issuer_reference, max_admissions, consumed_admissions, "
@@ -112,13 +88,6 @@ class FrameworkCredentialRepository:
         max_admissions: int,
         ttl_seconds: int,
     ) -> FrameworkCredentialRecord:
-        """Mint one hash-only credential inside the owner's exact issuance lock.
-
-        Re-reads the owner's retirement state and the named issuer (session
-        incarnation or native credential) INSIDE the same locked transaction
-        that computes ``expires_at``, so a concurrent revoke, session
-        rotation, or owner retirement can never race a mint to completion.
-        """
         owner = _required_id(owner_id, "owner_id")
         credential = _required_id(credential_id, "credential_id")
         display_name = _bounded_text(name, "name", maximum=256)
@@ -161,7 +130,7 @@ class FrameworkCredentialRepository:
                     ttl,
                 ),
             )
-        if row is None:  # pragma: no cover - PostgreSQL RETURNING invariant
+        if row is None:  # pragma: no cover
             raise RepositoryValidationError("framework credential mint returned no row")
         return _record(row)
 
@@ -172,7 +141,6 @@ class FrameworkCredentialRepository:
         owner_id: str,
         credential_id: str,
     ) -> FrameworkCredentialRecord:
-        """Revoke one owned credential inside the same owner-issuance lock as mint."""
         owner = _required_id(owner_id, "owner_id")
         credential = _required_id(credential_id, "credential_id")
         self._lock_issuer_owner(transaction, owner)
@@ -216,7 +184,6 @@ class FrameworkCredentialRepository:
         owner_id: str,
         credential_id: str,
     ) -> FrameworkCredentialRecord:
-        """Atomically charge one admission, refusing an exhausted/expired/revoked row."""
         owner = _required_id(owner_id, "owner_id")
         credential = _required_id(credential_id, "credential_id")
         row = transaction.fetch_one(
@@ -243,12 +210,6 @@ class FrameworkCredentialRepository:
         *,
         observation: FrameworkCredentialObservation,
     ) -> FrameworkCredentialExecutionState:
-        """Lock the exact credential row and validate a fresh host observation.
-
-        Never persisted. Refuses a revoked, expired, or owner-mismatched
-        credential, and refuses when the locked row's token hash no longer
-        matches the caller's observation (the credential was replaced).
-        """
         observation = _framework_credential_observation(observation)
         credential = observation.credential
         row = transaction.fetch_one(
@@ -295,12 +256,6 @@ class FrameworkCredentialRepository:
 
     @staticmethod
     def _reissue_live_session(transaction: Transaction, owner_id: str, incarnation_id: str) -> bool:
-        """Re-read the issuing session INSIDE the lock, current and unexpired.
-
-        Both declared issuer kinds resolve through Plane's one session/
-        incarnation mechanism today; ``issuer_kind`` only records, for audit,
-        which kind of caller Deep observed when it captured this reference.
-        """
         row = transaction.fetch_one(
             "SELECT hard_expires_at FROM web_session WHERE user_id=%s AND incarnation_id=%s",
             (owner_id, incarnation_id),
@@ -339,7 +294,7 @@ def _admission_limit(value: object) -> int:
 def _ttl_seconds(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise RepositoryValidationError("ttl_seconds must be an integer")
-    if not 1 <= value <= 7_776_000:  # 90 days
+    if not 1 <= value <= 7_776_000:
         raise RepositoryValidationError("ttl_seconds must be between 1 second and 90 days")
     return value
 

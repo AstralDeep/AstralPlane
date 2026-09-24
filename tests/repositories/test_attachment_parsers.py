@@ -1,4 +1,7 @@
-"""Attachment parser global-coverage and owner-claim repository tests."""
+"""Tests for astralplane.repositories.attachment_parsers: pending-claim atomicity and
+dedup, global coverage redaction, owner-scoped reads and lists, and CAS-fenced status
+transitions.
+"""
 
 from __future__ import annotations
 

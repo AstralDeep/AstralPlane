@@ -1,3 +1,7 @@
+"""Tests for src/astralplane/blob_store.py: cross-process owner locking, atomic
+publish/replace/purge, digest-verified bounded readers, and parser lease lifecycle.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -82,8 +86,6 @@ def _publish_chunks_for_test(
     expected_size_bytes: int | None = None,
     expected_sha256: str | None = None,
 ):
-    """Exercise the authorized staged path without adding a production fixture bypass."""
-
     authority = _test_publish_authority(
         owner_id=owner_id,
         key=key,
@@ -191,16 +193,12 @@ def _seed_blob_fixture(
     key: str,
     payload: bytes,
 ) -> None:
-    """Create predecessor/external fixture bytes without a production mutation seam."""
-
     target = blob_root.joinpath(owner_id, *key.split("/"))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(payload)
 
 
 async def wait_for_thread_event(event: threading.Event, *, timeout: float = 2.0) -> None:
-    """Wait without occupying another default-executor worker."""
-
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while not event.is_set():
@@ -362,7 +360,7 @@ def test_cross_process_owner_reservation_releases_after_forced_exit(
         try:
             reservations.append(second.reserve_materialization_staging(owner_id="owner-1"))
             acquired.set()
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             errors.append(exc)
 
     waiter = threading.Thread(target=reserve_after_child)
@@ -421,7 +419,7 @@ def test_owner_reservation_blocks_destructive_operations_across_store_instances(
             else:
                 _purge_owner_for_test(second, owner_id="owner-1")
             completed.set()
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             errors.append(exc)
 
     worker = threading.Thread(target=delete)
@@ -452,7 +450,7 @@ def test_contended_owner_never_holds_global_lifecycle_admission(
         try:
             second.is_owner_absent(owner_id="owner-a")
             owner_a_finished.set()
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             failures.append(exc)
 
     def reserve_owner_b() -> None:
@@ -460,7 +458,7 @@ def test_contended_owner_never_holds_global_lifecycle_admission(
             reservation = second.reserve_materialization_staging(owner_id="owner-b")
             reservation.release()
             owner_b_finished.set()
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             failures.append(exc)
 
     blocked = threading.Thread(target=wait_for_owner_a)
@@ -903,7 +901,7 @@ def test_abort_holds_owner_exclusion_through_empty_directory_pruning(
                 chunks=broken_chunks(),
                 max_bytes=100,
             )
-        except BaseException as exc:  # captured for deterministic thread assertion
+        except BaseException as exc:
             first_errors.append(exc)
 
     def replace_after_abort() -> None:
@@ -916,7 +914,7 @@ def test_abort_holds_owner_exclusion_through_empty_directory_pruning(
                 chunks=(b"final",),
                 max_bytes=5,
             )
-        except BaseException as exc:  # captured for deterministic thread assertion
+        except BaseException as exc:
             replacement_errors.append(exc)
         finally:
             replacement_finished.set()
@@ -1498,9 +1496,6 @@ async def test_async_source_failure_removes_unpublished_bytes(
             chunks=broken(),
             max_bytes=100,
         )
-    # Cross-process owner exclusion uses a persistent, root-anchored lock registry.  A failed
-    # write may create that internal registry, but it must not leave owner data, staging state,
-    # or a live in-process lock reference behind.
     residual = [
         path.relative_to(blob_root).as_posix()
         for path in blob_root.rglob("*")
@@ -2033,9 +2028,6 @@ def test_cancel_safe_already_finished_worker_error_outranks_cancellation() -> No
         await wait_for_thread_event(started)
         task.cancel()
         release.set()
-        # Keep the event-loop thread here until the worker has definitely completed.  When the
-        # cancelled wrapper resumes, its worker may already be done and must still surface the
-        # worker exception instead of blindly re-raising CancelledError.
         assert finished.wait(timeout=2)
         with pytest.raises(RuntimeError, match="already-finished worker failure"):
             await task

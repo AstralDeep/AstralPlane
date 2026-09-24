@@ -1,4 +1,7 @@
-"""Migration-plus-reconciliation boot lifecycle tests."""
+"""Tests for src/astralplane/database/bootstrap.py: the migration-then-reconciliation
+boot lifecycle, concurrent-initializer coalescing, and failure/retry state
+transitions.
+"""
 
 from __future__ import annotations
 

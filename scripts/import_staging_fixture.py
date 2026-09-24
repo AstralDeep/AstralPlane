@@ -1,8 +1,6 @@
-"""Import the exact synthetic predecessor into an empty isolated qualification database.
-
-This source-owned qualification command is intentionally not a production backup
-importer. It accepts no SQL, fixture path, production DSN, or schema override.
-The candidate application subsequently applies Plane's ordinary guarded registry.
+"""Operator command that imports the synthetic predecessor fixture into an empty,
+isolated qualification database via astralplane's guarded loader; accepts no SQL,
+production DSN, or schema override.
 """
 
 from __future__ import annotations
@@ -25,11 +23,10 @@ CONTRACT = "astralplane.synthetic-staging-import/v1"
 
 
 class QualificationImportError(ValueError):
-    """The isolated import contract was not satisfied."""
+    pass
 
 
 def _loader() -> Any:
-    # One canonical fixture implementation; no user-selected module is executed.
     sys.path.insert(0, str(ROOT / "src"))
     path = ROOT / "tests/fixtures/pre_split/loader.py"
     spec = importlib.util.spec_from_file_location("_plane_staging_fixture", path)
@@ -48,13 +45,6 @@ def import_fixture(
     expected_fixture_sha256: str,
     blob_root: Path,
 ) -> dict[str, object]:
-    """Create one exact predecessor schema and paired synthetic blob snapshot.
-
-    The explicit DSN must name ``astralplane_qualification_<qualification_id>``.
-    The connected database identity and empty catalog are checked again before
-    writes. A session advisory lock covers all checks and the loader transaction.
-    Existing schemas/data are never replaced, repaired, or automatically cleaned.
-    """
     if not IDENTIFIER.fullmatch(qualification_id):
         raise QualificationImportError("qualification id must be 32 lowercase hex characters")
     if not DIGEST.fullmatch(expected_fixture_sha256):
@@ -114,9 +104,6 @@ def import_fixture(
             )
             if cursor.fetchone() != (0,):
                 raise QualificationImportError("qualification database contains public functions")
-        # The loader rolls back the read transaction, creates the exact bounded
-        # schema and promotes verified blobs before committing. The session lock
-        # survives that rollback and is released by closing this connection.
         report = loader.load_fixture(connection, schema=schema, blob_root=blob_root)
     except QualificationImportError:
         raise

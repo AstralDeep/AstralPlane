@@ -1,3 +1,7 @@
+"""Tests for src/astralplane/audit_retention.py: hash-chain verification from an
+anchored boundary, tamper/mismatch refusal, and anchor-then-delete pruning.
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,4 +1,7 @@
-"""Exact Save contention, lost acknowledgement and final-clock boundaries."""
+"""Real-PostgreSQL tests for astralplane.repositories.history and workspaces: Save
+contention refuses both legacy writer lock orders, fresh content stays invisible
+until outer commit, and a lost-ack retry still commits exactly once.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -85,7 +88,7 @@ def test_absent_publication_unique_fk_cycle_is_bounded_and_restores_timeout(data
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with database.transaction() as tx:
-            repo.prepare_result_publication(tx, **args)  # Holds exact chat, absent publication.
+            repo.prepare_result_publication(tx, **args)
             before = state(tx, record, proposal)
             blocker = tx.fetch_one("SELECT pg_backend_pid() AS p")["p"]
             future = pool.submit(legacy_insert)
@@ -158,8 +161,6 @@ def test_fresh_payload_and_pointer_are_invisible_until_outer_commit(database, re
         finally:
             release.set()
         receipt = future.result(5)
-    # This retry stands in for a lost transport acknowledgement; the original
-    # request's mutation committed once and the client learned no receipt yet.
     with database.transaction() as tx:
         after = state(tx, record, proposal)
         replay = repo.prepare_result_publication(

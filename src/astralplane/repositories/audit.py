@@ -1,4 +1,7 @@
-"""Append-only, owner-attributed, hash-chained audit persistence primitives."""
+"""Append-only, hash-chained audit-event persistence with a per-owner descending page
+cursor and chain verification. Used by AstralDeep's audit/repository.py and
+audit_retention.py for tamper-evident event history.
+"""
 
 from __future__ import annotations
 
@@ -93,8 +96,6 @@ class AuditRecord:
 
 @dataclass(frozen=True, slots=True)
 class AuditCursor:
-    """Keyset position for a descending owner audit page."""
-
     recorded_at: datetime
     event_id: str
 
@@ -126,8 +127,6 @@ class ChainVerification:
 
 
 class AuditRepository:
-    """Repository with no update/delete surface for ordinary application code."""
-
     def append(
         self,
         transaction: Transaction,
@@ -274,8 +273,6 @@ class AuditRepository:
         cursor: AuditCursor | None = None,
         limit: int = 50,
     ) -> AuditPage:
-        """Return a bounded, stable, descending page for exactly one owner."""
-
         _required("owner_id", owner_id, 512)
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
@@ -369,8 +366,6 @@ class AuditRepository:
         to_ts: datetime,
         limit: int = 2000,
     ) -> tuple[ToolTrajectoryEvent, ...]:
-        """Read the fixed audit subset used by product-owned trajectory scoring."""
-
         _aware("from_ts", from_ts)
         _aware("to_ts", to_ts)
         if from_ts > to_ts:
@@ -514,14 +509,6 @@ def canonical_event_bytes(event: AuditEvent, sequence: int) -> bytes:
 
 
 def _canonical_event_v1(event: AuditEvent) -> bytes:
-    """Reproduce AstralDeep's immutable schema-v1 chain bytes exactly.
-
-    Version 1 predates explicit chain positions.  In particular it uses
-    ``json.dumps``' default ASCII escaping and ``+00:00`` UTC offsets.  These
-    details are part of already-persisted HMAC inputs and must not be
-    normalized to the schema-v2 representation.
-    """
-
     canonical = {
         "schema_version": 1,
         "event_id": event.event_id,
@@ -575,8 +562,6 @@ def canonical_json(value: str | Mapping[str, Any] | Sequence[Any], *, expected_t
 
 
 def _normalize_json_value(value: object) -> object:
-    """Detach immutable driver containers into strict JSON-compatible values."""
-
     if isinstance(value, Mapping):
         normalized: dict[str, object] = {}
         for key, item in value.items():

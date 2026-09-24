@@ -1,4 +1,6 @@
-"""The single additive 088.004 declarative-agent metadata migration."""
+"""The single additive declarative-agent metadata migration, executed only by
+database/migrations.py.
+"""
 
 from typing import Final
 

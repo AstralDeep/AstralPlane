@@ -1,4 +1,7 @@
-"""Owner/status CAS tests for background-task compatibility state."""
+"""Tests for astralplane.repositories.background_tasks: owner-scoped create/replay
+idempotency, monotonic operation-projection transitions, CAS-fenced status changes,
+and administrative retention/purge queries.
+"""
 
 from __future__ import annotations
 

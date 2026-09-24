@@ -1,8 +1,6 @@
-"""Owner-isolated assignment controller storage with durable execution fencing.
-
-All I/O uses the caller-owned transaction. No callable, token minting or source
-access occurs here. Indexed identities retain completed effects independently of
-bounded working memory. Authorization remains the embedding application's job.
+"""Owner-isolated persistence for assignment/operation lifecycle, controls, actions, and
+event waits, fenced by caller-owned transactions and revision CAS. Backs AstralDeep's
+orchestrator work_* and persistent_agents modules.
 """
 
 from __future__ import annotations
@@ -84,12 +82,6 @@ _USAGE_BASIS_VALUES = frozenset({"observed", "estimated", "uncertain", "none"})
 
 
 def _validate_usage_basis(basis):
-    """Validate an additive, optional per-dimension charge-provenance map.
-
-    Unknown price vs. a genuine zero stays distinguishable via ``None`` in the
-    amount itself (unchanged); ``basis`` only annotates HOW a populated
-    dimension's value was determined. It never introduces a duplicate counter.
-    """
     if not isinstance(basis, Mapping):
         raise RepositoryValidationError("usage basis must be a mapping")
     allowed_keys = frozenset((*_DIMENSIONS, "spend_micro_units"))
@@ -118,10 +110,8 @@ _OPERATION_STATE_KEYS = {"control", "terminal_outcome", "result_reference"}
 
 
 def plain(value: Any) -> Any:
-    """Canonical JSON-compatible copy of detached values (no driver objects)."""
     if is_dataclass(value):
         result = {f.name: plain(getattr(value, f.name)) for f in fields(value)}
-        # Existing durable action/receipt signatures must remain byte compatible.
         for model, key in (
             (AssignmentActionIntent, "transient_input"),
             (AssignmentActionOutcome, "result_disposition"),
@@ -203,7 +193,7 @@ def _guidance_cutoff(value):
     try:
         if type(value) is not datetime or value.utcoffset() is None:
             raise ValueError
-        # Detach any caller-owned tzinfo before the first database wait.
+        # Detach caller's tzinfo before the transaction can wait
         return value.astimezone(UTC)
     except (TypeError, ValueError, OverflowError):
         raise RepositoryValidationError("aware authority cutoff required") from None
@@ -227,7 +217,6 @@ def _state_version(data, expected):
 
 
 def _supported(data):
-    """Known persisted envelopes remain decodable for receipts and settlement."""
     if data.get("execution_profile") != "one_shot":
         return True
     operation = data["operation"]
@@ -239,7 +228,6 @@ def _supported(data):
 
 
 def _executable(data):
-    """Only v2's qualified incarnation or framework-credential authority continues one-shot work."""
     if data.get("execution_profile") != "one_shot":
         return True
     if not (_supported(data) and data["operation"]["version"] == 2):
@@ -295,7 +283,6 @@ def _intent(data):
 
 
 def _payload_record(value, model):
-    """Future positive versions are opaque on inspection, never interpreted."""
     value = plain(value)
     if not isinstance(value, dict):
         raise RepositoryValidationError("invalid payload disposition")
@@ -308,7 +295,6 @@ def _payload_record(value, model):
         )
         return model(**value)
     except (KeyError, TypeError, ValueError):
-        # Constructor errors can include caller-controlled field names.
         raise RepositoryValidationError("invalid payload disposition") from None
 
 
@@ -467,16 +453,12 @@ def _action_record(data):
 
 
 class AssignmentRepository:
-    """Small durable graphs; row locks serialize authority, effects and budgets."""
-
     @staticmethod
     def validate_definition(definition: AssignmentDefinition) -> None:
-        """Validate the unchanged persistent, grant-dependent definition profile."""
         AssignmentRepository._validate_definition(definition, one_shot=False)
 
     @staticmethod
     def validate_operation_definition(definition: AssignmentDefinition) -> None:
-        """Validate bounded one-shot work without synthetic source or cadence fields."""
         AssignmentRepository._validate_definition(definition, one_shot=True)
 
     @staticmethod
@@ -618,12 +600,6 @@ class AssignmentRepository:
         expected_state_version,
         references,
     ):
-        """Bind the initial exact selection, never silently rebind stale guidance.
-
-        The host already holds current caller/session authority. This storage
-        boundary grants none. Explicit instruction-revision replacement is a
-        separate host contract; this initial binding refuses any prior selection.
-        """
         return self._bind_guidance_references(
             transaction,
             owner_id=owner_id,
@@ -645,11 +621,6 @@ class AssignmentRepository:
         expected_state_version,
         envelope,
     ):
-        """Bind one immutable initial expansion; host verifies its key and MAC.
-
-        No header (including an old empty 005 header) may be upgraded/reselected.
-        Exact new-envelope replay is read-only and still checks current inputs.
-        """
         envelope = copy_envelope(envelope)
         return self._bind_guidance_references(
             transaction,
@@ -737,8 +708,6 @@ class AssignmentRepository:
         with transaction.savepoint("assignment_guidance_bind"):
             if envelope is not None:
                 _require_executable(data)
-                # Refuse unavailable/foreign references with a closed repository
-                # error before a foreign-key failure can expose database detail.
                 self._assert_selected_agent_current(
                     transaction,
                     data,
@@ -801,11 +770,6 @@ class AssignmentRepository:
             return self._save(transaction, data)
 
     def get_selected_input(self, transaction, *, owner_id, assignment_id):
-        """Read typed immutable metadata; None means no header or reference at all.
-
-        Old 005 headers return envelope=None, never an inferred expansion. This
-        read grants no input/execution authority and does not require live values.
-        """
         if not self._lock_operation_owner(transaction, owner_id):
             _conflict("assignment_owner_retired")
         data = self._load(transaction, owner_id, assignment_id, lock=True)
@@ -823,13 +787,6 @@ class AssignmentRepository:
         expected,
         authority_valid_until: datetime | None = None,
     ):
-        """Compare originals and final DB-time expiry under owner/assignment locks.
-
-        This is not an execution capability. Completion callers pass the returned
-        current counters after retiring their claim. expected=None refuses even
-        an empty legacy header. Host verifies the named key and opaque MAC. The
-        optional cutoff adds an original lifetime bound, never authority itself.
-        """
         authority_valid_until = _guidance_cutoff(authority_valid_until)
         if expected is not None:
             if type(expected) is not AssignmentSelectedInput:
@@ -955,7 +912,6 @@ class AssignmentRepository:
         expected_state_version,
         authority_valid_until: datetime | None = None,
     ):
-        """Read exact selected revisions under owner/assignment locks, no authority."""
         authority_valid_until = _guidance_cutoff(authority_valid_until)
         if not self._lock_operation_owner(transaction, owner_id):
             _conflict("assignment_owner_retired")
@@ -1000,8 +956,6 @@ class AssignmentRepository:
             if not valid:
                 _conflict("assignment_guidance_changed")
         if authority_valid_until is not None:
-            # One final observation bounds both selected note lifetimes and the
-            # original caller/operation cutoff, including absent selections.
             observed_at = _now(transaction)
             observed_ms = (observed_at - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(
                 milliseconds=1
@@ -1015,12 +969,6 @@ class AssignmentRepository:
                 _conflict("assignment_guidance_changed")
 
     def _lock_guidance_dependants(self, transaction, owner_id, kind, resource_id):
-        """Caller holds owner 79. Lock every affected assignment, then all actions.
-
-        All resource writers and reference binding share that owner lock, so the
-        reference set cannot grow while the caller later locks a resource head.
-        No head is locked here; opaque rows are retained without reinterpretation.
-        """
         rows = transaction.fetch_all(
             (
                 "SELECT a.* FROM persistent_assignment a WHERE a.owner_user_id=%s AND a"
@@ -1053,12 +1001,6 @@ class AssignmentRepository:
         )
 
     def _lock_selected_agent_dependants(self, transaction, owner_id):
-        """Owner 79 is held; lock all indexed assignments/actions before agent 0.
-
-        The owner-wide prelock supports existing callers that acquire the public
-        declarative owner lock before selecting a command target. No terminal
-        row participates, and no new references can appear under owner 79.
-        """
         rows = transaction.fetch_all(
             "SELECT a.* FROM persistent_assignment a WHERE a.owner_user_id=%s "
             "AND a.lifecycle IN ('active','paused') AND EXISTS(SELECT 1 FROM "
@@ -1075,7 +1017,6 @@ class AssignmentRepository:
             )
 
     def _invalidate_selected_agent_dependants(self, transaction, owner_id, agent_id):
-        # lock_declarative_owner already locked this stable set before owner 0.
         rows = transaction.fetch_all(
             "SELECT a.* FROM persistent_assignment a JOIN assignment_selected_agent r "
             "ON r.owner_id=a.owner_user_id AND r.assignment_id=a.id WHERE r.owner_id=%s "
@@ -1095,8 +1036,6 @@ class AssignmentRepository:
         for row in rows:
             data = self._validated_assignment_row(row, owner_id, str(row["id"]))
             if not _supported(data):
-                # Preserve opaque future records and all accounting. Their exact
-                # reference is still invalidated; no supported reader can adopt it.
                 continue
             data["control_epoch"] += 1
             self._clear_claim(data)
@@ -1401,7 +1340,6 @@ class AssignmentRepository:
             ) from exc
 
     def _validate_operation_state(self, operation, owner_id):
-        """Validate understood envelopes; preserve future nested versions for inspection."""
         if not isinstance(operation, dict):
             raise RepositoryValidationError("operation object required")
         _integer(operation.get("version"), 1)
@@ -1456,7 +1394,6 @@ class AssignmentRepository:
     def get_operation_receipt(
         self, query, *, owner_id, origin_namespace, caller_key, command_digest, credential_id=None
     ):
-        """Resolve accepted intent before expansion; callers still authenticate this read."""
         _text(owner_id)
         _text(origin_namespace, 64)
         _text(caller_key, 256)
@@ -1476,8 +1413,7 @@ class AssignmentRepository:
             _conflict("assignment_idempotency_conflict")
         if row["live_assignment_id"] is None or row["data"] is None:
             _conflict("assignment_operation_deleted")
-        # Resolve the live row in the receipt's snapshot. A second ID lookup could
-        # follow an unrelated replacement after concurrent deletion and UUID reuse.
+        # Reuses this row; a fresh ID lookup risks a reused UUID
         return _record(self._validated_assignment_row(row, owner_id, str(row["assignment_id"])))
 
     def create_operation(
@@ -1497,12 +1433,6 @@ class AssignmentRepository:
         max_retained_operations=256,
         max_retained_receipts=4096,
     ):
-        """Atomically persist host-authorized one-shot intent and its original-key receipt.
-
-        The host authenticates the caller, resolves current authority and appends its
-        audit/allowance mutation in this same transaction. This reference is not a
-        token or an authorization decision. It never permits autonomous dispatch.
-        """
         with transaction.savepoint("operation_create_" + uuid.uuid4().hex):
             _text(owner_id)
             _uuid(assignment_id)
@@ -1599,7 +1529,6 @@ class AssignmentRepository:
             return record
 
     def _assert_creation_authority(self, transaction, owner_id, definition, operation, authority):
-        """Bind interactive/framework creation to its original issued authority, incl. expiry."""
         origin = operation.authority.origin
         if origin not in {"interactive", "framework"}:
             return
@@ -1712,7 +1641,6 @@ class AssignmentRepository:
     def get_submission_receipt(
         self, query, *, owner_id, assignment_id, submission_id, submission_digest, command
     ):
-        """Inspect accepted client semantics before recapturing server-owned grants."""
         _uuid(submission_id)
         _digest(submission_digest)
         data = self._load(
@@ -1795,7 +1723,7 @@ class AssignmentRepository:
         if old:
             accepted_signatures = {request}
             if one_shot:
-                # Foundation receipts predate the required state-version field.
+                # Old receipts predate state_version, so accept both forms
                 accepted_signatures.add(digest(signature_values[:-1]))
             if old["signature"] not in accepted_signatures:
                 _conflict("assignment_idempotency_conflict")
@@ -1810,8 +1738,6 @@ class AssignmentRepository:
                 return AssignmentControlResult(_record(data), False)
             _conflict("assignment_not_active")
         if len(data["controls"]) >= 256:
-            # A prior expected epoch protects evicted receipts from reapplication.
-            # Capacity must never make pause, stop or revocation unavailable.
             data["controls"].pop(next(iter(data["controls"])))
         if control == AssignmentControl.REVISE:
             self._assert_guidance_current(transaction, data)
@@ -1898,7 +1824,6 @@ class AssignmentRepository:
                 _conflict("assignment_not_paused")
             if one_shot:
                 self._validate_operation_continuation(transaction, data)
-                # A pause cannot erase an event wait, approval or reconciliation hold.
                 phase = data["phase"]
                 if phase in {"checking", "investigating", "delegating"}:
                     phase = "waiting"
@@ -1942,8 +1867,6 @@ class AssignmentRepository:
             transaction, data, conservative=control == AssignmentControl.STOP
         )
         if one_shot and _supported(data) and self._operation_continuation_held(transaction, data):
-            # Controls retire unstarted authority, never an issued effect's
-            # liability. Stale settlement need not have changed the phase label.
             if data["phase"] not in {
                 "waiting_authorization",
                 "awaiting_event",
@@ -1969,7 +1892,6 @@ class AssignmentRepository:
         )
 
     def _validate_operation_continuation(self, transaction, data, definition=None):
-        """Local lineage checks supplement, never replace, current host authentication."""
         self._assert_guidance_current(transaction, data)
         _require_executable(data)
         if data["phase"] == "waiting_authorization":
@@ -2066,8 +1988,6 @@ class AssignmentRepository:
         ):
             _conflict("assignment_history_capacity_exhausted")
         actions, unresolved, _ = self._purge_blockers(transaction, data)
-        # Reserved attempts have no issued effect and can be invalidated. Unknown,
-        # started and uncertain action versions remain conservative liabilities.
         invalidated = tuple(
             action["action_id"]
             for action in actions
@@ -2092,13 +2012,6 @@ class AssignmentRepository:
         source_revision,
         control_version=1,
     ):
-        """Read/lock the exact owner wait decision without writing or borrowing a claim.
-
-        Owner precedes assignment and sorted action locks. The host authenticates
-        the current owner and may audit these facts, then calls set_owner_event_wait
-        with identical arguments in this same bounded transaction. This safe hold
-        needs no execution session and grants no continuation or output authority.
-        """
         data, _, replayed, invalidated, begun = self._prepare_owner_event_wait(
             transaction,
             owner_id=owner_id,
@@ -2129,15 +2042,6 @@ class AssignmentRepository:
         source_revision,
         control_version=1,
     ):
-        """Commit an idempotent owner hold and retire every prior worker delivery fence.
-
-        Revalidate after preparation/audit waits. A savepoint protects all mutation
-        if an error is caught; required host audit preceding this call remains in
-        the enclosing transaction, which the caller must abort on final failure.
-        Returned facts are provisional until that transaction commits. Original
-        session authority is still required for later continuation, never borrowed
-        from this safe control. Authentic issued consumption remains settleable.
-        """
         with transaction.savepoint("assignment_owner_wait_" + uuid.uuid4().hex):
             data, signature, replayed, _, _ = self._prepare_owner_event_wait(
                 transaction,
@@ -2203,11 +2107,6 @@ class AssignmentRepository:
         source_revision,
         control_version=1,
     ):
-        """Atomically checkpoint a claimed operation and retire its execution lease.
-
-        source_revision is a strict monotonic source observation watermark, not an
-        opaque revision string. The host validates source identity and authority.
-        """
         _integer(control_version, 1, 1)
         _text(event_key, 128)
         _integer(source_revision)
@@ -2289,15 +2188,6 @@ class AssignmentRepository:
         event_digest,
         control_version=1,
     ):
-        """Read/lock a receipt-first wake decision without accepting or scheduling it.
-
-        Uses the same validation and owner→assignment locks as accept_wake. No
-        session/action locks or authority are acquired. A matching receipt precedes
-        new continuation/CAS checks; a miss is only current local decision data.
-        The host must bind current caller and original continuation authority,
-        audit, call accept_wake with identical arguments, and recheck its guards
-        in one bounded transaction. This result is no permission to mutate later.
-        """
         data, _, replayed = self._prepare_wake(
             transaction,
             owner_id=owner_id,
@@ -2323,16 +2213,6 @@ class AssignmentRepository:
         expected_control_epoch,
         expected_state_version,
     ):
-        """Lock current local facts and refuse unresolved one-shot liabilities.
-
-        Owner precedes assignment and sorted action locks. Stored task/authority
-        deadlines are checked again after the scan; no session is selected or
-        authenticated, no claim is granted, and no ledger or schedule is changed.
-        The host must acquire caller/original-session guards before these locks,
-        then recheck them after later waits in the same bounded transaction. This
-        assertion is for a new wake, never a prerequisite to accepted replay or
-        authentic settlement. It is not execution or future mutation authority.
-        """
         _integer(expected_instruction_revision, 1)
         _integer(expected_control_epoch, 1)
         _integer(expected_state_version, 1)
@@ -2367,15 +2247,6 @@ class AssignmentRepository:
         event_digest,
         control_version=1,
     ):
-        """Acknowledge one host-authorized source event, with durable bounded replay.
-
-        Authentication and current remote authority belong to the host. A receipt
-        replay acknowledges prior acceptance only; it grants no new continuation.
-        Revalidates after preparation/audit waits. The host must abort its enclosing
-        transaction on required audit/final guard failure; returned facts are
-        provisional until that transaction commits. No execution authority is
-        inferred from preparation or this receipt.
-        """
         data, signature, replayed = self._prepare_wake(
             transaction,
             owner_id=owner_id,
@@ -2448,23 +2319,16 @@ class AssignmentRepository:
         return self._save(transaction, data)
 
     def claim_due_for_administration(self, transaction, *, worker_id, limit=20, lease_seconds=30):
-        """Claim only persistent work; existing workers never receive a one-shot profile."""
         return self._claim_due(transaction, worker_id, limit, lease_seconds, "persistent")
 
     def claim_operations_for_administration(
         self, transaction, *, worker_id, limit=20, lease_seconds=30
     ):
-        """Refuse the historical bulk API, which cannot bind a selected incarnation."""
         _conflict("assignment_authorization_unavailable")
 
     def discover_due_operations_for_administration(
         self, query, *, limit=20, after_due_at=None, after_id=None
     ):
-        """Read a bounded due page without granting authority or acquiring leases.
-
-        Advance the exact (next_wake_at, assignment_id) cursor after a refused
-        candidate; discovery never resolves authority by owner or current SID.
-        """
         _integer(limit, 1, 100)
         if (after_due_at is None) != (after_id is None):
             raise RepositoryValidationError("complete operation discovery cursor required")
@@ -2500,7 +2364,6 @@ class AssignmentRepository:
         authority,
         lease_seconds=30,
     ):
-        """Claim one exact due operation under owner/session locks and a fresh observation."""
         _integer(expected_state_version, 1)
         with transaction.savepoint("operation_claim_" + uuid.uuid4().hex):
             data = self._operation_claim_context(transaction, owner_id, assignment_id, authority)
@@ -2518,15 +2381,12 @@ class AssignmentRepository:
                 or data["operation"].get("control", {}).get("wait") is not None
             ):
                 _conflict("assignment_action_uncertain")
-            # The ledger scan can wait on action locks. Check the original
-            # session and DB deadlines again before minting the claim.
             self._assert_operation_claim_current(transaction, data, authority)
             claim = self._claim(transaction, data, worker_id, lease_seconds)
             self._assert_operation_claim_current(transaction, data, authority)
             return claim
 
     def _operation_claim_context(self, transaction, owner_id, assignment_id, authority):
-        """Lock the original authority before a one-shot assignment, never a latest session."""
         if not self._lock_operation_owner(transaction, owner_id):
             _conflict("assignment_owner_retired")
         selected = self._load(transaction, owner_id, assignment_id)
@@ -2603,11 +2463,6 @@ class AssignmentRepository:
         )
 
     def _lock_execution_authority(self, transaction, data, authority):
-        """Lock selected local authority before assignment/admission rows.
-
-        False is deliberate for unavailable/unknown observations: authentic issued
-        permits still settle usage, but cannot retain output or continue work.
-        """
         selected, grant_id = self._execution_authority_selection(data)
         if selected is not None:
             if not _executable(data):
@@ -2673,12 +2528,6 @@ class AssignmentRepository:
         action_id=None,
         authority=None,
     ):
-        """Lock local authority, assignment and admission before a host mutation.
-
-        The host refreshes remote authorization before opening this transaction.
-        Keep any following repository writes in this same transaction; this
-        detached record is not a reusable authorization or dispatch permit.
-        """
         if not isinstance(fence, AssignmentFence) or not isinstance(
             binding, AssignmentOperationBinding
         ):
@@ -2693,8 +2542,6 @@ class AssignmentRepository:
             _uuid(action_id)
         if not self._lock_operation_owner(transaction, fence.owner_id):
             _conflict("assignment_owner_retired")
-        # Discover selected authority before locking the assignment. A session
-        # observation is host-verified, ephemeral, and never replaced by latest-owner lookup.
         selected = self._load(transaction, fence.owner_id, fence.assignment_id)
         if not self._lock_execution_authority(transaction, selected, authority):
             _conflict("assignment_authorization_unavailable")
@@ -2705,8 +2552,6 @@ class AssignmentRepository:
             _conflict("assignment_authorization_unavailable")
         self._assert_guidance_current(transaction, data)
         self._assert_bound_admission(transaction, data, binding)
-        # A lock wait can cross either local lease/authority deadline. Never
-        # authorize with the timestamp sampled before the admission lock.
         data = self._fenced(transaction, fence, action_id=action_id)
         if not self._lock_execution_authority(transaction, data, authority):
             _conflict("assignment_authorization_unavailable")
@@ -2736,12 +2581,6 @@ class AssignmentRepository:
             _conflict("assignment_operation_conflict")
 
     def put_action_for_execution(self, transaction, *, fence, binding, intent, authority=None):
-        """Prepare under current authority/both fences, rolling back a late refusal.
-
-        The savepoint protects even a caller that catches the exception and commits
-        other work. The caller still owns the enclosing transaction and must not
-        treat this detached result as committed before that transaction succeeds.
-        """
         with transaction.savepoint("assignment_prepare_" + uuid.uuid4().hex):
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, authority=authority
@@ -2767,7 +2606,6 @@ class AssignmentRepository:
         quote_expires_at=None,
         authority=None,
     ):
-        """Reserve atomically with current session/assignment/admission validation."""
         with transaction.savepoint("assignment_reserve_" + uuid.uuid4().hex):
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
@@ -2802,12 +2640,6 @@ class AssignmentRepository:
         interactive_receipt_id=None,
         authority=None,
     ):
-        """Issue a permit only after the final authority check; commit precedes dispatch.
-
-        No provider or effect may observe the returned permit until the caller's
-        enclosing transaction commits. A final refusal rolls back even the token
-        and approval-consumption writes when the caller catches that refusal.
-        """
         with transaction.savepoint("assignment_permit_" + uuid.uuid4().hex):
             self.assert_current_assignment_execution(
                 transaction, fence=fence, binding=binding, action_id=action_id, authority=authority
@@ -2892,11 +2724,6 @@ class AssignmentRepository:
         return _action_record(data)
 
     def _known_action(self, transaction, owner_id, assignment_id, action_id):
-        """Decode only today's action envelope before cancellation or physical purge.
-
-        A future/malformed envelope is an unresolved liability, even when its
-        indexed state looks settled. Never follow its proposal or reservation IDs.
-        """
         try:
             action = self._action(transaction, owner_id, assignment_id, action_id)
             if action["intent"]["request"].get("kind") == "result_publication":
@@ -3085,7 +2912,6 @@ class AssignmentRepository:
 
     @staticmethod
     def _reconciled_attempt(action, attempt, prior_digest):
-        """A retained uncertain observation is settled only by its exact receipt."""
         decision = action["reconciliation"]
         if decision is None or attempt is not action["attempts"][-1]:
             return False
@@ -3150,8 +2976,6 @@ class AssignmentRepository:
 
     @staticmethod
     def _expire_interactive_proposal(transaction, owner_id, proposal_id):
-        # Losing the inverse link must never turn assignment-bound authority into
-        # an ordinary remote confirmation capability.
         transaction.execute(
             "UPDATE remote_operation_proposal SET status='expired',decided_at=COALESCE(decided_at, "
             "GREATEST(created_at,floor(extract(epoch FROM clock_timestamp()))::bigint)) "
@@ -3222,12 +3046,6 @@ class AssignmentRepository:
         expected_publication_id,
         maximum_bytes=1048576,
     ):
-        """Read a complete, byte/count-bounded owner destination; never authority.
-
-        Holds owner, current head and exact child locks through the caller's
-        transaction. Empty content is permitted; an oversized or busy head is
-        refused, never truncated. The host must separately guard publication.
-        """
         from astralplane.repositories.result_publication_destination import read
 
         return read(
@@ -3255,7 +3073,6 @@ class AssignmentRepository:
         authority: SessionExecutionObservation,
         caller_valid_until: datetime,
     ) -> AssignmentActionRecord:
-        """Propose exact retained result bytes; never revive an execution claim."""
         from astralplane.repositories.result_publications import put
 
         return put(
@@ -3285,7 +3102,6 @@ class AssignmentRepository:
         authority: SessionExecutionObservation | None = None,
         caller_valid_until: datetime | None = None,
     ) -> ResultPublicationPreparation:
-        """Receipt-first read/lock only; the host must still guard and audit Save."""
         from astralplane.repositories.result_publications import prepare
 
         return prepare(
@@ -3313,12 +3129,6 @@ class AssignmentRepository:
         authority: SessionExecutionObservation | None = None,
         caller_valid_until: datetime | None = None,
     ) -> ResultPublicationReceipt:
-        """Atomic fresh canvas pointer + one-time receipt, then final current checks.
-
-        The current owner request and its audit belong in this outer transaction.
-        If final validation fails, the caller must abort its audit too. Accepted
-        replay requires current owner access but no retired original capability.
-        """
         from astralplane.repositories.result_publications import commit
 
         return commit(
@@ -3455,7 +3265,6 @@ class AssignmentRepository:
         return _action_record(data) if data else None
 
     def get_action_by_key(self, query, *, owner_id, assignment_id, action_key):
-        """Recover the immutable intent without recreating expiring parameters."""
         self._load(query, owner_id, assignment_id)
         _text(action_key)
         row = query.fetch_one(
@@ -3477,7 +3286,6 @@ class AssignmentRepository:
         expected_instruction_revision,
         expected_control_epoch,
     ):
-        """Bind one existing attended proposal to identical immutable arguments."""
         data = self._load(transaction, owner_id, assignment_id, lock=True)
         _version(data, expected_instruction_revision, expected_control_epoch)
         _text(proposal_id, 128)
@@ -3537,7 +3345,6 @@ class AssignmentRepository:
         return None if row is None else _action_record(plain(row["data"]))
 
     def observe_interactive_proposal(self, transaction, *, owner_id, proposal_id):
-        """Observe an actual remote decline/expiry without accepting caller verdicts."""
         linked = self.get_action_for_interactive_proposal(
             transaction, owner_id=owner_id, proposal_id=proposal_id
         )
@@ -3683,7 +3490,6 @@ class AssignmentRepository:
         authority=None,
         expected_state_version=None,
     ):
-        """Acquire a restricted approval claim; one-shot claims require exact current authority."""
         with transaction.savepoint("operation_approved_claim_" + uuid.uuid4().hex):
             selected = self._load(transaction, owner_id, assignment_id)
             one_shot = selected.get("execution_profile") == "one_shot"
@@ -4006,7 +3812,6 @@ class AssignmentRepository:
             return False
         try:
             self._assert_bound_admission(transaction, data, binding)
-            # Re-sample database time and local lineage after the admission lock wait.
             self._fenced(transaction, fence, action_id=action_id)
             self._validate_operation_continuation(transaction, data)
             return self._lock_execution_authority(transaction, data, authority)
@@ -4099,8 +3904,6 @@ class AssignmentRepository:
             _integer(expected_state_version, 1)
         _version(data, expected_instruction_revision, expected_control_epoch)
         if one_shot:
-            # Final deadline handling also inspects other liabilities. Acquire all
-            # action rows in stable order before selecting one or appending audit.
             self._purge_blockers(transaction, data)
             authority_current = authority_current and (
                 self._execution_authority_selection(selected)
@@ -4139,14 +3942,6 @@ class AssignmentRepository:
         expected_state_version=None,
         authority=None,
     ):
-        """Lock and validate exact settlement facts without writing or requiring authority.
-
-        Owner/original session precede assignment and sorted action locks. The
-        caller may then append required audit and call reconcile_action with the
-        identical arguments in THIS transaction. This result is not a permit;
-        final settlement revalidates the decision and samples current DB time.
-        An absent/stale execution observation cannot prevent factual settlement.
-        """
         data, action, _, _, replayed = self._prepare_action_reconciliation(
             transaction,
             owner_id=owner_id,
@@ -4175,14 +3970,6 @@ class AssignmentRepository:
         expected_state_version=None,
         authority=None,
     ):
-        """Settle once; only current original authority may schedule one-shot continuation.
-
-        When audit is required, prepare_action_reconciliation must precede that
-        audit in the same transaction, then this final method follows it. Missing
-        or expired execution authority suppresses a wake, never the authentic
-        charge. Infrastructure errors roll back; replay resolves a lost commit
-        acknowledgment. The savepoint also protects callers that catch failures.
-        """
         with transaction.savepoint("assignment_reconcile_" + uuid.uuid4().hex):
             data, action, owner_active, authority_current, replayed = (
                 self._prepare_action_reconciliation(
@@ -4253,8 +4040,6 @@ class AssignmentRepository:
         authority_current,
         authority,
     ):
-        # The action is already factually settled. Denial below must persist that
-        # charge with a hold, not raise and erase it due to expired authority.
         actions, _, held = self._purge_blockers(transaction, data)
         if held or any(action["state"] in {"proposed", "approved"} for action in actions):
             data.update(phase="reconciliation", next_wake_at=None, next_retry_at=None)
@@ -4329,8 +4114,6 @@ class AssignmentRepository:
         ) or batch.expected_cursor_digest != digest(data["checkpoint"].get("cursor")):
             _conflict("assignment_source_cursor_conflict")
         if len(data["source_batches"]) >= 32:
-            # Cursor CAS and the relational event ledger protect older batches;
-            # unchanged polling must not require infinite receipt storage.
             data["source_batches"].pop(next(iter(data["source_batches"])))
         count = transaction.fetch_one(
             "SELECT count(*) AS n FROM persistent_assignment_event WHERE assignment_id=%s",
@@ -4625,7 +4408,6 @@ class AssignmentRepository:
             if completion.next_wake_at is not None:
                 due = max(due, _time(completion.next_wake_at))
         elif completion.phase == "waiting":
-            # A yield/claim cycle cannot renew a one-shot's finite retry allowance.
             due = max(now, _time(completion.next_wake_at))
         else:
             return
@@ -4660,7 +4442,6 @@ class AssignmentRepository:
         _digest(completion.completion_digest)
         last = raw.get("last_completion")
         signature_value = plain(completion)
-        # Preserve receipts written before the optional one-shot completion fields.
         for key in ("terminal_outcome", "result_reference", "event_wait"):
             if signature_value[key] is None:
                 signature_value.pop(key)
@@ -4865,11 +4646,9 @@ class AssignmentRepository:
         return self._save(transaction, data)
 
     def recover_expired_for_administration(self, transaction, *, limit=100):
-        """Recover only persistent work understood by the legacy episode runner."""
         return self._recover_expired(transaction, limit=limit, profile="persistent")
 
     def recover_expired_operations_for_administration(self, transaction, *, limit=100):
-        """Recover stale leases and expire unclaimed one-shots without new authority."""
         return self._recover_expired(transaction, limit=limit, profile="one_shot")
 
     def _recover_expired(self, transaction, *, limit, profile):
@@ -4944,8 +4723,6 @@ class AssignmentRepository:
                     action["state"] = attempt["state"] = "uncertain"
                     held = True
                     uncertain.append(action["action_id"])
-                    # Retain the maximum liability; a late exact receipt or explicit
-                    # reconciliation must settle it. Never reset a begun effect.
                     action["result"] = {
                         "result_digest": digest([action["action_id"], "lease_expired"]),
                         "outcome": "uncertain",
@@ -4956,8 +4733,6 @@ class AssignmentRepository:
                 if task["state"] == "running":
                     task["state"] = "reconciliation" if held else "pending"
                     task["task_generation"] += 1
-            # Expiry before a claim is not an execution attempt and must not
-            # consume retries or obtain fresh authority merely to record failure.
             if not unclaimed_deadline:
                 data["consecutive_failures"] += 1
             if data["lifecycle"] == "active":
@@ -5052,8 +4827,6 @@ class AssignmentRepository:
         )["n"]
         if count >= 1000:
             if critical:
-                # Assignment status and the retained control receipt still record
-                # this owner decision when the activity projection is full.
                 return None
             _conflict("assignment_history_capacity_exhausted")
         data["activity_sequence"] += 1
@@ -5124,8 +4897,6 @@ class AssignmentRepository:
 
     def retain_for_administration(self, transaction, *, limit=100):
         _integer(limit, 1, 100)
-        # Payload retention is conservative: identity tombstones are never age-pruned.
-        # Remove only old transient activity with no effect/approval references.
         rows = transaction.fetch_all(
             "SELECT id FROM persistent_assignment_activity "
             "WHERE notification_state!='pending' "
@@ -5170,17 +4941,10 @@ class AssignmentRepository:
         return actions, unresolved, retained
 
     def _operation_continuation_held(self, transaction, data):
-        """Read actual obligations under assignment then sorted action locks."""
         actions, _, held = self._purge_blockers(transaction, data)
         return held or any(action["state"] in {"proposed", "approved"} for action in actions)
 
     def _assert_operation_action_continuable(self, transaction, fence, binding):
-        """Permit live sibling work, but never bypass unknown or stale consumption.
-
-        The caller already holds owner/session/assignment authority. The sorted
-        inventory locks remain held through its mutation and final authority
-        check. Settlement deliberately does not call this preparation guard.
-        """
         data = self._load(transaction, fence.owner_id, fence.assignment_id)
         if data.get("execution_profile") != "one_shot":
             return
@@ -5243,12 +5007,6 @@ class AssignmentRepository:
         return True
 
     def retire_owner(self, transaction, *, owner_id):
-        """Legacy persistent-only adapter; unsupported cleanup must fail closed.
-
-        Existing callers inspect only unresolved_action_ids. They cannot safely
-        consume one-shot/orphan reconciliation holds: adopt the explicit adapter
-        and inspect retained_assignment_ids before scheduling physical cleanup.
-        """
         self._lock_operation_owner(transaction, owner_id)
         if transaction.fetch_one(
             "SELECT id FROM persistent_assignment WHERE owner_user_id=%s "
@@ -5262,12 +5020,6 @@ class AssignmentRepository:
         return result
 
     def retire_operations_for_owner(self, transaction, *, owner_id):
-        """Fence account work before purge; unresolved effects require a later retry.
-
-        This atomically includes both persistent and one-shot profiles. The caller
-        must commit a result with retained_assignment_ids, defer physical purge,
-        and reconcile. Raising inside this transaction undoes owner/stop fencing.
-        """
         _text(owner_id)
         transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
         transaction.execute(

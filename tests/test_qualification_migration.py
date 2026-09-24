@@ -1,4 +1,6 @@
-"""Qualification migration refuses unbound registries, ambiguous DBs and secrets in output."""
+"""Tests for scripts/migrate_qualification_database.py: refuses unbound registries and
+ambiguous databases, and keeps secrets out of CLI output.
+"""
 
 from __future__ import annotations
 

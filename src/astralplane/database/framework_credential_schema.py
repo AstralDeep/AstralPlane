@@ -1,20 +1,6 @@
-"""088.008 owner-issued framework credentials and finite offline-grant allowance.
-
-``framework_credential`` stores hash-only bearer tokens an owner mints for an
-external caller (an SDK, MCP or A2A client) while an interactive session (or a
-native client's own credential) is live. Plane never sees or persists the
-plaintext token; only its SHA-256 hex digest and a short display prefix are
-stored. A credential is bound to the exact issuer reference (a session
-incarnation or native credential id) that was live when it was minted, and to
-a closed scope set; it never widens itself and never binds to an untrusted
-delegation chain.
-
-The additive nullable ``user_offline_grant`` columns give a scheduled grant a
-finite admission allowance (``max_admissions``); a NULL value keeps every
-pre-088.008 grant's unlimited-admissions semantics unchanged.
-
-Both changes are additive: no existing row, column default, or constraint is
-altered, and neither table participates in the fresh-install fast path.
+"""Additive schema for owner-issued framework credentials and finite offline-grant
+allowances; stores only a SHA-256 digest and display prefix of a bearer token, never
+the plaintext, bound to the issuer reference live when minted.
 """
 
 FRAMEWORK_CREDENTIAL_SCHEMA_STATEMENTS = (

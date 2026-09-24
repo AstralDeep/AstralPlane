@@ -1,10 +1,6 @@
-"""One-time owner canvas Save using the existing action and publication ledgers.
-
-No worker claim, dispatch permit, external I/O or alternate visibility store is
-created. The host must prove the public research projection, authenticate the
-current caller, and audit in this same outer transaction before ``commit``.
-Preparation is only a locked observation. Final failure must abort that outer
-transaction, including its audit; the inner savepoint protects caught failures.
+"""Commits a one-time owner canvas Save through the existing action and publication
+ledgers, with prepare() as a locked read-only observation before commit(). Creates no
+worker claim or dispatch permit; used by orchestrator/work_publication.py.
 """
 
 from __future__ import annotations
@@ -102,8 +98,6 @@ def _content(value):
     _typed(value, ResultPublicationContent)
     if type(value.components) is not tuple or type(value.layouts) is not tuple:
         raise RepositoryValidationError("typed publication sequence required")
-    # Same stage entity bound as validate_stage, with an additional finite byte
-    # bound for this owner request; no private source/body is stored in an action.
     if not 1 <= len(value.components) <= 10000 or len(value.layouts) > 10000:
         raise RepositoryValidationError("publication stage exceeds bounds")
     components, layouts = [], []
@@ -154,7 +148,6 @@ def _content(value):
 
 
 def _stage(value):
-    # Physical row IDs are included: a retry may not replace a reviewed row.
     return {
         "version": 1,
         "components": a.plain(value.components),
@@ -163,7 +156,6 @@ def _stage(value):
 
 
 def result_publication_stage_digest(content: ResultPublicationContent) -> str:
-    """Canonical complete reviewed stage, excluding generated DB timestamps."""
     import hashlib
 
     return hashlib.sha256(
@@ -298,7 +290,6 @@ def _receipt(action):
 
 
 def known_publication_action(action):
-    """Exact subtype decoder for conservative invalidation/purge; never a permit."""
     try:
         _require(set(action) == _ACTION_KEYS)
         proposal = _decode_proposal(action)
@@ -403,8 +394,6 @@ def _completed(repo, tx, data, proposal):
         and disposition.get("available") is True
         and disposition.get("binding_key_id") == transient.binding_key_id
     )
-    # Cryptographic model/source receipt authentication and deterministic public
-    # rendering remain Deep's job. These are authentic settled Plane liabilities.
 
 
 def _settled(data, action):
@@ -456,7 +445,6 @@ def _final(repo, tx, data, proposal, authority, caller_cutoff, selected_digest):
 
 
 def _head(tx, owner_id, proposal):
-    """No waiting inversion with legacy chat→publication/publication→chat writers."""
     try:
         with tx.savepoint("result_publication_head"):
             existing = tx.fetch_one(
@@ -672,7 +660,6 @@ def prepare(
         if not replay:
             _bounds(repo, tx, peek, proposal, authority, cutoff)
         data = repo._load(tx, owner_id, assignment_id, lock=True)
-        # Match execution's sorted action order, including every inherited liability.
         if not replay:
             _completed(repo, tx, data, proposal)
         action = repo._action(tx, owner_id, assignment_id, action_id)
@@ -706,12 +693,6 @@ def prepare(
 
 @contextmanager
 def _fresh_writes(tx):
-    """Bound immediate absent-identity unique/FK contention, restoring host caps.
-
-    PostgreSQL lock_timeout has millisecond resolution; 1ms is its smallest
-    positive bound. Other host timeouts are untouched. On any failure the
-    savepoint restores the previous GUC as well as every partial write.
-    """
     before = tx.fetch_one("SELECT current_setting('lock_timeout') AS value")["value"]
     try:
         with tx.savepoint("result_publication_fresh_rows"):
@@ -737,7 +718,7 @@ def commit(
     authority=None,
     caller_valid_until=None,
 ):
-    # Copy every supplied value before the first owner/session/assignment wait.
+    # Validate/copy inputs before the savepoint can wait
     content, decision = _content(content), _decision(decision)
     authority, cutoff = _authority(authority), a._guidance_cutoff(caller_valid_until)
     with tx.savepoint("result_publication_commit"):

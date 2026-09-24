@@ -1,7 +1,6 @@
-"""Immutable private-input identities; never expanded values or authority.
-
-The host authenticates the named key and combined binding. Plane validates only
-the closed metadata and exact current resource identities in its transaction.
+"""Immutable references identifying a selected agent or private input, never their
+expanded values or authority. Host authenticates the key and binding; used by
+repositories/assignments.py and orchestrator/work_submit.py.
 """
 
 from __future__ import annotations
@@ -113,7 +112,6 @@ def copy_envelope(value):
 
 
 def decode_envelope(value):
-    """Decode exact persisted keys; never coerce booleans, counters or text."""
     if (
         type(value) is not dict
         or set(value)

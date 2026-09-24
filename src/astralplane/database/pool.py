@@ -1,4 +1,7 @@
-"""Explicit, driver-neutral pooled connection scopes."""
+"""Explicit, driver-neutral pooled connection scopes: ConnectionPool wraps a DriverPool
+(psycopg2 or an injectable test pool) and always rolls back a borrowed connection
+before returning it, so implicit reads never leak to the next borrower.
+"""
 
 from __future__ import annotations
 
@@ -17,8 +20,6 @@ from astralplane.errors import (
 
 
 class DriverPool(Protocol):
-    """Subset shared by psycopg2 pools and injectable test pools."""
-
     def getconn(self) -> Any: ...
 
     def putconn(self, connection: Any, *, close: bool = False) -> None: ...
@@ -28,20 +29,11 @@ class DriverPool(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PoolSnapshot:
-    """Non-sensitive local pool lifecycle metadata."""
-
     borrowed: int
     closed: bool
 
 
 class ConnectionPool:
-    """Own one driver pool and return only scoped connections.
-
-    A borrowed connection is rolled back before return even after a successful
-    caller scope. That clears implicit read transactions and protects the next
-    borrower without ever silently committing caller work.
-    """
-
     def __init__(self, driver_pool: DriverPool) -> None:
         self._driver_pool = driver_pool
         self._state_lock = threading.Lock()
@@ -57,9 +49,6 @@ class ConnectionPool:
         with self._state_lock:
             if self._closed:
                 raise PoolClosedError("connection pool is closed")
-            # Reserve the scope while holding the lifecycle lock, then let the
-            # driver perform a potentially blocking checkout without
-            # serializing unrelated borrowers behind this wrapper's lock.
             self._borrowed += 1
         try:
             connection = self._driver_pool.getconn()
@@ -73,7 +62,7 @@ class ConnectionPool:
         release_error: BaseException | None = None
         try:
             self._driver_pool.putconn(connection, close=discard)
-        except BaseException as exc:  # preserve KeyboardInterrupt/SystemExit too
+        except BaseException as exc:
             release_error = exc
             with suppress(BaseException):
                 connection.close()
@@ -85,8 +74,6 @@ class ConnectionPool:
 
     @contextmanager
     def connection(self) -> Iterator[Any]:
-        """Borrow one connection and guarantee a clean or discarded return."""
-
         connection = self._borrow()
         body_error: BaseException | None = None
         reset_error: BaseException | None = None
@@ -111,8 +98,6 @@ class ConnectionPool:
                 ) from reset_error
 
     def close(self) -> None:
-        """Close an idle pool; active scopes must finish first."""
-
         with self._state_lock:
             if self._closed:
                 return

@@ -1,4 +1,7 @@
-"""Owner Save facts over actual source/model settlement and SQL publication."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments, history,
+result_publications, and workspaces: a completed Save is one internal transaction,
+replay is read-only, and a new save can never adopt lost original authority.
+"""
 
 from dataclasses import replace
 from datetime import timedelta

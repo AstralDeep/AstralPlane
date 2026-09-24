@@ -1,8 +1,6 @@
-"""Apply the loaded Plane registry to one explicitly isolated qualification schema.
-
-Use the exact baseline Plane environment first, then the exact candidate image.
-No SQL or registry override is accepted. This proves migration only, never product
-reconciliation, authenticated readiness, or release authorization.
+"""Applies astralplane.database.migrations' guarded registry to one explicitly isolated
+qualification schema, first at the baseline environment then the candidate image;
+proves migration only, not product readiness.
 """
 
 from __future__ import annotations
@@ -28,7 +26,6 @@ from astralplane.database.transaction import PlaneDatabase
 def migrate(
     *, database_url: str, qualification_id: str, expected_revision: str, expected_digest: str
 ) -> dict[str, Any]:
-    """Run the ordinary guarded registry with exact source identity and target binding."""
     from psycopg2.extensions import make_dsn, parse_dsn
 
     if re.fullmatch(r"[0-9a-f]{32}", qualification_id) is None:
@@ -89,8 +86,6 @@ def main(argv: list[str] | None = None) -> int:
             expected_digest=args.expected_migration_digest,
         )
     except Exception:
-        # PostgreSQL failures may carry SQL parameters or credentials. Operator
-        # logs stay on the isolated database; diagnostic evidence stays public.
         print("qualification migration failed; admission must remain closed", file=sys.stderr)
         return 2
     print(json.dumps(report, sort_keys=True))

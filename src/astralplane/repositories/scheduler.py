@@ -1,11 +1,6 @@
-"""Durable scheduling, occurrence, run, and effect-ledger persistence.
-
-This module deliberately owns only neutral state transitions. It does not run
-jobs, authorize work, or execute an external effect. Its staged-chat method is
-the bounded all-PostgreSQL commit needed to publish conversation rows and the
-effect marker atomically. Work-admission locks and lifecycle live exclusively
-in :mod:`astralplane.repositories.work_admission`. Every method uses a
-caller-owned transaction.
+"""Durable scheduling: job definitions, due occurrences, run attempts, and the effect
+ledger, including the atomic staged-chat publish. Neutral transitions only;
+work-admission locks live in work_admission.py; used by scheduler/store.py.
 """
 
 from __future__ import annotations
@@ -144,13 +139,6 @@ class ClaimedOccurrenceRecord:
 
 @dataclass(frozen=True, slots=True)
 class DueScanContinuation:
-    """Resettable scan hints, never claim or eligibility authority.
-
-    Positions identify the last examined row in each independent ordered scan.
-    Deleted rows need not exist; the next scan advances past the tuple and wraps.
-    Owner hints rotate selection within a bounded page, including across polls.
-    """
-
     definition: tuple[int, str] | None = None
     occurrence: tuple[datetime, str] | None = None
     definition_owner: str | None = None
@@ -257,10 +245,7 @@ class EffectRecord:
 
 
 class SchedulerRepository:
-    """Native-parameter PostgreSQL repository with explicit transaction ownership."""
     def count_active_jobs(self, transaction: Transaction, *, owner_id: str) -> int:
-        """Count one owner's active definitions for product governance."""
-
         _required("owner_id", owner_id)
         row = transaction.fetch_one(
             "SELECT COUNT(*) AS n FROM scheduled_job "
@@ -274,8 +259,6 @@ class SchedulerRepository:
         transaction: Transaction,
         job: ScheduledJob,
     ) -> ScheduledJob:
-        """Insert one complete owner-scoped definition with exact replay fencing."""
-
         row = transaction.fetch_one(
             """
             INSERT INTO scheduled_job (
@@ -400,14 +383,6 @@ class SchedulerRepository:
         job_id: str,
         status: str,
     ) -> tuple[ScheduledOccurrence, ...] | None:
-        """Lock a definition, change status, and lock its unstarted firings.
-
-        ``None`` distinguishes a foreign/missing definition from a definition
-        that simply has no unstarted occurrences. The caller may compose
-        WorkAdmission cancellation in this same transaction before invoking
-        :meth:`cancel_unstarted_occurrence` for every returned row.
-        """
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         if status not in {"paused", "disabled"}:
@@ -461,8 +436,6 @@ class SchedulerRepository:
         expected_operation_id: str | None,
         terminal_code: str,
     ) -> bool:
-        """Cancel exactly one still-unstarted firing under its operation identity."""
-
         _required("owner_id", owner_id)
         _uuid("occurrence_id", occurrence_id, version=4)
         if expected_operation_id is not None:
@@ -532,8 +505,6 @@ class SchedulerRepository:
         completed: bool,
         updated_at: int,
     ) -> bool:
-        """Apply scheduler-owned cadence projection after a completed firing."""
-
         _uuid("job_id", job_id, version=4)
         _millisecond("last_run_at", last_run_at)
         if next_run_at is not None:
@@ -560,8 +531,6 @@ class SchedulerRepository:
         due_at_ms: int,
         limit: int = 1000,
     ) -> tuple[ScheduledJob, ...]:
-        """Return the deterministic global due projection for a scheduler loop."""
-
         _millisecond("due_at_ms", due_at_ms)
         _limit(limit)
         rows = query.fetch_all(
@@ -588,19 +557,6 @@ class SchedulerRepository:
         continuation: DueScanContinuation | None = None,
         scan_limit: int | None = None,
     ) -> DueClaimBatch:
-        """Materialize cadence and claim eligible firings in one transaction.
-
-        The two callbacks are product-owned, deterministic policy functions;
-        they receive immutable job records and must not perform I/O. AstralPlane
-        owns every durable read, lock, and write around those decisions.
-
-        Each scan examines at most ``scan_limit`` rows (default four times the
-        dispatch limit, at least 32 and at most 1000), using at most two queries
-        to wrap. Refused rows advance the returned hint without changing cadence.
-        Retain the hint only after commit; resetting it never bypasses row fences.
-        Fetch/callback work is bounded, not the database's physical index work.
-        """
-
         _instance_id(instance_id)
         if not isinstance(limit, int) or isinstance(limit, bool):
             raise ValueError("limit must be an integer")
@@ -655,7 +611,7 @@ class SchedulerRepository:
             due_candidates, limit=limit, last_owner=continuation.definition_owner,
         )
         for job, _ in selected_due:
-            if job.next_run_at is None:  # pragma: no cover - SQL predicate invariant
+            if job.next_run_at is None:  # pragma: no cover
                 raise PlaneError(
                     "locked due definition has no cadence timestamp",
                     code="scheduler_record_invalid",
@@ -687,9 +643,7 @@ class SchedulerRepository:
                 if following <= scheduled_ms:
                     raise ValueError("next_run callback must advance the cadence")
             completed = job.schedule_kind == "one_shot" or following is None
-            # Definitions may originate on an application host whose clock is
-            # ahead of PostgreSQL. Advancing cadence must not regress their
-            # modification timestamp or invalidate an otherwise valid record.
+            # App clock may lead DB's; never regress the mod timestamp
             advanced = transaction.execute(
                 """
                 UPDATE scheduled_job
@@ -836,8 +790,6 @@ class SchedulerRepository:
         correlation_id: str,
         started_at: int,
     ) -> JobRunRecord:
-        """Create the feature-025 compatibility run under exact job ownership."""
-
         _uuid("run_id", run_id, version=4)
         _uuid("job_id", job_id, version=4)
         _required("owner_id", owner_id)
@@ -939,8 +891,6 @@ class SchedulerRepository:
         *,
         ended_at: int,
     ) -> int:
-        """Mark feature-025 compatibility runs stranded by a restart."""
-
         _millisecond("ended_at", ended_at)
         result = transaction.execute(
             """
@@ -964,13 +914,6 @@ class SchedulerRepository:
         job_id: str,
         submission_id: str,
     ) -> RunNowMaterialization:
-        """Create or reconcile one manual firing without changing cadence.
-
-        Product eligibility must be checked before this method is invoked. The
-        owner definition is locked here so a concurrent pause/delete cannot
-        race the durable materialization.
-        """
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         _uuid("submission_id", submission_id, version=4)
@@ -1294,8 +1237,6 @@ class SchedulerRepository:
         lease_owner: str,
         states: tuple[OccurrenceState, ...],
     ) -> ScheduledOccurrence:
-        """Lock and verify one current, unexpired owner-scoped claim."""
-
         _claim_identity(
             owner_id=owner_id,
             occurrence_id=occurrence_id,
@@ -1430,8 +1371,6 @@ class SchedulerRepository:
         correlation_id: str,
         lease_seconds: int,
     ) -> JobRunRecord:
-        """Start a claim and insert/reconcile its exact fenced run row."""
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         _uuid("occurrence_id", occurrence_id, version=4)
@@ -1542,8 +1481,6 @@ class SchedulerRepository:
         error_code: str,
         retry_after_seconds: int,
     ) -> ScheduledOccurrence:
-        """Interrupt a running attempt if present and release its claim."""
-
         _required("owner_id", owner_id)
         _uuid("occurrence_id", occurrence_id, version=4)
         _uuid("lease_token", lease_token, version=4)
@@ -1642,8 +1579,6 @@ class SchedulerRepository:
         payload_digest: str,
         recover_reserved: bool = False,
     ) -> EffectReservationOutcome:
-        """Reserve/reconcile one effect under both current execution fences."""
-
         _claim_identity(
             owner_id=owner_id,
             occurrence_id=occurrence_id,
@@ -1706,7 +1641,7 @@ class SchedulerRepository:
                     claim_generation,
                 ),
             )
-            if inserted is None:  # pragma: no cover - locked PK cannot race
+            if inserted is None:  # pragma: no cover
                 raise PlaneError(
                     "effect reservation insert returned no row",
                     code="scheduler_record_invalid",
@@ -1787,8 +1722,6 @@ class SchedulerRepository:
         payload_digest: str,
         downstream_receipt_digest: str | None,
     ) -> EffectReservationOutcome:
-        """Publish one exact reservation under the current occurrence claim."""
-
         self._validate_effect_attempt(
             transaction,
             owner_id=owner_id,
@@ -2005,8 +1938,6 @@ class SchedulerRepository:
         auth_ref: str | None,
         retry_after_seconds: int,
     ) -> ScheduledOccurrence:
-        """Atomically settle one exact run row and its occurrence claim."""
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         _uuid("occurrence_id", occurrence_id, version=4)
@@ -2139,8 +2070,6 @@ class SchedulerRepository:
         payload_digest: str,
         publication: StagedChatPublication,
     ) -> EffectReservationOutcome:
-        """Atomically publish one staged conversation and its effect marker."""
-
         if not isinstance(publication, StagedChatPublication):
             raise ValueError("publication must be a StagedChatPublication")
         if publication.owner_id != owner_id:
@@ -2321,7 +2250,7 @@ class SchedulerRepository:
             """,
             (publication.committed_render_revision, publication.publication_id),
         )
-        if component_counts is None:  # pragma: no cover - aggregate invariant
+        if component_counts is None:  # pragma: no cover
             raise PlaneError(
                 "scheduled component count was unavailable",
                 code="scheduler_record_invalid",
@@ -2340,7 +2269,7 @@ class SchedulerRepository:
             """,
             (publication.conversation_id, owner_id),
         )
-        if message_count is None:  # pragma: no cover - aggregate invariant
+        if message_count is None:  # pragma: no cover
             raise PlaneError(
                 "scheduled message count was unavailable",
                 code="scheduler_record_invalid",
@@ -2481,17 +2410,6 @@ class SchedulerRepository:
             downstream_receipt_digest=None,
         )
 
-    # ------------------------------------------------------------------
-    # 088.007 optional job policy, episode admission and terminal Stop.
-    #
-    # A definition without a policy row keeps every pre-088.007 semantic;
-    # nothing below is consulted by the due scan, claims, runs or effects.
-    # Lock order: definition (scheduled_job) -> policy -> occurrence ->
-    # binding. The caller creates or locks the episode's persistent
-    # assignment BEFORE calling admission, which keeps the documented
-    # assignment-before-admission order of the assignment repository.
-    # ------------------------------------------------------------------
-
     def get_job_policy(
         self,
         transaction: Transaction,
@@ -2499,8 +2417,6 @@ class SchedulerRepository:
         owner_id: str,
         job_id: str,
     ) -> ScheduledJobPolicy | None:
-        """Read one owner-scoped policy row; ``None`` means legacy semantics."""
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         row = transaction.fetch_one(
@@ -2516,15 +2432,6 @@ class SchedulerRepository:
         policy: ScheduledJobPolicy,
         expected_version: int,
     ) -> ScheduledJobPolicy:
-        """Create (``expected_version`` 0) or replace a policy under version CAS.
-
-        Limits are validated by :class:`ScheduledJobPolicy` before any SQL.
-        ``admitted_runs``, ``terminal_stop`` and ``last_assignment_id`` are
-        scheduler-owned: a create must start them unset and a replace must
-        carry the observed values unchanged, so a charge is never lowered and
-        a Stop is never cleared through this method.
-        """
-
         if not isinstance(policy, ScheduledJobPolicy):
             raise ValueError("policy must be a ScheduledJobPolicy")
         if (
@@ -2620,12 +2527,6 @@ class SchedulerRepository:
         owner_id: str,
         job_id: str,
     ) -> tuple[str, ...]:
-        """Assignment ids bound to this job whose episode is still unresolved.
-
-        Delete precondition: a policy job may be deleted only when this is
-        empty. Completed and stopped episodes keep their bindings and charges.
-        """
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         return self._outstanding(transaction, owner_id=owner_id, job_id=job_id)
@@ -2644,16 +2545,6 @@ class SchedulerRepository:
         admitted_at: int,
         spend: int = 1,
     ) -> EpisodeAdmission:
-        """Bind one claimed occurrence to one episode and charge the allowance.
-
-        Admission, spend and binding commit together in the caller's
-        transaction. Every refusal (``policy_missing``, ``terminal_stop``,
-        ``episode_outstanding``, ``allowance_exhausted``) writes nothing. An
-        exact replay of a committed binding is ``replayed`` and charges nothing.
-        A stale claim, a foreign or resolved assignment, or a binding to a
-        different assignment fails closed with :class:`PlaneError`.
-        """
-
         _claim_identity(
             owner_id=owner_id,
             occurrence_id=occurrence_id,
@@ -2797,18 +2688,6 @@ class SchedulerRepository:
         expected_version: int,
         stopped_at: int,
     ) -> JobStopOutcome:
-        """Terminally stop one policy job without erasing history or charges.
-
-        Atomically: ``terminal_stop`` is set under version CAS, the definition
-        leaves ``active`` so the due scan never materializes it again, every
-        unstarted occurrence is cancelled through
-        :meth:`cancel_unstarted_occurrence`, and the still-outstanding episode
-        assignment ids are returned so the host stops each family. A repeat
-        Stop returns ``stopped=False`` with the same outstanding families.
-        Pausing a policy job is the ordinary status transition and never
-        touches the policy row.
-        """
-
         _required("owner_id", owner_id)
         _uuid("job_id", job_id, version=4)
         if (
@@ -2964,8 +2843,6 @@ def _scan_rows(
     position: tuple[object, str] | None,
     limit: int,
 ) -> list[Record]:
-    """Read a bounded circular keyset page using only code-owned SQL fragments."""
-
     predicate = "" if position is None else f"AND {columns} > (%s, %s)"
     values = parameters if position is None else (*parameters, *position)
     rows = list(transaction.fetch_all(query.format(position=predicate), (*values, limit)))
@@ -2983,8 +2860,6 @@ def _rotate_owners(
     limit: int,
     last_owner: str | None,
 ) -> tuple[list[tuple[ScheduledJob, Record]], str | None]:
-    """Select one eligible row per owner per round, retaining per-owner due order."""
-
     by_owner: dict[str, deque[tuple[ScheduledJob, Record]]] = {}
     for candidate in candidates:
         by_owner.setdefault(candidate[0].owner_id, deque()).append(candidate)

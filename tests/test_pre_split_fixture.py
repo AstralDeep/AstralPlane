@@ -1,4 +1,7 @@
-"""Synthetic pre-split fixture integrity and privacy tests."""
+"""Tests for the synthetic pre-split fixture (tests/fixtures/pre_split): digest-bound
+coverage of every durable cluster, baseline SQL identity, and partial-stage blob
+recovery.
+"""
 
 from __future__ import annotations
 

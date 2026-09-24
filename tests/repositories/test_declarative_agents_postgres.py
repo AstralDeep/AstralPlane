@@ -1,4 +1,7 @@
-"""Actual PostgreSQL lifecycle and isolation of owner-authored definitions."""
+"""Real-PostgreSQL tests for astralplane.repositories.agents and drafts:
+declarative-agent lifecycle, owner isolation, identity-lock ordering, and atomic
+rollback on host or metadata failure.
+"""
 
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -271,8 +274,6 @@ def test_receipt_capacity_reserves_both_retirement_transitions(declaration_db):
         value = command()
         created = apply(tx, value)
         active = apply(tx, command("activate", expected_revision=0, revision_id=value.revision_id))
-        # Existing receipt shape, synthetic bulk population only. Capacity is
-        # tested at its real bound; production constants are never reduced.
         tx.execute(
             "INSERT INTO user_agent_command_receipt(owner_user_id,agent_id,command_id,"
             "command_version,command,request_digest,result_state_revision) "
@@ -433,8 +434,6 @@ def test_every_legacy_identity_mutator_cannot_change_a_definition(declaration_db
         if method == "remove":
             assert calls[method]() is False
         else:
-            # PostgreSQL's exact kind FK also protects the raw executable
-            # revision method; its driver error is deliberately not swallowed.
             import psycopg2
 
             with (
@@ -475,7 +474,6 @@ def test_accepted_receipt_is_metadata_only_even_if_old_definition_is_corrupt(dec
         replay = repo.apply_declarative_command(tx, preparation=preparation)
         assert replay.replayed and replay.revision is None and replay.receipt == original.receipt
         assert rows(tx) == before
-        # A new selection still must prove the immutable definition bytes.
         with pytest.raises(RepositoryDataError):
             apply(tx, command("activate", expected_revision=0, revision_id=value.revision_id))
         assert rows(tx) == before
@@ -501,8 +499,6 @@ def test_actual_runtime_and_publication_kind_fks_refuse_declarative_revision(dec
     with declaration_db.transaction() as tx:
         seed_existing_agents(tx)
         result = apply(tx, command(owner_id="legacy-agent-owner"))
-        # Reuse otherwise-valid actual predecessor rows so the new kind FK,
-        # rather than an unrelated required field, is the refusal witness.
         if table == "agent_runtime_instance":
             tx.execute("DELETE FROM agent_runtime_request")
             sql = "UPDATE agent_runtime_instance SET agent_id=%s,revision_id=%s"
@@ -570,7 +566,6 @@ def test_create_before_publication_cannot_take_identity_before_its_owner_lock(de
                     display_name="Executable",
                     observed_at=1,
                 )
-                # The public publication composition takes this same lock next.
                 repo.lock_owner(tx, owner_id=value.owner_id)
             except RepositoryConflictError as exc:
                 return exc
@@ -582,8 +577,6 @@ def test_create_before_publication_cannot_take_identity_before_its_owner_lock(de
             future = workers.submit(run)
             assert ready.wait(5)
             _wait_for_lock(tx, identities["waiter"], blocker)
-            # A nonblocking witness detects the old identity→owner inversion
-            # without deliberately forming a database deadlock.
             from astralplane.repositories.agents import _AGENT_IDENTITY_LOCK_NAMESPACE
 
             assert tx.fetch_one(
@@ -631,7 +624,6 @@ def test_existing_executable_head_then_ownership_has_no_identity_lock_inversion(
             assert ready.wait(5)
             _wait_for_lock(tx, identities["waiter"], blocker)
             tx.execute("SET LOCAL lock_timeout='300ms'")
-            # Matches legacy go_live's actual head→CAS→ownership composition.
             with tx.savepoint("existing_identity"):
                 result = repo.upsert_ownership(
                     tx,
@@ -705,7 +697,7 @@ def test_owner_and_exact_state_losses_refuse_without_partial_mutation(declaratio
                 "VALUES (%s,'retired',clock_timestamp())",
                 (value.owner_id,),
             )
-            attempt = value  # even an accepted receipt still needs a current owner
+            attempt = value
         elif loss == "stale_parent":
             attempt = command("revise", expected_revision=0, parent_revision_id=str(uuid.uuid4()))
         elif loss == "stale_revision":

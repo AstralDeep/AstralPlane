@@ -1,4 +1,7 @@
-"""Public surface for the embedded AstralPlane durable-state boundary."""
+"""Public surface for the embedded AstralPlane durable-state boundary; re-exports
+api.py's runtime/repository factories plus blob_store, migrations, reconciliation,
+and purge, imported across AstralDeep's orchestrator and tests.
+"""
 
 from astralplane.api import (
     AgentRevisionRecord,

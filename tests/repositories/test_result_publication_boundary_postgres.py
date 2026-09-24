@@ -1,4 +1,6 @@
-"""Real legacy-stage evidence motivating fresh transactional Save publication."""
+"""Real-PostgreSQL test for astralplane.repositories.history and workspaces: a legacy
+parent-stage lock does not freeze bytes already reviewed onto the current canvas.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -15,7 +17,6 @@ from astralplane.repositories.workspaces import (
 
 
 def test_legacy_parent_stage_lock_does_not_freeze_reviewed_canvas_bytes(database):
-    """A retained diagnostic of supported legacy editing, not a changed policy."""
     owner, chat, publication = uid(), uid(), uid()
     canvas, publications = CanvasRepository(), PublicationRepository()
     with database.transaction() as tx:

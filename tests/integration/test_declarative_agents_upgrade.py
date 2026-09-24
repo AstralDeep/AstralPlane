@@ -1,4 +1,7 @@
-"""Populated 088.003-to-current upgrade, repeat, corruption, and transactional recovery."""
+"""Tests for astralplane.database.migrations: populated upgrade of the
+declarative-agents schema edge, preserving executable agent rows and refusing corrupt
+or missing predecessors.
+"""
 
 import uuid
 from dataclasses import replace
@@ -51,7 +54,6 @@ def current_runner(database):
 
 
 def seed_existing_agents(tx):
-    """Existing executable APIs produce the predecessor record shapes."""
     repo = AgentRepository()
     owner = "legacy-agent-owner"
     repo.create_agent(
@@ -158,8 +160,6 @@ def seed_existing_agents(tx):
         updates={"published_revision_id": good.revision_id},
         updated_at=2,
     )
-    # Valid predecessor publication-journal shape; no files, execution, or
-    # fabricated publication confirmation are implied by this claimed row.
     tx.execute(
         "INSERT INTO draft_artifact_publication(publication_id,draft_uuid,owner_user_id,"
         "source_state_revision,generation_claim_id,target_agent_id,target_revision_id,"
@@ -216,7 +216,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
                 assert row.pop("revision_kind") == "executable"
         for row in after["draft_agents"]:
             assert row.pop("published_revision_kind") == "executable"
-        # 088.008 adds two additive nullable columns to user_offline_grant.
+        # Later migration adds nullable cols here; excluded from diff
         for row in after["user_offline_grant"]:
             assert row.pop("max_admissions") is None
             assert row.pop("consumed_admissions") is None
@@ -225,7 +225,6 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
     ).already_current
-    # An older exact binary cannot silently accept or repair the new schema.
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="088.003")
     with db.transaction() as tx:

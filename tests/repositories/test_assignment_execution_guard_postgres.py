@@ -1,4 +1,7 @@
-"""The common execution guard serializes both fences in real PostgreSQL."""
+"""Real-PostgreSQL tests for the shared execution guard in
+astralplane.repositories.assignments and offline_grants: declared lock ordering,
+contention without deadlock, and rejection of lost or malformed fences.
+"""
 
 import time
 from concurrent.futures import ThreadPoolExecutor

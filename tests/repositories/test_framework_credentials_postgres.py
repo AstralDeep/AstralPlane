@@ -1,12 +1,6 @@
-"""Real-PostgreSQL evidence for framework-credential issuance and execution.
-
-The reference implementation this closes read the issuer's "is it still
-valid" state and computed the expiry BEFORE acquiring any lock, so a revoke
-or owner-retirement racing the mint could lose the race and still see a
-credential appear. Every test below proves the opposite: the re-check and
-the expiry computation happen strictly INSIDE the same owner advisory lock
-`create_operation` uses, so a concurrent mutation committed while `issue`
-waits on that lock is always visible to it.
+"""Real-PostgreSQL tests proving astralplane.repositories.framework_credentials.issue()
+re-checks validity and computes expiry inside the same owner lock create_operation()
+uses, closing a revoke-during-mint race.
 """
 
 from __future__ import annotations
@@ -46,7 +40,6 @@ def fresh_token_hash():
 
 
 def seed_session(transaction, owner_id, *, session_id=None):
-    """Create a real live web_session for `owner_id`; return its incarnation id."""
     sessions = SessionRepository()
     now = int(transaction.fetch_one("SELECT clock_timestamp() AS now")["now"].timestamp())
     record = sessions.put(
@@ -76,7 +69,6 @@ def issue(
     ttl_seconds=3600,
     token_hash=None,
 ):
-    """Return (record, token_hash) — the caller (not Plane) is the one who knows the hash."""
     token_hash = token_hash or fresh_token_hash()
     record = FrameworkCredentialRepository().issue(
         transaction,
@@ -123,7 +115,6 @@ def wait_for_lock(transaction, waiting_pid, blocking_pid):
 
 
 def test_public_framework_credential_contract_behaviors():
-    """No-argument contract matrix entry: real owner-scope, race, and failure evidence."""
     fixture = database.__wrapped__()
     db = next(fixture)
     try:
@@ -187,8 +178,7 @@ def test_issue_refuses_when_the_issuing_session_is_revoked_while_it_waits_on_the
             tx.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner,))
             holder_ready.set()
             assert release_holder.wait(5)
-            # The pre-lock defect this closes: this commits an issuer revocation
-            # WHILE `issue()` is already queued on the very lock it must re-check under.
+            # Revokes while issue() already waits on this same lock
             tx.execute("DELETE FROM web_session WHERE user_id=%s", (owner,))
 
     def waiter():
@@ -265,7 +255,6 @@ def test_expiry_is_computed_from_the_database_clock_inside_the_lock(database):
         before = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
         record, _ = issue(tx, owner, incarnation, ttl_seconds=100)
         after = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
-    # Rounding at the epoch-second boundary (round vs. truncate) allows +/-1s slack.
     assert int(before.timestamp()) + 99 <= record.expires_at <= int(after.timestamp()) + 101
 
 
@@ -283,7 +272,6 @@ def test_revoke_and_relist_are_owner_scoped(database):
             tx, owner_id=owner, credential_id=record.credential_id
         )
         assert revoked.revoked_at is not None
-        # Idempotent: revoking an already-revoked credential returns it unchanged.
         again = FrameworkCredentialRepository().revoke(
             tx, owner_id=owner, credential_id=record.credential_id
         )
@@ -354,8 +342,6 @@ def test_assert_current_execution_locks_the_row_and_refuses_revoked_expired_or_m
         incarnation = seed_session(tx, owner)
         live, live_hash = issue(tx, owner, incarnation)
         expired, expired_hash = issue(tx, owner, incarnation, ttl_seconds=1)
-    # Wait on the DATABASE's own clock (not the test runner's), with a generous
-    # margin: only clock_timestamp() as observed by Postgres governs expiry.
     until = time.monotonic() + 15
     while time.monotonic() < until:
         with database.transaction() as tx:
@@ -386,8 +372,6 @@ def test_assert_current_execution_locks_the_row_and_refuses_revoked_expired_or_m
     with database.transaction() as tx:
         fresh, fresh_hash = issue(tx, owner, incarnation)
     with database.transaction() as tx, pytest.raises(RepositoryConflictError):
-        # A caller-observed hash that no longer matches the persisted row is refused,
-        # not silently accepted against whatever the row currently holds.
         assert fresh_hash != "c" * 64
         FrameworkCredentialRepository().assert_current_execution(
             tx, observation=observation_for(tx, fresh, token_hash="c" * 64)
@@ -449,7 +433,6 @@ def test_issue_validation_refuses_bad_inputs_before_any_lock(database):
 
 
 def test_framework_one_shot_operation_can_be_claimed_and_executed_via_the_adapter(database):
-    """The T047 execution adapter: a framework-origin one-shot admits real execution."""
     from dataclasses import replace
 
     from astralplane.repositories.assignment_models import (
@@ -507,8 +490,6 @@ def test_framework_one_shot_operation_can_be_claimed_and_executed_via_the_adapte
     assert record.operation["authority"]["origin"] == "framework"
     assert record.operation["authority"]["reference_kind"] == "credential"
     assert record.assignment_id == assignment_id
-    # The execution guard (T047's adapter) admits the SAME authority the
-    # caller used to create the operation, re-verified fresh under lock.
     with database.transaction() as tx:
         fetched = repo.get_assignment(tx, owner_id=owner, assignment_id=assignment_id)
         data = {
@@ -520,8 +501,6 @@ def test_framework_one_shot_operation_can_be_claimed_and_executed_via_the_adapte
         }
         fresh_observation = observation_for(tx, credential, token_hash=token_hash)
         assert repo._lock_execution_authority(tx, data, fresh_observation) is True
-        # A stale/foreign session observation is never substitutable for the
-        # framework credential this operation was actually created under.
         assert (
             repo._lock_execution_authority(tx, data, session_observation(tx, owner_id=owner))
             is False

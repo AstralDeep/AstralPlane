@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.drafts: owner-scoped draft CRUD, generation-claim
+lease renewal and expiry recovery, attachment provenance fencing, and
+transition/publication replay semantics.
+"""
+
 from __future__ import annotations
 
 import uuid

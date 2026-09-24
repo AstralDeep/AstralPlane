@@ -1,4 +1,7 @@
-"""Real PostgreSQL finite queue cycles and ordinary owner mutation fences."""
+"""Real-PostgreSQL tests for astralplane.repositories.revocations: a held row prefix
+never hides later eligible work, deleted cursors don't restart a cycle, and
+concurrent enqueues can't extend a captured cycle.
+"""
 
 import pytest
 from test_assignments_postgres import database as database
@@ -71,7 +74,6 @@ def test_continuous_enqueues_cannot_extend_captured_cycle(tx, timestamp):
         assert page.ceiling == ceiling
     assert page.next_cursor is None
     assert visited == [r.queue_id for r in initial]
-    # The next cycle sees new work and can revisit every retained old record.
     restart = repo.page_for_administration(tx, limit=200)
     expected = sorted((*initial, *newcomers), key=lambda r: (r.enqueued_at, r.queue_id))
     assert restart.records == tuple(expected) and restart.next_cursor is None

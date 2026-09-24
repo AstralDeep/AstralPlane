@@ -1,4 +1,7 @@
-"""Guarded, repeat-safe PostgreSQL schema migration runner."""
+"""Guarded, repeat-safe PostgreSQL schema migration runner: MigrationRegistry chains
+every additive schema module (assignment_schema.py, guidance_schema.py,
+typesafe_credential_schema.py, ...) under checksum-pinned Migration edges.
+"""
 
 from __future__ import annotations
 
@@ -3055,8 +3058,6 @@ $astralplane_075_postcondition$
 
 @dataclass(frozen=True, slots=True)
 class Migration:
-    """One declared, repeat-safe database-only migration edge."""
-
     name: str
     source_revisions: tuple[str | None, ...]
     target_revision: str
@@ -3087,8 +3088,6 @@ class Migration:
 
 
 class MigrationRegistry:
-    """Immutable, non-branching migration graph with a canonical digest."""
-
     def __init__(
         self,
         migrations: tuple[Migration, ...],
@@ -3215,8 +3214,6 @@ class MigrationRegistry:
 
 @dataclass(frozen=True, slots=True)
 class MigrationReport:
-    """Detached evidence from one committed migration transaction."""
-
     source_revision: str | None
     target_revision: str
     applied_steps: tuple[str, ...]
@@ -3225,8 +3222,6 @@ class MigrationReport:
 
 
 class MigrationRunner:
-    """Serialize one declared migration path under a PostgreSQL advisory lock."""
-
     def __init__(
         self,
         database: PlaneDatabase,
@@ -4490,9 +4485,6 @@ FROM (
 ORDER BY object_kind, object_identity
 """.strip()
 
-# SHA-256 over the ordered rows returned by CURRENT_SCHEMA_STRUCTURE_QUERY.
-# This is generated only from a fresh canonical 089.001 schema and changes
-# whenever the structural verifier's expected catalog state changes.
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
     "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7"
 )
@@ -4601,8 +4593,6 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     ("088.005", ("b278966bf3a42458c72c1c859014c523a8da00d8acd0ee18a4e8ecb9f783835a",)),
     ("088.006", ("aa8dd06daf08fb11b92dc528c57a2e68072698e437a5b2f83933fdaecebe9f8b",)),
     ("088.007", ("eeb9ed13a85e58ce84be7f9d31324e815946b72a8168c67068257c0791e332db",)),
-    # Read from a live canonical 088.008 catalog with the 089.001 structure
-    # query, which is the query 089.001's predecessor check actually runs.
     ("088.008", ("c99faec61a4a8b4b362550cb12074aefb7e610e3775fa276daf9d2df1d7cbbe1",)),
 )
 
@@ -5016,10 +5006,7 @@ PLANE_SCHEMA_088_008_MIGRATION: Final = Migration(
     checksum=_statements_checksum(FRAMEWORK_CREDENTIAL_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_088_008,
 )
-# The 088.008 registry is pinned with the verifier checksums that were in force
-# at 088.008 -- before 089.001 extended the structure-digest tables. Recomputing
-# them from the current constants would silently follow any later drift, which
-# is the thing this pin exists to catch.
+# Pinned historical value; recomputing would hide drift
 PLANE_SCHEMA_088_008_SCHEMA_VERIFIER_CHECKSUM: Final = (
     "caed57601561aec9313d260a6efd4c731e2d6c3499d17423b830a0ee6f82bfdf"
 )

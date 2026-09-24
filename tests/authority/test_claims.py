@@ -1,4 +1,6 @@
-"""Durable receipt-claim, watermark, and external-anchor model tests."""
+"""Tests for astralplane.authority.claims: receipt-claim, watermark, and external-anchor
+field exactness, UTC normalization, and fail-closed identifier validation.
+"""
 
 from __future__ import annotations
 

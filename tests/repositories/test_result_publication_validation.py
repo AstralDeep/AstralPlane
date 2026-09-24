@@ -1,4 +1,7 @@
-"""Closed caller metadata is rejected before any I/O or partial form adoption."""
+"""Tests for astralplane.repositories.assignments, result_publication_models,
+result_publications, and workspaces: proposal shape, canvas/layout domain,
+content-size limits, and identity counters validate before any database access.
+"""
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -134,7 +137,6 @@ def test_complete_canvas_and_layout_domain_before_database(change):
 
 @pytest.mark.parametrize("kind", ["components", "layouts"])
 def test_aggregate_content_limit_stops_before_reading_later_payloads(kind):
-    """Reject accumulated bytes without traversing every remaining large row."""
     payload = {"text": "x" * 250_000}
     if kind == "components":
         entries = tuple(

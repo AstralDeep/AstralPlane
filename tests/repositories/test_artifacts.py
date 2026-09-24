@@ -1,4 +1,7 @@
-"""Focused contract tests for neutral artifact repositories."""
+"""Tests for astralplane.repositories.artifacts: pending/staged blob materialization,
+lease renewal, owner-scoped attachment reads, and message-attachment linking, backed
+by a fake transaction and database.
+"""
 
 from __future__ import annotations
 

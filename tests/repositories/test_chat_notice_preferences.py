@@ -1,4 +1,7 @@
-"""Owner-scoped notice choices merge with existing preference documents."""
+"""Tests for astralplane.repositories.preferences: chat notice-preference reads default
+safely, merge under an owner lock without clobbering other keys, and require typed
+boolean writes.
+"""
 
 import json
 from types import SimpleNamespace

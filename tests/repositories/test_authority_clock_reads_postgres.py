@@ -1,4 +1,7 @@
-"""Actual locked DB-clock observations; no authority renewal or synthetic IAM."""
+"""Real-PostgreSQL tests for astralplane.repositories.offline_grants and work_admission:
+execution and grant reads use the database's own clock under lock, never a mocked
+one, and never mutate or renew authority.
+"""
 
 import time
 import uuid
@@ -154,7 +157,6 @@ def test_execution_incomplete_or_expired_chain_refuses_without_repair(database, 
                 params,
             )
         before = slot_snapshot(tx, fence)
-        # The old assertion intentionally makes no capacity/clock guarantee.
         work.assert_current_execution(tx, fence)
         with pytest.raises(StaleWorkExecutionFenceError):
             work.assert_current_execution_lease(tx, fence)

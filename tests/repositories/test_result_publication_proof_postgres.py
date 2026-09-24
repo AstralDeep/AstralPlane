@@ -1,4 +1,7 @@
-"""Receipt/result provenance, current selection and authentic liability denials."""
+"""Tests for astralplane.repositories.assignments, guidance, and history: publication
+requires exact receipt/result provenance, and a retired selection or mismatched
+approval never earns or reconsumes a save.
+"""
 
 from dataclasses import replace
 
@@ -18,13 +21,7 @@ from astralplane.repositories.guidance import ExplicitNotesRepository
 from astralplane.repositories.guidance_models import GuidanceReference
 from astralplane.repositories.history import SessionRepository
 
-# Imported through the ``tests.*`` package path (the convention the rest of this
-# directory already uses for cross-directory helpers) rather than by bare module
-# name: ``test_declarative_agents_postgres`` itself imports ``tests.integration``,
-# so resolving it by bare name only works when pytest happens to have inserted
-# both ``tests/repositories`` and the repository root on ``sys.path``, which
-# depends on what else is being collected. The package path depends only on the
-# repository root, which ``python -m pytest`` always provides.
+# Must stay a tests.* import: bare name is sys.path-order dependent
 from tests.repositories.test_declarative_agents_postgres import apply
 from tests.repositories.test_declarative_agents_postgres import command as declaration
 

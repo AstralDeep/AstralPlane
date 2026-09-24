@@ -1,8 +1,6 @@
-"""Stable embedded composition facade for AstralPlane consumers.
-
-The public facade owns only local resource composition and lifecycle.  Product
-policy, authorization, transport handlers, and reconciliation hook behavior are
-supplied by the embedding application.
+"""Composition facade exposing factory functions for every AstralPlane repository plus
+PlaneRuntime's initialize/reconcile/transaction/close lifecycle; owns resource
+composition only, never authorization policy.
 """
 
 from __future__ import annotations
@@ -162,38 +160,26 @@ from astralplane.repositories.workspaces import WorkspaceRepository
 
 
 def create_history_repository() -> HistoryRepository:
-    """Create neutral conversation, message, and session stores."""
-
     return HistoryRepository()
 
 
 def create_assignment_repository() -> AssignmentRepository:
-    """Create owner-isolated persistent assignment journals and execution fences."""
-
     return AssignmentRepository()
 
 
 def create_identity_repository() -> IdentityRepository:
-    """Create neutral external-identity observation storage."""
-
     return IdentityRepository()
 
 
 def create_agent_repository() -> AgentRepository:
-    """Create agent registry, trust, revision, host, and runtime stores."""
-
     return AgentRepository()
 
 
 def create_agent_management_repository() -> AgentManagementRepository:
-    """Create bounded cross-domain reads for agent-management surfaces."""
-
     return AgentManagementRepository()
 
 
 def create_draft_agent_repository() -> DraftAgentRepository:
-    """Create owner-isolated draft authoring and publication storage."""
-
     return DraftAgentRepository()
 
 
@@ -203,8 +189,6 @@ def create_generated_agent_publication_repository(
     drafts: DraftAgentRepository | None = None,
     work_admission: WorkAdmissionRepository | None = None,
 ) -> GeneratedAgentPublicationRepository:
-    """Create the durable generated-agent publication journal coordinator."""
-
     return GeneratedAgentPublicationRepository(
         agents=agents,
         drafts=drafts,
@@ -213,62 +197,42 @@ def create_generated_agent_publication_repository(
 
 
 def create_tool_policy_state_repository() -> ToolPolicyStateRepository:
-    """Create neutral durable state consumed by product-owned tool policy."""
-
     return ToolPolicyStateRepository()
 
 
 def create_credential_repository() -> CredentialRepository:
-    """Create ciphertext-only user and remote-machine credential storage."""
-
     return CredentialRepository()
 
 
 def create_offline_grant_repository() -> OfflineGrantRepository:
-    """Create owner-isolated encrypted offline-grant storage."""
-
     return OfflineGrantRepository()
 
 
 def create_framework_credential_repository() -> FrameworkCredentialRepository:
-    """Create owner-isolated hash-only framework-credential storage."""
-
     return FrameworkCredentialRepository()
 
 
 def create_share_grant_repository() -> ShareGrantRepository:
-    """Create immutable snapshot share-grant storage."""
-
     return ShareGrantRepository()
 
 
 def create_chat_step_repository() -> ChatStepRepository:
-    """Create owner-isolated persistent conversation-step storage."""
-
     return ChatStepRepository()
 
 
 def create_conversation_file_repository() -> ConversationFileRepository:
-    """Create owner-isolated conversation file-link metadata storage."""
-
     return ConversationFileRepository()
 
 
 def create_saved_component_repository() -> SavedComponentRepository:
-    """Create publication-aware saved-component storage."""
-
     return SavedComponentRepository()
 
 
 def create_workspace_repository() -> WorkspaceRepository:
-    """Create neutral canvas, layout, snapshot, and publication stores."""
-
     return WorkspaceRepository()
 
 
 def create_artifact_repository() -> ArtifactRepository:
-    """Create neutral attachment, blob-metadata, and artifact stores."""
-
     return ArtifactRepository()
 
 
@@ -278,8 +242,6 @@ def create_attachment_materialization_coordinator(
     materializations: MaterializationRepository,
     blobs: StreamingBlobStore,
 ) -> AttachmentMaterializationCoordinator:
-    """Bind one transaction authority, materialization store, and configured blob root."""
-
     return AttachmentMaterializationCoordinator(
         database=database,
         repository=materializations,
@@ -288,140 +250,92 @@ def create_attachment_materialization_coordinator(
 
 
 def create_attachment_parser_repository() -> AttachmentParserRepository:
-    """Create global parser coverage with owner-isolated claim provenance."""
-
     return AttachmentParserRepository()
 
 
 def create_preferences_repository() -> PreferencesRepository:
-    """Create neutral feedback, onboarding, and personalization stores."""
-
     return PreferencesRepository()
 
 
 def create_knowledge_repository() -> KnowledgeRepository:
-    """Create interaction, quality, quarantine, and proposal state stores."""
-
     return KnowledgeRepository()
 
 
 def create_personalization_graph_repository() -> PersonalizationGraphRepository:
-    """Create owner-isolated memory-link and consolidation state storage."""
-
     return PersonalizationGraphRepository()
 
 
 def create_scheduler_repository() -> SchedulerRepository:
-    """Create durable operation, occurrence, and effect stores."""
-
     return SchedulerRepository()
 
 
 def create_background_task_repository() -> BackgroundTaskRepository:
-    """Create owner-isolated background-task compatibility storage."""
-
     return BackgroundTaskRepository()
 
 
 def create_work_admission_repository() -> WorkAdmissionRepository:
-    """Create durable operation admission, lifecycle, and fence storage."""
-
     return WorkAdmissionRepository()
 
 
 def create_maintenance_repository() -> MaintenanceRepository:
-    """Create maintenance-unit membership and lease-fencing storage."""
-
     return MaintenanceRepository()
 
 
 def create_tracked_job_repository() -> TrackedJobRepository:
-    """Create owner-isolated external tracked-job storage."""
-
     return TrackedJobRepository()
 
 
 def create_quality_audit_repository() -> QualityAuditRepository:
-    """Create owner-scoped qualification-run, evidence, and review storage."""
-
     return QualityAuditRepository()
 
 
 def create_harness_cleanup_repository() -> HarnessCleanupRepository:
-    """Create fixed-manifest synthetic verification cleanup storage."""
-
     return HarnessCleanupRepository()
 
 
 def create_tutorial_repository() -> TutorialRepository:
-    """Create revisioned global tutorial-content storage."""
-
     return TutorialRepository()
 
 
 def create_voice_repository() -> VoiceRepository:
-    """Create the voice-session metadata store without a media runtime."""
-
     return VoiceRepository()
 
 
 def create_remote_repository() -> RemoteRepository:
-    """Create the remote inventory and execution-metadata store."""
-
     return RemoteRepository()
 
 
 def create_remote_operation_proposal_repository() -> RemoteOperationProposalRepository:
-    """Create single-use remote-operation confirmation proposal storage."""
-
     return RemoteOperationProposalRepository()
 
 
 def create_revocation_repository() -> RevocationQueueRepository:
-    """Create the owner-attributed encrypted token-revocation queue."""
-
     return RevocationQueueRepository()
 
 
 def create_encrypted_llm_config_repository() -> EncryptedLLMConfigRepository:
-    """Create ciphertext-only user and system provider configuration storage."""
-
     return EncryptedLLMConfigRepository()
 
 
 def create_encrypted_typesafe_credential_repository() -> (
     EncryptedTypeSafeCredentialRepository
 ):
-    """Return the owner-scoped TypeSafe credential repository (089.001).
-
-    Ciphertext in, ciphertext out: the caller owns encryption, decryption
-    and every policy decision about the key.
-    """
-
     return EncryptedTypeSafeCredentialRepository()
 
 
 def create_audit_repository() -> AuditRepository:
-    """Create the append-only audit store."""
-
     return AuditRepository()
 
 
 def create_audit_retention_repository() -> AuditRetentionRepository:
-    """Create the authenticated audit-retention anchor store."""
-
     return AuditRetentionRepository()
 
 
 def create_outbox_store() -> PostgresOutboxStore:
-    """Create the durable outbox storage mechanics."""
-
     return PostgresOutboxStore()
 
 
 def create_purge_store() -> PostgresPurgeStore:
-    """Create the durable purge-tombstone storage mechanics."""
-
     return PostgresPurgeStore()
 
 
@@ -431,8 +345,6 @@ def create_durable_purge_executor(
     purge_store: PostgresPurgeStore,
     blobs: StreamingBlobStore,
 ) -> DurablePurgeExecutor:
-    """Compose purge from the app runtime/transaction source and its one blob store."""
-
     return DurablePurgeExecutor(
         database=database,
         store=purge_store,
@@ -446,8 +358,6 @@ def create_streaming_blob_store(
     io_chunk_bytes: int = 1024 * 1024,
     create_root: bool = True,
 ) -> StreamingBlobStore:
-    """Bind bounded streams, provisioning a safe missing suffix below a real ancestor."""
-
     return ExplicitRootStreamingBlobStore(
         root,
         io_chunk_bytes=io_chunk_bytes,
@@ -457,8 +367,6 @@ def create_streaming_blob_store(
 
 @dataclass(frozen=True, slots=True)
 class RepositoryCatalog:
-    """One discoverable set of stateless repositories for a composition."""
-
     identity: IdentityRepository
     assignments: AssignmentRepository
     agents: AgentRepository
@@ -501,8 +409,6 @@ class RepositoryCatalog:
     purge: PostgresPurgeStore
 
     def as_mapping(self) -> Mapping[str, object]:
-        """Return an immutable, name-addressable view for dependency wiring."""
-
         return MappingProxyType(
             {
                 "assignments": self.assignments,
@@ -550,8 +456,6 @@ class RepositoryCatalog:
 
 
 def create_repository_catalog() -> RepositoryCatalog:
-    """Create all default repositories without opening a connection."""
-
     agents = create_agent_repository()
     drafts = create_draft_agent_repository()
     work_admission = create_work_admission_repository()
@@ -607,8 +511,6 @@ def create_repository_catalog() -> RepositoryCatalog:
 
 @dataclass(frozen=True, slots=True)
 class PlaneHealth:
-    """Non-sensitive local readiness and lifecycle evidence."""
-
     compatibility: CompatibilityReport
     boot_status: BootStatus
     pool: PoolSnapshot
@@ -631,8 +533,6 @@ class PlaneHealth:
 
 
 class PlaneRuntime:
-    """Embedded, fail-closed lifecycle boundary for one AstralPlane instance."""
-
     def __init__(
         self,
         *,
@@ -655,8 +555,6 @@ class PlaneRuntime:
         self._consumer_version = consumer_version
 
     def inspect_compatibility(self) -> CompatibilityReport:
-        """Inspect the immutable producer contract against consumer inputs."""
-
         return inspect_compatibility(
             expected_contract_version=self._expected_contract_version,
             observed_schema_revision=self._observed_schema_revision,
@@ -664,13 +562,9 @@ class PlaneRuntime:
         )
 
     def inspect_baseline_compatibility(self) -> BaselineCompatibilityReport:
-        """Inspect fresh/existing PostgreSQL structure without changing it."""
-
         return inspect_baseline_compatibility(self._database)
 
     def initialize(self, *, expected_revision: str = SCHEMA_REVISION) -> InitializationReport:
-        """Migrate and run the exact required reconciliation plan before readiness."""
-
         compatibility = self.inspect_compatibility()
         if not compatibility.compatible:
             raise InitializationError(
@@ -685,8 +579,6 @@ class PlaneRuntime:
         context: Mapping[str, object],
         schema_revision: str = SCHEMA_REVISION,
     ) -> ReconciliationReport:
-        """Re-run the construction-pinned idempotent reconciliation hook set."""
-
         self._require_ready()
         return self._reconciler.run(schema_revision=schema_revision, context=context)
 
@@ -696,15 +588,11 @@ class PlaneRuntime:
         *,
         isolation: IsolationLevel | None = None,
     ) -> Iterator[Transaction]:
-        """Open a caller-owned transaction only after the plane is ready."""
-
         self._require_ready()
         with self._database.transaction(isolation=isolation) as transaction:
             yield transaction
 
     def health(self) -> PlaneHealth:
-        """Return detached readiness evidence without querying durable data."""
-
         return PlaneHealth(
             compatibility=self.inspect_compatibility(),
             boot_status=self._initializer.status,
@@ -712,8 +600,6 @@ class PlaneRuntime:
         )
 
     def close(self) -> None:
-        """Close the idle connection pool; repeated close calls are safe."""
-
         self._pool.close()
 
     def _require_ready(self) -> None:
@@ -741,8 +627,6 @@ def create_plane_runtime(
     observed_schema_revision: str = SCHEMA_REVISION,
     consumer_version: str = PACKAGE_VERSION,
 ) -> PlaneRuntime:
-    """Compose the canonical kernel around caller-supplied driver and hooks."""
-
     pool = ConnectionPool(driver_pool)
     database = PlaneDatabase(pool)
     migration_runner = MigrationRunner(
@@ -789,8 +673,6 @@ def create_postgres_runtime(
     connect_timeout_seconds: int = 10,
     application_name: str | None = None,
 ) -> PlaneRuntime:
-    """Create the canonical runtime while keeping psycopg construction inside Plane."""
-
     driver_pool = create_postgres_driver_pool(
         database_url,
         minimum_connections=minimum_connections,

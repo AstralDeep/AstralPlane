@@ -1,4 +1,7 @@
-"""Database-issued session identity survives rotation, never deletion/recreation."""
+"""Real-PostgreSQL tests for astralplane.repositories and history: a database-issued
+session identity survives refresh and resume but never a delete/recreate cycle, and
+consent grant/clock checks share one transaction.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace

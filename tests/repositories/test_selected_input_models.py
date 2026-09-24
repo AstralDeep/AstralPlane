@@ -1,4 +1,7 @@
-"""Closed selected-input identity domains, detached snapshots, no private text."""
+"""Tests for astralplane.repositories.guidance_models and selected_input_models:
+selected-input envelope round-trips detach private bindings, and closed
+identity/limit domains reject unordered or mismatched snapshots.
+"""
 
 from dataclasses import asdict, replace
 from uuid import uuid4

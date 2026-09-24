@@ -1,4 +1,7 @@
-"""Real PostgreSQL contracts for one-shot waits, control, reads and completion."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments: one-shot
+wait/wake/control transitions, retry and expiry bounds, concurrent-wake winner
+selection, and completion-payload validation.
+"""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -265,7 +268,6 @@ def test_one_shot_yield_retry_and_terminal_projection(tx, repo):
         repo.get_operation(tx, owner_id="owner", assignment_id=record.assignment_id).disposition
         == "retry_eligible"
     )
-    # Preserve the retry identity while making its existing due time claimable.
     tx.execute(
         "WITH due AS MATERIALIZED (SELECT clock_timestamp()-interval '1 second' AS at) "
         "UPDATE persistent_assignment SET next_wake_at=due.at,"

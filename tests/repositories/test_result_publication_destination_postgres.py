@@ -1,4 +1,7 @@
-"""Complete bounded destination reads, including legacy NULL-head mutations."""
+"""Real-PostgreSQL tests for astralplane.repositories.history and workspaces: a complete
+destination read is read-only and bounded, refuses before payload fetch when over
+budget, and never reveals content for a foreign or changed head.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace

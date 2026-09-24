@@ -1,4 +1,7 @@
-"""Partial-failure, owner-isolation, and filesystem safety tests for purge."""
+"""Tests for src/astralplane/purge.py: owner-isolated tombstone scheduling and
+reconciliation, and partial database/blob failure handling across the streaming
+executor.
+"""
 
 from __future__ import annotations
 
@@ -1296,7 +1299,6 @@ def test_blob_success_then_database_failure_never_reports_completion_and_recover
     blob_key = f"{scheduled.object_id}/file.bin"
     blobs.put(owner_id="owner-1", key=blob_key, content=b"sensitive")
     executor = DurablePurgeExecutor(database=database, store=store, blobs=blobs)
-    # The seeded typed tombstone is preexisting; load is transaction 1 and the final transition 2.
     database.fail_commit_numbers.add(2)
 
     with pytest.raises(RuntimeError, match="commit failure"):

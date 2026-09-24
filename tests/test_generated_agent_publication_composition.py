@@ -1,4 +1,7 @@
-"""Lock-order composition evidence for journal and immutable storage APIs."""
+"""Tests for the lock ordering between src/astralplane/immutable_bundle_store.py and
+repositories/generated_agent_publications.py: journal and filesystem work stay
+outside each other's commit.
+"""
 
 from __future__ import annotations
 
@@ -96,8 +99,6 @@ def test_split_stage_promote_and_recover_keep_db_work_outside_filesystem_lock(
         assert not in_filesystem_callback
         in_filesystem_callback = True
         try:
-            # Only local cancellation/revocation belongs in the callback.  The
-            # exact DB attempt was checked in the preceding transaction.
             events.append(f"fs:{boundary}")
         finally:
             in_filesystem_callback = False

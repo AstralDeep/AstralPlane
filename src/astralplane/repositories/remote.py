@@ -1,7 +1,6 @@
-"""Owner-isolated remote-machine and execution metadata persistence.
-
-Credentials, SSH, scheduler transport, polling, rendering, and notification
-delivery remain outside AstralPlane.
+"""Owner-isolated inventory of remote machines and their execution-attempt metadata. SSH
+transport, credentials, polling, and notification delivery stay with the caller; used
+by orchestrator/remote_machines.py.
 """
 
 from __future__ import annotations
@@ -87,8 +86,6 @@ class RemoteExecution:
 
 
 class RemoteRepository:
-    """Persist neutral inventory and execution observations under owner predicates."""
-
     def create_machine(self, transaction: Transaction, machine: RemoteMachine) -> RemoteMachine:
         row = transaction.fetch_one(
             """
@@ -253,12 +250,6 @@ class RemoteRepository:
         return row is not None
 
     def delete_owner(self, transaction: Transaction, *, owner_id: str) -> int:
-        """Delete all machines for an authorized account-retirement transaction.
-
-        Callers must delete the owner's tracked jobs first so foreign-key
-        protection cannot be bypassed or hidden.
-        """
-
         _required("owner_id", owner_id, 512)
         result = transaction.execute(
             "DELETE FROM remote_machine WHERE owner_user_id = %s",

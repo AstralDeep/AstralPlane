@@ -1,4 +1,6 @@
-"""088.006 immutable selected input metadata and declarative reverse references."""
+"""Additive immutable selected-input metadata and declarative reverse-reference schema,
+executed only by database/migrations.py's guarded registry.
+"""
 
 SELECTED_INPUT_SCHEMA_STATEMENTS = (
     """

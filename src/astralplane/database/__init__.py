@@ -1,4 +1,6 @@
-"""Public database kernel for AstralPlane."""
+"""Public database kernel for AstralPlane, re-exporting baseline.py, pool.py,
+postgres.py, and transaction.py.
+"""
 
 from astralplane.database.baseline import (
     BASELINE_MIGRATION_NAME,

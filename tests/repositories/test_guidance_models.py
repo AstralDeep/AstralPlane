@@ -1,4 +1,7 @@
-"""Closed guidance geometry, immutable replay identities and erasure capacity."""
+"""Tests for astralplane.repositories.guidance_models: skill/command/note definition
+bounds, canonical UTF-8 digesting, immutable replay identities, and
+guidance-index/manifest validation.
+"""
 
 import hashlib
 import json

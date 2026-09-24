@@ -1,4 +1,6 @@
-"""088.005 owner guidance storage, executed only by the guarded registry."""
+"""Additive owner guidance storage schema, executed only by database/migrations.py's
+guarded registry.
+"""
 
 GUIDANCE_SCHEMA_STATEMENTS = (
     (

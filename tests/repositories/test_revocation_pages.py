@@ -1,4 +1,7 @@
-"""Bounded revocation cycles retain unavailable work without prefix starvation."""
+"""Tests for astralplane.repositories.revocations: bounded, ordered, typed
+revocation-queue pages, cursor validation, and a cycle that cannot rewind, relabel,
+or silently end on a database failure.
+"""
 
 from dataclasses import FrozenInstanceError
 

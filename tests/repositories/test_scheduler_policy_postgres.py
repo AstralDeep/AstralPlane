@@ -1,9 +1,6 @@
-"""088.007 scheduled-job policy, episode admission and Stop on real PostgreSQL.
-
-FR-008 / FR-014 / SC-003 (T039, T040): finite allowance, one outstanding
-episode, terminal Stop with retained history, concurrent admission CAS,
-pause/last-run projection, and the policy-absent regression that pins the
-pre-088.007 recurrence semantics byte-for-byte.
+"""Real-PostgreSQL tests for astralplane.repositories.assignments and scheduler:
+policy-allowance admission, one-outstanding-episode enforcement, terminal Stop
+history, and the policy-absent legacy-recurrence regression.
 """
 
 from __future__ import annotations
@@ -94,7 +91,6 @@ def repo():
 
 
 def second_database(plane):
-    """A second real connection into the same private schema (another worker)."""
     import psycopg2
 
     connection = psycopg2.connect(plane[2])
@@ -155,7 +151,6 @@ def policy(job_id, **changes):
 
 
 def claimed(tx, repo, definition, *, worker="worker-1", owner_id=OWNER):
-    """Create one due occurrence and claim it exactly as the due scan would."""
     now = datetime.now(UTC)
     occurrence_id = uid()
     repo.create_occurrence(
@@ -189,7 +184,6 @@ def pending(tx, repo, definition):
 
 
 def started(tx, occurrence):
-    """Move a claimed occurrence to running the way an attempt start does."""
     tx.execute(
         "UPDATE scheduled_occurrence SET state='running', started_at=clock_timestamp() "
         "WHERE occurrence_id=%s AND claim_generation=%s AND lease_token=%s",
@@ -247,9 +241,6 @@ def test_current_scheduler_policy_structure_digest(database):
 
 @pytest.mark.parametrize("kind", ["cron", "interval", "one_shot"])
 def test_policy_absent_keeps_legacy_recurrence_semantics(database, repo, kind):
-    """FR-008: no policy row means the 060 cadence, run-now, last-run and
-    cancel paths behave exactly as before and admission writes nothing."""
-
     with database.transaction() as tx:
         definition = job(tx, repo, kind=kind, next_run_at=10)
         assert repo.get_job_policy(tx, owner_id=OWNER, job_id=definition.job_id) is None
@@ -400,7 +391,7 @@ def test_allowance_admits_until_exhausted_then_refuses_without_binding(database,
         current = repo.get_job_policy(tx, owner_id=OWNER, job_id=definition.job_id)
         assert (current.admitted_runs, current.max_runs, current.version) == (2, 2, 3)
         with pytest.raises(ValueError, match="admitted_runs"):
-            replace(current, version=4, max_runs=1)  # allowance can never drop below charges
+            replace(current, version=4, max_runs=1)
         raised = repo.put_job_policy(
             tx, policy=replace(current, version=4, max_runs=3), expected_version=3
         )
@@ -608,7 +599,7 @@ def test_concurrent_admission_two_workers_one_allowance_one_admission(database, 
         try:
             with other.transaction() as tx:
                 results["b"] = admit(tx, repo, definition, second, b)
-        except BaseException as error:  # surfaced by the assertion below
+        except BaseException as error:
             results["b"] = error
 
     thread = threading.Thread(target=worker_b)
@@ -617,7 +608,7 @@ def test_concurrent_admission_two_workers_one_allowance_one_admission(database, 
             results["a"] = admit(tx, repo, definition, first, a)
             thread.start()
             started.wait(5)
-            time.sleep(0.5)  # worker B is now blocked on the definition lock.
+            time.sleep(0.5)
             assert "b" not in results
         thread.join(10)
     finally:

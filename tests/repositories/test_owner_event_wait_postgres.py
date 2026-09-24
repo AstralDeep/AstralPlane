@@ -1,4 +1,7 @@
-"""Owner wait retires delivery authority while preserving authentic liabilities."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments and audit: owner wait
+is read-only in its prepare phase and retires claim delivery on finish, preserving
+issued charges and audit rollback together.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -245,8 +248,6 @@ def test_unstarted_work_is_explicitly_invalidated_and_only_unused_reservation_re
     if state == "reserved":
         reserve(repo, tx, values[4].fence, action)
     elif state in {"proposed", "approved"}:
-        # Qualified public proposal flows are covered by the neighboring suite;
-        # this fixture isolates wait's persisted action-state inventory.
         change_action(tx, action.action_id, lambda data: data.update(state=state))
     before = current(repo, tx, values[3])
     args = arguments(before)
@@ -611,8 +612,6 @@ def test_final_wait_reloads_actual_invalidation_set_after_read_only_prepare(tx, 
     args = arguments(record)
     assert repo.prepare_owner_event_wait(tx, **args).invalidated_action_ids == ()
     action = make_action(repo, tx, values[4].fence)
-    # put_action changes only the action ledger; a final prepare cannot reuse its
-    # earlier inventory merely because the assignment's counters still match.
     assert current(repo, tx, record).state_version == record.state_version
     final = repo.set_owner_event_wait(tx, **args)
     assert final.invalidated_action_ids == (action.action_id,)

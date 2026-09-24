@@ -1,4 +1,6 @@
-"""Authenticated audit-chain retention anchors and atomic prefix pruning."""
+"""Authenticated audit-chain retention anchors (HMAC-SHA256 by default) and atomic
+prefix pruning, persisted through repositories/audit.py's AuditRetentionRepository.
+"""
 
 from __future__ import annotations
 
@@ -22,8 +24,6 @@ from astralplane.repositories.audit import (
 
 
 class AnchorAuthenticator(Protocol):
-    """Configured audit trust mechanism; key material remains runtime-owned."""
-
     def sign(self, key_id: str, payload: bytes) -> bytes: ...
 
     def verify(self, key_id: str, payload: bytes, authentication: bytes) -> bool: ...
@@ -31,8 +31,6 @@ class AnchorAuthenticator(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HMACAnchorAuthenticator:
-    """Standard-library HMAC-SHA256 implementation over supplied key lookup."""
-
     key_resolver: Callable[[str], bytes]
 
     def sign(self, key_id: str, payload: bytes) -> bytes:
@@ -84,8 +82,6 @@ class AuditRetentionError(PlaneError):
 
 
 class AuditRetentionRepository:
-    """Persist anchors before deletion within one caller-owned transaction."""
-
     def load_anchor(
         self,
         transaction: Transaction,

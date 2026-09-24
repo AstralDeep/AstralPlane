@@ -1,4 +1,7 @@
-"""Bounded scheduler fairness against real PostgreSQL, without dispatching jobs."""
+"""Real-PostgreSQL tests for astralplane.repositories.scheduler: bounded fairness
+scanning rotates past held or refused owners without starving later eligible work,
+and malformed scan continuations are rejected.
+"""
 
 from __future__ import annotations
 
@@ -15,14 +18,12 @@ catalog_database = _catalog_database
 
 @pytest.fixture(autouse=True)
 def empty_scheduler(catalog_database):
-    """Keep every scenario independent within this module's private schema."""
     with catalog_database.database.transaction() as transaction:
         transaction.execute("DELETE FROM scheduled_occurrence")
         transaction.execute("DELETE FROM scheduled_job")
 
 
 def seed_jobs(catalog_database, *, occurrences=False, held_count=10, owners=None):
-    """Create older held work and one later eligible owner in this private schema."""
     database = catalog_database.database
     repository = catalog_database.catalog.scheduler
     prefix = uuid.uuid4().hex
@@ -81,7 +82,6 @@ def test_ten_held_older_jobs_do_not_exclude_later_eligible_owner(catalog_databas
 
 
 def claim_page(fixture, *, continuation=None, eligible=lambda job: True, limit=1, scan_limit=3):
-    """Invoke the actual repository with explicit bounded scan inputs."""
     with fixture.database.transaction() as transaction:
         return fixture.catalog.scheduler.materialize_and_claim_due_for_administration(
             transaction,
@@ -110,7 +110,6 @@ def test_refused_pages_advance_to_later_owner_and_wrap(catalog_database, occurre
         hint = batch.continuation
     assert [item.job.job_id for item in batch.claims] == [jobs[-1].job_id]
     assert {job.job_id for job in jobs[:-1]} <= set(seen)
-    # An older refused owner becomes eligible after the cursor has passed it.
     for _ in range(4):
         batch = claim_page(
             catalog_database,
@@ -134,7 +133,7 @@ def test_refused_pages_advance_to_later_owner_and_wrap(catalog_database, occurre
             scan_limit=32,
         ).claims
         == ()
-    )  # Reset does not bypass a live claim.
+    )
 
 
 @pytest.mark.parametrize("occurrences", [False, True])
@@ -179,7 +178,6 @@ def test_deleted_cursor_row_and_empty_scan_are_resettable_hints(catalog_database
         scan_limit=1,
     )
     assert [item.job.job_id for item in next_page.claims] == [jobs[2].job_id]
-    # A valid, nonexistent future tuple wraps to existing older data without adopting authority.
     future = DueScanContinuation(
         definition=(2**63 - 1, str(uuid.uuid4())),
         occurrence=(datetime(9999, 1, 1, tzinfo=UTC), str(uuid.uuid4())),
@@ -325,7 +323,6 @@ def test_locked_rows_and_same_cursor_workers_do_not_duplicate_claims(catalog_dat
     jobs = seed_jobs(catalog_database, occurrences=occurrences, held_count=3)
     connection = connect_fixture_database(os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"])
     with connection.cursor() as cursor:
-        # The identifier is owned by the existing private-schema fixture.
         assert catalog_database.schema.removeprefix("astralplane_fixture_").isalnum()
         cursor.execute(f'SET search_path TO "{catalog_database.schema}", pg_catalog')
         cursor.execute("SET statement_timeout = '1500ms'")
@@ -352,7 +349,6 @@ def test_locked_rows_and_same_cursor_workers_do_not_duplicate_claims(catalog_dat
                 )
                 assert len(second.claims) == 2
                 assert jobs[0].job_id not in {claim.job.job_id for claim in second.claims}
-            # Same initial cursor, and the first worker still owns its original row lock.
             first = repository.materialize_and_claim_due_for_administration(
                 transaction,
                 instance_id="first",

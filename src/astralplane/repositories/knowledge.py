@@ -1,8 +1,6 @@
-"""Interaction synthesis, quality, quarantine, and knowledge-proposal state.
-
-The tables in this module are system-wide evaluation state.  Methods that are
-not naturally owner-partitioned are named ``for_administration`` so AstralDeep
-must apply its administrator/system authorization and audit policy before use.
+"""System-wide interaction, quality-signal, quarantine, and knowledge-proposal state;
+not owner-partitioned, so callers apply their own admin authorization. Used by
+AstralDeep's feedback/repository.py for quality evaluation.
 """
 
 from __future__ import annotations
@@ -209,8 +207,6 @@ class InteractionRepository:
         response_time_ms: int | None,
         created_at: int,
     ) -> InteractionRecord:
-        """Record a system interaction with no user conversation attribution."""
-
         values = _interaction_values(
             agent_id=agent_id,
             tool_name=tool_name,
@@ -252,8 +248,6 @@ class InteractionRepository:
         *,
         interaction_ids: Sequence[int],
     ) -> tuple[InteractionRecord, ...]:
-        """Read an exact bounded interaction set in caller-supplied order."""
-
         identifiers = _positive_ids(interaction_ids, "interaction_ids", maximum=2000)
         rows = query.fetch_all(
             f"""
@@ -925,8 +919,6 @@ class KnowledgeProposalRepository:
 
 
 class KnowledgeRepository:
-    """Discoverable grouping of neutral knowledge-improvement state stores."""
-
     def __init__(self) -> None:
         self.interactions = InteractionRepository()
         self.quality_signals = QualitySignalRepository()

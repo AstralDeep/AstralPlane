@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.identity: subject-scoped identity upsert and
+reads, verified-external-identity atomicity and uniqueness, and nonce-replay
+rejection distinct from cross-owner conflicts.
+"""
+
 from __future__ import annotations
 
 import json

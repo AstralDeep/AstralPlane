@@ -1,4 +1,6 @@
-"""Structural issuing metadata is exact, paired and bound without granting IAM."""
+"""Tests for astralplane.repositories.history: issuing-metadata (issuer/client) fields
+are exact, paired, and bound to a session without themselves granting any authority.
+"""
 
 import hashlib
 import json

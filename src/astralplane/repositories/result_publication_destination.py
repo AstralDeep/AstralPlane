@@ -1,7 +1,6 @@
-"""Bounded complete current canvas, without allocating unbounded stored JSON.
-
-This is consistency, not publication permission. The host still owns current
-caller/original-session, exact result, selected-input and final clock checks.
+"""Reads a bounded, complete current canvas destination under owner/publication/chat
+lock order without allocating unbounded JSON. Consistency only, not publish
+authority; used by repositories/assignments.py and result_publications.py.
 """
 
 from __future__ import annotations
@@ -36,19 +35,6 @@ def read(
     expected_publication_id,
     maximum_bytes=1048576,
 ):
-    """Lock a complete current destination, then bound full rows before loading.
-
-    All scalars are copied/validated before SQL. Owner→publication→chat→sorted
-    canvas/layout locks use NOWAIT after the owner fence, preventing both legacy
-    lock orders from deadlocking. Chat's immediate FK excludes legacy NULL-head
-    inserts; public replacements preserve scope and take the child row lock.
-    Any failure rolls back this helper's locks in its savepoint. Success retains
-    locks until the caller's transaction ends; no rows or GUCs are changed.
-
-    The bound includes every stored column, not just JSON payload. Empty tuples
-    are a valid destination, but are not by themselves a publication proposal.
-    There is no truncation or fallback to another revision.
-    """
     if type(owner_id) is not str or type(conversation_id) is not str:
         raise RepositoryValidationError("invalid publication destination")
     a._text(owner_id)
@@ -130,7 +116,6 @@ def read(
                 and {row.layout_id for row in layouts} == identifiers["workspace_layout"]
             )
             for row in components:
-                # Old incomplete metadata is not permission to invent identities.
                 a._text(row.row_id, 512)
                 a._text(row.component_id, 512)
                 a._integer(row.position, 0)

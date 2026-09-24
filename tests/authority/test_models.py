@@ -1,4 +1,6 @@
-"""Neutral authority-binding model tests."""
+"""Tests for astralplane.authority.models: AgentAuthorityBinding immutability,
+generation fencing, provisioning-intent identity rules, and terminal-state exactness.
+"""
 
 from __future__ import annotations
 

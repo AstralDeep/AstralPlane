@@ -1,9 +1,6 @@
-"""088.007 optional scheduled-job policy and occurrence-to-assignment binding.
-
-Both tables are additive. A definition without a policy row keeps every
-pre-088.007 recurrence semantic; only Deep's policy-aware admission path reads
-these rows. Charges (``admitted_runs``) are never decremented and bindings are
-never rewritten, so Stop and Forget keep history.
+"""Additive optional scheduled-job policy and occurrence-to-assignment binding tables; a
+definition without a policy row keeps its pre-existing recurrence semantics, and
+charges are never decremented so history survives.
 """
 
 SCHEDULER_POLICY_SCHEMA_STATEMENTS = (

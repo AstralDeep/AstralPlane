@@ -1,4 +1,6 @@
-"""Stable saved-component repository facade tests."""
+"""Tests for astralplane.repositories.saved_components: the saved-component facade
+reuses publication-aware creation and preserves ordered, authoritative CAS reads.
+"""
 
 from __future__ import annotations
 

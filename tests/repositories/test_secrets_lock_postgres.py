@@ -1,4 +1,7 @@
-"""Real transaction-scoped config selection, writer exclusion and lock release."""
+"""Real-PostgreSQL tests for astralplane.repositories.secrets: a selected config row
+can't change until the selecting transaction ends, and an unrelated owner may still
+update while the selected row stays locked.
+"""
 
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -100,7 +103,6 @@ def test_wrong_or_missing_owner_never_adopts_other_config_and_has_no_gap_lock(da
         inserted = worker.submit(insert_missing).result(timeout=3)
         assert inserted.owner_id == missing
         assert repository.get_user_for_update(transaction, owner_id=owner) == original
-        # A missing selection grants no right to adopt a row created afterwards.
         assert inserted != original
 
 

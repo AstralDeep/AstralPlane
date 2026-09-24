@@ -1,4 +1,6 @@
-"""Bounded AsyncPlaneRuntime behavior without a database driver."""
+"""Tests for src/astralplane/async_runtime.py: AsyncPlaneRuntime's bounded worker
+admission, cancellation, and cross-loop closure, without a real database driver.
+"""
 
 from __future__ import annotations
 

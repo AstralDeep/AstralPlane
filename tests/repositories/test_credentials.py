@@ -1,4 +1,7 @@
-"""Ciphertext-only credential repository tests."""
+"""Tests for astralplane.repositories.credentials: user and machine ciphertext CRUD stay
+owner-scoped and redacted, with CAS-fenced rotation and a bounded re-encryption
+inventory.
+"""
 
 from __future__ import annotations
 

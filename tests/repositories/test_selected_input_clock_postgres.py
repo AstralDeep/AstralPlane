@@ -1,4 +1,7 @@
-"""One final DB observation bounds selected values and original authority time."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments, guidance, and
+history: a selected-input cutoff is bound by one final database-clock observation
+taken after any owner-lock wait, not the caller's own clock.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone, tzinfo

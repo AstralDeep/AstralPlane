@@ -1,7 +1,6 @@
-"""Closed, detached metadata commands for declarative agent authoring.
-
-These types carry no execution, consent, trust, or provider authority. The host
-validates the definition's product policy and current caller before committing.
+"""Detached command and receipt types for declarative agent authoring; carry no
+execution, consent, or provider authority of their own. Consumed by
+repositories/agents.py, which validates policy and caller before committing.
 """
 
 from __future__ import annotations
@@ -47,7 +46,6 @@ def _uuid(value: object, name: str) -> str:
 
 
 def definition_snapshot(value: object) -> tuple[Mapping[str, Any], str]:
-    """Validate storage geometry; inner capability/trigger policy belongs to Deep."""
     if not isinstance(value, Mapping) or type(value.get("version")) is not int:
         raise RepositoryValidationError("definition must be a versioned object")
     if value["version"] != 1:

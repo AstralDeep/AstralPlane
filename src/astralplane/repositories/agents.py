@@ -1,8 +1,6 @@
-"""Agent registry, trust, revision, host, and runtime-generation persistence.
-
-The repository owns only PostgreSQL mechanics and compare-and-set fences.
-AstralDeep remains responsible for identity policy, admission, lifecycle
-decisions, transport, process execution, and authorization.
+"""PostgreSQL persistence for agent registry, trust, revisions, host sessions, and
+runtime instances, fenced by compare-and-set predicates. Identity policy, admission,
+and lifecycle decisions stay with AstralDeep's orchestrator.
 """
 
 from __future__ import annotations
@@ -177,8 +175,6 @@ class AgentRuntimeInstanceRecord:
 
 @dataclass(frozen=True, slots=True)
 class AgentRuntimeExpiryCandidate:
-    """Bounded cross-owner watchdog discovery projected at database time."""
-
     runtime_instance_id: str
     owner_id: str
     state: str
@@ -204,19 +200,13 @@ class AgentRuntimeRequestRecord:
 
 @dataclass(frozen=True, slots=True)
 class AgentPolicyReconciliationResult:
-    """Detached evidence for one product-policy marker reconciliation."""
-
     policy_revision: str
     marker_changed: bool
     agents_marked_for_revalidation: int
 
 
 class AgentRepository:
-    """Caller-transactional agent state with explicit owner and CAS predicates."""
-
     def lock_owner(self, transaction: Transaction, *, owner_id: str) -> None:
-        """Serialize cross-table lifecycle writes for one opaque owner subject."""
-
         owner_id = _required_id(owner_id, "owner_id")
         transaction.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner_id,))
 
@@ -226,14 +216,6 @@ class AgentRepository:
         *,
         policy_revision: str,
     ) -> AgentPolicyReconciliationResult:
-        """Atomically advance the product policy marker and flag stale live agents.
-
-        The product supplies the opaque policy revision.  A transaction-scoped advisory lock
-        serializes all application instances; marker replay is an exact no-op.  The caller owns
-        commit/rollback and must invoke this explicitly authorized administrative operation before
-        admitting traffic.
-        """
-
         revision = _required_id(policy_revision, "policy_revision", maximum=512)
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -287,8 +269,6 @@ class AgentRepository:
             marker_changed=True,
             agents_marked_for_revalidation=result.rowcount,
         )
-
-    # -- legacy first-party ownership and trust -------------------------
 
     def upsert_ownership(
         self,
@@ -355,8 +335,6 @@ class AgentRepository:
         agent_id: str,
         owner_email: str,
     ) -> bool:
-        """Remove one exact legacy ownership row during authorized retirement."""
-
         agent_id = _required_id(agent_id, "agent_id", maximum=512)
         owner_email = _bounded_text(owner_email, "owner_email", maximum=1024)
         _lock_unbound_agent_identity(transaction, agent_id)
@@ -441,8 +419,6 @@ class AgentRepository:
         if row is None:
             raise RepositoryConflictError("declarative identity cannot inherit executable trust")
         return _trust(row)
-
-    # -- durable user-agent registry -----------------------------------
 
     def create_agent(
         self,
@@ -563,8 +539,6 @@ class AgentRepository:
         agent_id: str,
         for_update: bool = False,
     ) -> UserAgentRecord | None:
-        """Resolve whether an identifier is a user agent before its owner is known."""
-
         agent_id = _required_id(agent_id, "agent_id", maximum=512)
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -643,17 +617,7 @@ class AgentRepository:
             updates={"status": "disabled", "deleted_at": deleted_at, "updated_at": deleted_at},
         )
 
-    # -- declarative metadata lifecycle --------------------------------
-
     def lock_declarative_owner(self, transaction: Transaction, *, owner_id: str) -> None:
-        """Order: owner 79/state, selected assignments/actions, agent owner 0.
-
-        The host acquires any caller session lock before this method. Nothing in
-        this authoring boundary acquires new session, Work, or configuration locks
-        after the agent lock. Existing executable methods never take owner 79;
-        callers must not compose owner-0-first methods before this boundary.
-        Metadata permission remains a host obligation.
-        """
         owner_id = _required_id(owner_id, "owner_id")
         transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
         retired = transaction.fetch_one(
@@ -673,12 +637,6 @@ class AgentRepository:
         *,
         command: DeclarativeAgentCommand,
     ) -> DeclarativeAgentPreparation:
-        """Lock/read a closed command; accepted receipts precede new policy/CAS.
-
-        This preparation grants no authority and performs no writes. The host
-        validates current identity and policy, writes its audit in this same
-        transaction, calls apply, then rechecks its caller before committing.
-        """
         if type(command) is not DeclarativeAgentCommand:
             raise RepositoryValidationError("a typed declarative command is required")
         command = replace(command)
@@ -701,12 +659,8 @@ class AgentRepository:
             )
             if agent is None or agent.agent_kind != "declarative":
                 raise RepositoryDataError("accepted declarative head is unavailable")
-            # Accepted acknowledgement carries metadata only. Never re-open
-            # old content or apply today's definition policy to a receipt.
             return DeclarativeAgentPreparation(command, digest, agent, None, receipt, True)
 
-        # All source/target heads are one owner. Sorting also keeps future
-        # multi-head operations consistent with clone's existing lock order.
         heads = {}
         for identity in sorted({command.agent_id, command.source_agent_id} - {None}):
             _lock_agent_identity(transaction, identity)
@@ -804,12 +758,6 @@ class AgentRepository:
         *,
         preparation: DeclarativeAgentPreparation,
     ) -> DeclarativeAgentResult:
-        """Apply the prepared metadata transition and receipt as one savepoint.
-
-        A caught failure rolls back every write made here. Host audit lies in
-        the enclosing transaction: a failed final host guard must abort that
-        transaction. Returned DTOs are provisional until its commit succeeds.
-        """
         if type(preparation) is not DeclarativeAgentPreparation:
             raise RepositoryValidationError("a typed declarative preparation is required")
         with transaction.savepoint("agent_definition_" + uuid.uuid4().hex):
@@ -891,8 +839,6 @@ class AgentRepository:
                 if row is None:
                     raise RepositoryConflictError("declarative head mutation is stale")
                 agent = _user_agent(row)
-            # Revisions are immutable snapshots. Editing/retirement clears the
-            # selection and advances the head fence without rewriting history.
             result_revision_id = revision.revision_id if revision is not None else None
             row = transaction.fetch_one(
                 "INSERT INTO user_agent_command_receipt(owner_user_id,agent_id,command_id,"
@@ -911,8 +857,6 @@ class AgentRepository:
             )
             receipt = _declarative_receipt(row)
             return DeclarativeAgentResult(agent, revision, receipt, False)
-
-    # -- immutable revisions -------------------------------------------
 
     def create_revision(
         self,
@@ -1009,8 +953,6 @@ class AgentRepository:
             or result.promotion_token != promotion_token
         ):
             raise RepositoryConflictError("agent revision replay changed immutable fields")
-        # ``state`` and its transition timestamps are deliberately omitted:
-        # an exact create retry remains idempotent after the revision advances.
         return result
 
     def get_revision(
@@ -1090,8 +1032,6 @@ class AgentRepository:
         if row is None:
             raise RepositoryConflictError("agent revision state fence is stale")
         return _revision(row)
-
-    # -- host sessions --------------------------------------------------
 
     def create_host_session(
         self,
@@ -1188,8 +1128,6 @@ class AgentRepository:
             or result.accepted_at != accepted_at
         ):
             raise RepositoryConflictError("host session replay changed immutable fields")
-        # State, inventory, and last_seen_at may legitimately advance after
-        # creation and therefore are not part of the replay identity.
         return result
 
     def get_host_session(
@@ -1279,8 +1217,6 @@ class AgentRepository:
         if row is None:
             raise RepositoryConflictError("host-session state fence is stale")
         return _host_session(row)
-
-    # -- runtime instances ---------------------------------------------
 
     def create_runtime_instance(
         self,
@@ -1392,8 +1328,6 @@ class AgentRepository:
         runtime_instance_id: str,
         for_update: bool = False,
     ) -> AgentRuntimeInstanceRecord | None:
-        """Resolve a runtime before its owner is known to a trusted dispatcher."""
-
         runtime_instance_id = _uuid_text(runtime_instance_id, "runtime_instance_id")
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -1412,8 +1346,6 @@ class AgentRepository:
         runtime_instance_id: str,
         timeout_seconds: float,
     ) -> AgentRuntimeInstanceRecord | None:
-        """Lock one still-starting runtime only after its database-time deadline."""
-
         owner_id = _required_id(owner_id, "owner_id")
         runtime_instance_id = _uuid_text(runtime_instance_id, "runtime_instance_id")
         timeout = _bounded_timeout(timeout_seconds, maximum=300)
@@ -1439,8 +1371,6 @@ class AgentRepository:
         runtime_instance_id: str,
         timeout_seconds: float,
     ) -> AgentRuntimeInstanceRecord | None:
-        """Lock one live runtime only after its database-time heartbeat deadline."""
-
         owner_id = _required_id(owner_id, "owner_id")
         runtime_instance_id = _uuid_text(runtime_instance_id, "runtime_instance_id")
         timeout = _bounded_timeout(timeout_seconds, maximum=60)
@@ -1466,13 +1396,6 @@ class AgentRepository:
         liveness_timeout_seconds: float,
         limit: int = 1000,
     ) -> tuple[AgentRuntimeExpiryCandidate, ...]:
-        """Discover expired runtimes across owners without acquiring mutable locks.
-
-        A caller must still use the owner-scoped locking selector for the returned
-        reason inside its settlement transaction.  Both discovery and that final
-        recheck use PostgreSQL time, so host-clock skew cannot create an expiry.
-        """
-
         startup_timeout = _bounded_timeout(startup_timeout_seconds, maximum=300)
         liveness_timeout = _bounded_timeout(liveness_timeout_seconds, maximum=60)
         limit = _bounded_limit(limit, maximum=2000)
@@ -1578,8 +1501,6 @@ class AgentRepository:
         owner_id: str,
         limit: int = 500,
     ) -> tuple[AgentRuntimeInstanceRecord, ...]:
-        """Return at most one newest runtime generation for each owner agent."""
-
         owner_id = _required_id(owner_id, "owner_id")
         limit = _bounded_limit(limit, maximum=2000)
         rows = transaction.fetch_all(
@@ -1643,8 +1564,6 @@ class AgentRepository:
         if row is None:
             raise RepositoryConflictError("runtime instance state fence is stale")
         return _runtime_instance(row)
-
-    # -- request generations -------------------------------------------
 
     def create_runtime_request(
         self,
@@ -1734,8 +1653,6 @@ class AgentRepository:
         request_id: str,
         for_update: bool = False,
     ) -> AgentRuntimeRequestRecord | None:
-        """Resolve a runtime request before its owner is known to a trusted dispatcher."""
-
         request_id = _uuid_text(request_id, "request_id")
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -1756,8 +1673,6 @@ class AgentRepository:
         for_update: bool = False,
         limit: int = 500,
     ) -> tuple[AgentRuntimeRequestRecord, ...]:
-        """List owner-attributed request generations for lifecycle settlement."""
-
         owner_id = _required_id(owner_id, "owner_id")
         runtime_instance_id = (
             None
@@ -2104,9 +2019,6 @@ def _trust(row: Mapping[str, Any]) -> AgentTrustRecord:
 
 
 def _lock_agent_identity(transaction: Transaction, agent_id: str) -> None:
-    # Serialize the otherwise absent-row race with legacy trust/ownership
-    # writers. The lock precedes a new SQL statement/snapshot; putting this
-    # inside the INSERT would retain a pre-wait READ COMMITTED snapshot.
     transaction.execute(
         "SELECT pg_advisory_xact_lock(%s,hashtext(%s))",
         (_AGENT_IDENTITY_LOCK_NAMESPACE, agent_id),
@@ -2114,11 +2026,6 @@ def _lock_agent_identity(transaction: Transaction, agent_id: str) -> None:
 
 
 def _lock_unbound_agent_identity(transaction: Transaction, agent_id: str) -> None:
-    # Existing head identities/kinds are immutable through the public API.
-    # Do not invert a legacy head→ownership transition against identity→head.
-    # If absent, serialize insertion; the mutation's NEXT statement rechecks
-    # kind after any wait. Composed callers must acquire owner locks first and
-    # order multiple identities canonically; these legacy methods never do so.
     transaction.execute(
         "SELECT pg_advisory_xact_lock(%s,hashtext(%s)) WHERE NOT EXISTS "
         "(SELECT 1 FROM user_agent WHERE agent_id=%s)",

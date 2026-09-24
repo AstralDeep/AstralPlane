@@ -1,4 +1,7 @@
-"""Workspace, canvas, layout, snapshot, and atomic publication persistence."""
+"""PostgreSQL persistence for workspace canvases, layouts, snapshots, and atomic
+assistant-result publication rebases. Used by orchestrator/workspace.py,
+orchestrator/work_publication.py, and orchestrator/history.py.
+"""
 
 from __future__ import annotations
 
@@ -114,8 +117,6 @@ class PublicationStageSummary:
 
 @dataclass(frozen=True, slots=True)
 class PublicationRebaseComponent:
-    """One complete canvas row for an assistant-result stage rebase."""
-
     row_id: str
     component_id: str
     payload: Any
@@ -126,8 +127,6 @@ class PublicationRebaseComponent:
 
 @dataclass(frozen=True, slots=True)
 class PublicationRebaseLayout:
-    """One complete layout row for an assistant-result stage rebase."""
-
     layout_key: str
     position: int
     tree: Any
@@ -135,8 +134,6 @@ class PublicationRebaseLayout:
 
 @dataclass(frozen=True, slots=True)
 class PublicationAssistantContentRecord:
-    """The final committed assistant message for one owner publication."""
-
     message_id: int
     conversation_id: str
     owner_id: str
@@ -529,8 +526,6 @@ class CanvasRepository:
         row_id: str,
         for_update: bool = False,
     ) -> CanvasComponentRecord | None:
-        """Resolve one owner row only when it belongs to the visible chat head."""
-
         owner_id = _required_id(owner_id, "owner_id")
         row_id = _required_id(row_id, "row_id")
         if not isinstance(for_update, bool):
@@ -569,8 +564,6 @@ class CanvasRepository:
         committed_render_revision: int,
         expected_base_render_revision: int,
     ) -> tuple[CanvasComponentRecord, ...]:
-        """List one still-staged complete canvas under its exact publication fence."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id, revision = _scope(
@@ -621,8 +614,6 @@ class CanvasRepository:
         committed_render_revision: int,
         require_state: str | None = None,
     ) -> tuple[CanvasComponentRecord, ...]:
-        """Read an exact owner publication view even after the chat head advances."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id, revision = _scope(
@@ -702,8 +693,6 @@ class CanvasRepository:
         conversation_id: str | None = None,
         limit: int = 1000,
     ) -> tuple[CanvasComponentRecord, ...]:
-        """List visible head components for one owner with an optional chat filter."""
-
         owner_id = _required_id(owner_id, "owner_id")
         if conversation_id is not None:
             conversation_id = _required_id(conversation_id, "conversation_id")
@@ -740,8 +729,6 @@ class CanvasRepository:
         owner_id: str,
         row_id: str,
     ) -> CanvasComponentRecord | None:
-        """Delete one revision-zero current row and return its typed identity."""
-
         owner_id = _required_id(owner_id, "owner_id")
         row_id = _required_id(row_id, "row_id")
         result = transaction.execute(
@@ -862,8 +849,6 @@ class CanvasRepository:
         owner_id: str,
         conversation_id: str,
     ) -> bool:
-        """Recompute the revision-zero canvas-presence bit under owner authority."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         result = transaction.execute(
@@ -1029,8 +1014,6 @@ class LayoutRepository:
         committed_render_revision: int,
         expected_base_render_revision: int,
     ) -> tuple[LayoutRecord, ...]:
-        """List one still-staged layout view under its exact publication fence."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id, revision = _scope(
@@ -1080,8 +1063,6 @@ class LayoutRepository:
         committed_render_revision: int,
         require_state: str | None = None,
     ) -> tuple[LayoutRecord, ...]:
-        """Read an exact owner publication layout after the head advances."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id, revision = _scope(
@@ -1351,10 +1332,10 @@ class WorkspaceSnapshotRepository:
             """,
             (conversation_id, owner_id),
         )
-        if row is None:  # pragma: no cover - aggregate SELECT always returns one row
+        if row is None:  # pragma: no cover
             raise RepositoryDataError("workspace snapshot count returned no row")
         count = int(_row_value(row, "snapshot_count"))
-        if count < 0:  # pragma: no cover - PostgreSQL COUNT invariant
+        if count < 0:  # pragma: no cover
             raise RepositoryDataError("workspace snapshot count is negative")
         return count
 
@@ -1594,8 +1575,6 @@ class PublicationRepository:
         publication_id: str,
         for_update: bool = False,
     ) -> PublicationRecord | None:
-        """Resolve a publication when the trusted caller does not yet know its chat."""
-
         owner_id = _required_id(owner_id, "owner_id")
         publication_id = _required_id(publication_id, "publication_id")
         if not isinstance(for_update, bool):
@@ -1619,8 +1598,6 @@ class PublicationRepository:
         owner_id: str,
         publication_id: str,
     ) -> PublicationAssistantContentRecord | None:
-        """Return the final assistant content authenticated by a committed publication."""
-
         owner_id = _required_id(owner_id, "owner_id")
         publication_id = _required_id(publication_id, "publication_id")
         row = query.fetch_one(
@@ -1696,8 +1673,6 @@ class PublicationRepository:
         conversation_id: str,
         publication_id: str,
     ) -> PublicationStageSummary:
-        """Lock and summarize every row belonging to one staged publication."""
-
         publication = self.get(
             transaction,
             owner_id=owner_id,
@@ -1831,13 +1806,6 @@ class PublicationRepository:
         layouts: Sequence[PublicationRebaseLayout],
         append_conflict_notice: bool,
     ) -> PublicationStageSummary:
-        """Atomically replace and advance one assistant-result stage.
-
-        The caller retains merge policy and commits the returned stage with
-        :meth:`commit_at_head` in the same transaction.  This method owns the
-        row locks, deterministic completeness checks, and exact replay fence.
-        """
-
         operation = "publication.rebase_assistant_stage"
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
@@ -2110,12 +2078,7 @@ class PublicationRepository:
             ),
             None,
         )
-        # Component row UUIDs are storage identities, not rebase-generation
-        # semantics.  A caller may deterministically rebuild the same merged
-        # canvas with fresh row UUIDs after a retry (or when an overlapping
-        # stage's original numeric revision already equals ``next_revision``).
-        # Fence replay by the stable component identity and complete payload
-        # instead; retaining the already-locked rows is the write-free replay.
+        # UUIDs vary per retry; compare semantic fields only
         current_component_semantics = tuple(
             component[1:] for component in current_components
         )
@@ -2153,12 +2116,7 @@ class PublicationRepository:
                 normalized_layouts,
                 next_revision,
             )
-        # ``publication_rebase_count`` is the durable application marker.  A
-        # freshly staged result can legitimately already use ``next_revision``
-        # when its acceptance commit is still the current head; the numeric
-        # revision alone therefore cannot distinguish first application from
-        # a changed replay.  Once this method replaces the stage it advances
-        # the marker below, and only exact semantic replay remains legal.
+        # Revision alone can't tell first apply from changed replay
         if publication.publication_rebase_count > 0:
             raise RepositoryConflictError(
                 "assistant-result rebase generation was reused with different semantics",
@@ -2428,8 +2386,6 @@ class PublicationRepository:
         committed_at: datetime,
         updated_at: int,
     ) -> PublicationRecord:
-        """Publish one locked stage against an exact conversation-head fence."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id = _required_id(publication_id, "publication_id")
@@ -2660,8 +2616,6 @@ class PublicationRepository:
 
 
 class WorkspaceRepository:
-    """Grouping of neutral workspace stores without transaction ownership."""
-
     def __init__(self) -> None:
         self.canvas = CanvasRepository()
         self.layouts = LayoutRepository()

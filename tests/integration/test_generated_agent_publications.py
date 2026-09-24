@@ -1,4 +1,7 @@
-"""Live PostgreSQL evidence for generated-agent publication journaling."""
+"""Live-PostgreSQL tests for astralplane.repositories.generated_agent_publications:
+crash/commit/rollback durability, reconcilable-inventory fairness, and
+begin/replay/claim-renewal fencing.
+"""
 
 from __future__ import annotations
 
@@ -490,9 +493,6 @@ def test_live_postgres_validation_evidence_survives_crash_and_commit_rollback(
     assert draft_after_rollback.published_revision_id is None
     assert draft_after_rollback.validation_report == RESULT_METADATA.validation_report
 
-    # Simulate startup recovery after the publisher dies post-promotion: retire
-    # the abandoned execution, bind the exact designated recovery child, and
-    # consume the durable result values through a fresh repository instance.
     _terminalize(fixture, seeded.attempt, state=OperationState.FAILED)
     with fixture.database.transaction() as transaction:
         prepared_revision = fixture.agents.get_revision(
@@ -841,7 +841,7 @@ def test_two_postgres_reconcilers_converge_on_one_designated_child_attempt(
                 )
             with guard:
                 successes.append(result)
-        except BaseException as exc:  # pragma: no cover - diagnostic retention
+        except BaseException as exc:  # pragma: no cover
             with guard:
                 failures.append(exc)
 

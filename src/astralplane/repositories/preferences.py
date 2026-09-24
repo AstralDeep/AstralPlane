@@ -1,4 +1,7 @@
-"""Feedback, onboarding-state, personalization, and consent persistence."""
+"""Feedback, onboarding-state, personalization profile/memory, theme, and
+data-sharing-consent persistence. Grouped behind PreferencesRepository; used by
+AstralDeep's feedback, onboarding, and personalization repository modules.
+"""
 
 from __future__ import annotations
 
@@ -57,8 +60,6 @@ class FeedbackRecord:
 
 @dataclass(frozen=True, slots=True)
 class FeedbackCursor:
-    """Opaque-to-callers keyset position for descending feedback pages."""
-
     created_at: datetime
     feedback_id: str
 
@@ -132,8 +133,6 @@ class PersonaRecord:
 
 @dataclass(frozen=True, slots=True)
 class ThemePreferenceRecord:
-    """One bounded theme document detached from generic user preferences."""
-
     owner_id: str
     theme: Mapping[str, Any]
     updated_at: int | None
@@ -289,13 +288,6 @@ def _persona(row: Mapping[str, Any]) -> PersonaRecord:
 
 @dataclass(frozen=True, slots=True)
 class DataSharingAcknowledgmentRecord:
-    """One owner's acknowledgment of the third-party data-sharing notice.
-
-    ``first_acknowledged_at`` survives every later acknowledgment so an audit
-    can tell when the owner first consented, even after a notice version bump
-    moved ``acknowledged_at`` forward.
-    """
-
     owner_id: str
     notice_version: str
     acknowledged_at: datetime
@@ -479,8 +471,6 @@ class FeedbackRepository:
         component_id: str | None,
         cutoff: datetime,
     ) -> FeedbackRecord | None:
-        """Return the newest active feedback for one exact owner/target window."""
-
         owner_id = _required_id(owner_id, "owner_id")
         correlation_id = _optional_id(correlation_id, "correlation_id")
         component_id = _optional_id(component_id, "component_id")
@@ -515,8 +505,6 @@ class FeedbackRepository:
         comment_safety_reason: str | None,
         updated_at: datetime,
     ) -> FeedbackRecord | None:
-        """Amend one active row with owner, lifecycle, and timestamp fencing."""
-
         owner_id = _required_id(owner_id, "owner_id")
         feedback_id = _required_id(feedback_id, "feedback_id")
         expected_updated_at = _aware_time(expected_updated_at, "expected_updated_at")
@@ -589,8 +577,6 @@ class FeedbackRepository:
         cursor: FeedbackCursor | None = None,
         limit: int = 50,
     ) -> FeedbackPage:
-        """Return one filtered owner page using a typed descending keyset cursor."""
-
         owner_id = _required_id(owner_id, "owner_id")
         if lifecycle not in _FEEDBACK_LIFECYCLES:
             raise RepositoryValidationError("feedback lifecycle is unsupported")
@@ -672,8 +658,6 @@ class FeedbackRepository:
         since: datetime,
         limit: int = 500,
     ) -> tuple[FeedbackCommentCandidate, ...]:
-        """Return the bounded cross-owner pre-pass workload for an admin caller."""
-
         since = _aware_time(since, "since")
         limit = _bounded_limit(limit, maximum=1000)
         rows = query.fetch_all(
@@ -1007,8 +991,6 @@ class PersonalizationRepository(ExplicitNotesRepository):
         updated_at: int,
         expected_updated_at: int,
     ) -> PersonalizationProfileRecord:
-        """Reset mutable profile fields while preserving creation and dreaming state."""
-
         owner_id = _required_id(owner_id, "owner_id")
         expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
         updated_at = _non_negative_int(updated_at, "updated_at")
@@ -1206,8 +1188,6 @@ class PersonalizationRepository(ExplicitNotesRepository):
         updated_at: int,
         expected_updated_at: int,
     ) -> MemoryRecord | None:
-        """CAS-update one owner's temporal memory bounds."""
-
         owner_id = _required_id(owner_id, "owner_id")
         memory_id = _required_id(memory_id, "memory_id")
         valid_from = (
@@ -1265,8 +1245,6 @@ class PersonalizationRepository(ExplicitNotesRepository):
         updated_at: int,
         expected_updated_at: int,
     ) -> MemoryRecord | None:
-        """CAS-update memory content and its caller-produced integrity signature."""
-
         owner_id = _required_id(owner_id, "owner_id")
         memory_id = _required_id(memory_id, "memory_id")
         value = _bounded_text(value, "value", maximum=16384)
@@ -1304,8 +1282,6 @@ class PersonalizationRepository(ExplicitNotesRepository):
         memory_id: str,
         expected_updated_at: int,
     ) -> bool:
-        """Hard-delete exactly one owner row at the caller's observed version."""
-
         owner_id = _required_id(owner_id, "owner_id")
         memory_id = _required_id(memory_id, "memory_id")
         expected_updated_at = _non_negative_int(expected_updated_at, "expected_updated_at")
@@ -1403,8 +1379,6 @@ class PersonalizationRepository(ExplicitNotesRepository):
 
 
 class ThemePreferenceRepository:
-    """Owner-scoped theme persistence that preserves unrelated preferences."""
-
     _SELECT = (
         "SELECT user_id, preferences, updated_at FROM user_preferences "
         "WHERE user_id = %s"
@@ -1427,8 +1401,6 @@ class ThemePreferenceRepository:
         owner_id: str,
         theme: Mapping[str, object],
     ) -> ThemePreferenceRecord:
-        """Replace only the theme key under a row lock and preserve other keys."""
-
         owner_id = _required_id(owner_id, "owner_id")
         if not isinstance(theme, Mapping):
             raise RepositoryValidationError("theme must be a JSON object")
@@ -1494,18 +1466,6 @@ class ThemePreferenceRepository:
 
 
 class DataSharingAcknowledgmentRepository:
-    """Owner-scoped record that a data-sharing notice version was accepted.
-
-    This is consent evidence, not a setting: there is no delete path, because
-    the fact that an owner consented on a date does not stop being true when
-    they later clear a credential. Account-level purge flows remove it with the
-    rest of the owner's data.
-
-    "Acknowledged" means the stored ``notice_version`` equals the version the
-    product is currently showing. Bumping the notice text therefore requires a
-    fresh acknowledgment rather than silently inheriting the old one.
-    """
-
     _FIELDS = "user_id, notice_version, acknowledged_at, first_acknowledged_at"
 
     def get_user(
@@ -1530,12 +1490,6 @@ class DataSharingAcknowledgmentRepository:
         notice_version: str,
         at: datetime,
     ) -> DataSharingAcknowledgmentRecord:
-        """Upsert the owner's acknowledgment, preserving the first one.
-
-        ``first_acknowledged_at`` is taken from the existing row on conflict, so
-        re-acknowledging -- whether the same version or a newer one -- never
-        rewrites when the owner first consented.
-        """
         owner = _required_id(owner_id, "owner_id")
         version = _bounded_text(notice_version, "notice_version", maximum=64)
         moment = _acknowledged_time(at)
@@ -1567,15 +1521,12 @@ class DataSharingAcknowledgmentRepository:
         owner_id: str,
         notice_version: str,
     ) -> bool:
-        """True only when the owner accepted this exact notice version."""
         version = _bounded_text(notice_version, "notice_version", maximum=64)
         record = self.get_user(executor, owner_id=owner_id)
         return record is not None and record.notice_version == version
 
 
 class PreferencesRepository:
-    """Grouping of preferences stores without connection or policy ownership."""
-
     def __init__(self) -> None:
         self.skills = SkillsRepository()
         self.feedback = FeedbackRepository()
@@ -1585,7 +1536,6 @@ class PreferencesRepository:
         self.data_sharing = DataSharingAcknowledgmentRepository()
 
     def get_chat_phi_notice_enabled(self, query: QueryExecutor, *, owner_id: str) -> bool:
-        """Read the owner's optional chat notice setting; absent means enabled."""
         owner_id = _required_id(owner_id, "owner_id")
         row = query.fetch_one(
             "SELECT preferences FROM user_preferences WHERE user_id = %s", (owner_id,)
@@ -1603,7 +1553,6 @@ class PreferencesRepository:
     def set_chat_phi_notice_enabled(
         self, transaction: Transaction, *, owner_id: str, enabled: bool
     ) -> None:
-        """Merge one boolean under a row lock without replacing other preferences."""
         owner_id = _required_id(owner_id, "owner_id")
         if type(enabled) is not bool:
             raise RepositoryValidationError("chat notice preference must be boolean")

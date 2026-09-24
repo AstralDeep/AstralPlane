@@ -1,4 +1,7 @@
-"""Canonical immutable-source and transformation provenance checks."""
+"""Tests for AstralPlane's data-provenance records: extraction manifest digests,
+transformation-ledger completeness, migration-slice provenance, and exact git-tuple
+replay of selection roots.
+"""
 
 from __future__ import annotations
 

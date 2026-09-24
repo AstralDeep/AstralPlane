@@ -1,4 +1,6 @@
-"""Neutral domain-value validation and detachment tests."""
+"""Tests for src/astralplane/domain.py: owner-context/receipt normalization, identifier
+and UTC validation, and depth/canonicalization limits on frozen domain values.
+"""
 
 from __future__ import annotations
 

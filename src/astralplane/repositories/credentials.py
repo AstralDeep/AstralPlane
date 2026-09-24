@@ -1,9 +1,6 @@
-"""Opaque user and remote-machine credential persistence.
-
-AstralPlane stores ciphertext only.  Encryption, decryption, credential-key
-policy, and authorization remain caller-owned.  Ordinary operations carry an
-owner predicate; the one global inventory is named explicitly for an already
-authorized re-encryption worker.
+"""Stores opaque ciphertext for user and remote-machine credentials under owner
+predicates and revision fences. Encryption and authorization stay with the caller;
+one global-inventory read is reserved for an authorized re-encryption worker.
 """
 
 from __future__ import annotations
@@ -27,8 +24,6 @@ from astralplane.repositories import (
 
 @dataclass(frozen=True, slots=True)
 class CredentialRecord:
-    """Detached opaque credential value for one owner and agent."""
-
     credential_id: int
     owner_id: str
     agent_id: str
@@ -40,8 +35,6 @@ class CredentialRecord:
 
 @dataclass(frozen=True, slots=True)
 class MachineCredentialRecord:
-    """Detached opaque credential value bound to an owner-owned machine."""
-
     machine_id: str
     owner_id: str
     credential_type: str
@@ -52,8 +45,6 @@ class MachineCredentialRecord:
 
 
 class CredentialRepository:
-    """Persist ciphertext under owner predicates and explicit revision fences."""
-
     _USER_FIELDS = (
         "id, user_id, agent_id, credential_key, encrypted_value, created_at, updated_at"
     )
@@ -72,8 +63,6 @@ class CredentialRepository:
         encrypted_value: str,
         updated_at: int,
     ) -> CredentialRecord:
-        """Create or replace one ciphertext, preserving the legacy tuple identity."""
-
         values = _credential_values(
             owner_id=owner_id,
             agent_id=agent_id,
@@ -93,7 +82,7 @@ class CredentialRepository:
             """,
             (*values[:4], values[4], values[4]),
         )
-        if row is None:  # pragma: no cover - PostgreSQL RETURNING invariant
+        if row is None:  # pragma: no cover
             raise RepositoryDataError("credential upsert returned no row")
         return _credential(row)
 
@@ -108,8 +97,6 @@ class CredentialRepository:
         encrypted_value: str,
         updated_at: int,
     ) -> CredentialRecord:
-        """Replace ciphertext only when the owner-scoped timestamp fence matches."""
-
         owner, agent, key, ciphertext, observed_at = _credential_values(
             owner_id=owner_id,
             agent_id=agent_id,
@@ -215,8 +202,6 @@ class CredentialRepository:
         after_credential_id: int = 0,
         limit: int = 200,
     ) -> tuple[CredentialRecord, ...]:
-        """Return a bounded global page for an already-authorized migration worker."""
-
         agent = _required_id(agent_id, "agent_id")
         after = _non_negative_int(after_credential_id, "after_credential_id")
         limit = _bounded_limit(limit, maximum=1000)
@@ -275,8 +260,6 @@ class CredentialRepository:
         encrypted_passphrase: str | None,
         created_at: int,
     ) -> MachineCredentialRecord:
-        """Create one machine credential or accept an exact idempotent replay."""
-
         values = _machine_values(
             owner_id=owner_id,
             machine_id=machine_id,

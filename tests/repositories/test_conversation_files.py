@@ -1,4 +1,7 @@
-"""Conversation file-link repository tests."""
+"""Tests for astralplane.repositories.conversation_files: file-mapping creation proves
+conversation ownership, redacts the storage key, and keeps reads and deletes owner-
+and conversation-scoped.
+"""
 
 from __future__ import annotations
 

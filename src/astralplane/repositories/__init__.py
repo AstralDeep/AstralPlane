@@ -1,8 +1,6 @@
-"""Shared repository invariants for AstralPlane's durable domain stores.
-
-Repository methods accept an explicit :class:`~astralplane.contracts.Transaction`
-or query executor.  They never borrow connections or commit transactions, so a
-product can compose multiple repository operations into one authoritative unit.
+"""Shared base errors and validation helpers for every astralplane.repositories store.
+Methods take an explicit Transaction and never borrow connections or commit, so
+callers can compose several repository operations into one atomic unit.
 """
 
 from __future__ import annotations
@@ -16,32 +14,22 @@ from astralplane.errors import PlaneError
 
 
 class RepositoryError(PlaneError):
-    """Base failure for a neutral durable-domain repository."""
-
     default_code = "repository_error"
 
 
 class RepositoryConflictError(RepositoryError):
-    """A compare-and-set or idempotency fence rejected a write."""
-
     default_code = "repository_conflict"
 
 
 class RepositoryDataError(RepositoryError):
-    """Persisted data did not satisfy the repository's detached record contract."""
-
     default_code = "repository_data_invalid"
 
 
 class RepositoryNotFoundError(RepositoryError):
-    """An owner-scoped authoritative row was unavailable for a required write."""
-
     default_code = "repository_not_found"
 
 
 class RepositoryValidationError(RepositoryError, ValueError):
-    """Caller input violated a bounded neutral persistence contract."""
-
     default_code = "repository_validation"
 
 
@@ -163,8 +151,6 @@ def _structured_json(value: object, field: str, *, nullable: bool = False) -> An
 
 
 def _content_value(value: object) -> Any:
-    """Decode legacy JSON content while preserving ordinary prose verbatim."""
-
     if not isinstance(value, str):
         return _freeze(value)
     try:

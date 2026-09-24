@@ -1,4 +1,7 @@
-"""Small driver-independent transaction scripts for repository unit tests."""
+"""Scripted Result/ScriptedTransaction test doubles standing in for a real Plane
+Transaction; shared by most astralplane.repositories unit tests that don't need
+PostgreSQL.
+"""
 
 from __future__ import annotations
 

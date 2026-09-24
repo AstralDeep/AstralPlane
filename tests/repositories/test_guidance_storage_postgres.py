@@ -1,4 +1,7 @@
-"""Current-only encrypted notes and immutable skill/history mechanics on PostgreSQL."""
+"""Real-PostgreSQL tests for astralplane.repositories.guidance: skill-receipt replay and
+CAS, encrypted-note current/expiry lifecycle, and guidance-selection binding,
+including behavior under a real held owner lock.
+"""
 
 import hashlib
 from dataclasses import replace
@@ -208,8 +211,6 @@ def test_materialization_keeps_exact_raw_bytes_and_original_mapping_after_edit(t
             and r.legacy_digest == hashlib.sha256(entry.markdown).hexdigest()
         )
     skills.apply_change(tx, command=edit(entries[0]))
-    # A repeated filesystem capture may assign fresh proposed IDs; the catalog
-    # still returns the original first revisions, never today's edited heads.
     replay = skills.materialize_legacy_skills(
         tx,
         owner_id="owner",
@@ -345,8 +346,6 @@ def test_note_stale_or_changed_creation_metadata_refused_without_mutation(tx):
 
 
 def expire_fixture(tx, record, offset=0):
-    # Deliberately synthetic current encrypted metadata, not a claim that these
-    # opaque bytes authenticate any text. No real DB or system clock is changed.
     now = tx.fetch_one("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS t")["t"]
     tx.execute(
         "UPDATE explicit_note_current SET created_at=%s,updated_at=%s,expires_at=%s "
@@ -435,8 +434,6 @@ def test_guidance_edit_retires_claim_and_unstarted_reservation_but_preserves_iss
     )
     with pytest.raises(RepositoryConflictError):
         control(repo, tx, after, "resume")
-    # Authentic already-issued consumption can still settle once after guidance
-    # retirement. It does not grant a resumed claim or new output authority.
     settled = outcome(repo, tx, permit, assignment.assignment_id)
     assert settled.state == "succeeded" and settled.result["result"] == {}
     charged = repo.get_assignment(
@@ -766,7 +763,6 @@ def test_guidance_cannot_bind_after_claim_even_when_no_resource_is_selected(tx, 
 def test_expiry_refuses_claim_and_fact_without_requiring_purge(tx, repo):
     value = note(tx)
     now = tx.fetch_one("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS t")["t"]
-    # Future metadata is admitted through the real prepared/put API.
     value = note(tx, note_id=value.note_id, expected_revision=1, expires_at=now + 10000)
     assignment = bind(repo, tx, create(repo, tx), (GuidanceReference("note", value.note_id, 2),))
     assert guidance_assert(repo, tx, assignment) == assignment
@@ -823,7 +819,6 @@ def test_expiry_admin_skips_locked_owner_and_next_page_reaches_another_owner(dat
                     == "expired"
                 )
         with worker.transaction() as tx:
-            # Cursor wrap revisits the formerly locked owner without starvation.
             assert notes.page_expired_explicit_notes(tx).records[0].note_id == a.note_id
             assert (
                 notes.expire_explicit_note(
@@ -902,8 +897,6 @@ def test_last_live_note_revision_can_always_forget_or_expire(tx):
     notes = ExplicitNotesRepository()
     for reason in ("forgotten", "expired"):
         value = note(tx)
-        # Boundary-only fixture on a real opaque current row. No historical
-        # ciphertext or claimed authenticated plaintext is fabricated.
         tx.execute(
             "UPDATE explicit_note_current SET revision=%s WHERE note_id=%s",
             (MAX_REVISION - 1, value.note_id),
@@ -1051,8 +1044,6 @@ def test_guidance_final_clock_observation_refuses_expired_selected_note(tx, repo
     now = guidance._clock(tx)
     value = note(tx, expires_at=now + 10000)
     record = bind(repo, tx, create(repo, tx), (GuidanceReference("note", value.note_id, 1),))
-    # The public current-row read sees one live observation. The final DB-clock
-    # observation is at exact expiry; no real system/database clock is changed.
     observations = iter((value.expires_at - 1, value.expires_at))
     monkeypatch.setattr(guidance, "_clock", lambda tx: next(observations))
     with pytest.raises(RepositoryConflictError, match="guidance_changed"):
@@ -1227,8 +1218,6 @@ def test_corrupt_legacy_timestamp_is_refused_by_public_read(tx):
         pass
 
     with pytest.raises(RestoreFixtureError), tx.savepoint("corrupt_legacy_read"):
-        # A deliberately damaged catalog isolates the decoder defense. Restore
-        # this exact transaction's fixture even when the assertion fails.
         constraints = tx.fetch_all(
             "SELECT conname FROM pg_constraint WHERE conrelid='owner_skill_revision'::regclass "
             "AND contype='c' AND pg_get_constraintdef(oid) LIKE '%%legacy_markdown%%'"

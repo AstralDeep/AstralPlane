@@ -1,4 +1,7 @@
-"""Owner-isolated draft-agent authoring and publication persistence."""
+"""Owner-isolated persistence for draft-agent authoring, generation-claim leases, and
+publication records. Used by AstralDeep's orchestrator/draft_plane_store.py and by
+repositories/generated_agent_publications.py for its filesystem handoff.
+"""
 
 from __future__ import annotations
 
@@ -110,8 +113,6 @@ class DraftPublicationRecord:
 
 
 class DraftAgentRepository:
-    """Store draft authoring state under owner, revision, and claim fences."""
-
     def create_draft(
         self,
         transaction: Transaction,
@@ -236,13 +237,6 @@ class DraftAgentRepository:
         source_attachment_id: str,
         updated_at: int,
     ) -> DraftAgentRecord:
-        """Bind immutable auto-attachment provenance exactly once.
-
-        A byte-for-byte replay returns the already-bound record even after its
-        revision advances. Any attempt to replace existing provenance or bind
-        through a stale revision fails closed.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         expected_revision = _non_negative_int(expected_revision, "expected_revision")
@@ -319,8 +313,6 @@ class DraftAgentRepository:
         draft_uuid: str,
         for_update: bool = False,
     ) -> DraftAgentRecord | None:
-        """Read one owner-scoped durable draft identity."""
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_uuid = _uuid_text(draft_uuid, "draft_uuid")
         if not isinstance(for_update, bool):
@@ -339,8 +331,6 @@ class DraftAgentRepository:
         draft_id: str,
         for_update: bool = False,
     ) -> DraftAgentRecord | None:
-        """Resolve one draft after the product has authorized an admin workflow."""
-
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -371,8 +361,6 @@ class DraftAgentRepository:
         *,
         agent_slug: str,
     ) -> DraftAgentRecord | None:
-        """Resolve the newest deterministic draft for an authorized boot workflow."""
-
         agent_slug = _bounded_text(agent_slug, "agent_slug", maximum=512)
         row = transaction.fetch_one(
             """
@@ -454,8 +442,6 @@ class DraftAgentRepository:
         *,
         limit: int = 2000,
     ) -> tuple[DraftAgentRecord, ...]:
-        """Return a bounded deterministic inventory for orphan reconciliation."""
-
         limit = _bounded_limit(limit, maximum=2000)
         rows = transaction.fetch_all(
             """
@@ -475,8 +461,6 @@ class DraftAgentRepository:
         after_generation_claim_expires_at: datetime | None = None,
         after_draft_id: str | None = None,
     ) -> tuple[DraftAgentRecord, ...]:
-        """Return a bounded DB-time inventory of pre-publication claim deaths."""
-
         limit = _bounded_limit(limit, maximum=1000)
         supplied_cursor = (
             after_generation_claim_expires_at is not None,
@@ -598,15 +582,6 @@ class DraftAgentRepository:
         expected_preclaim_revision: int,
         claim_id: str,
     ) -> DraftAgentRecord | None:
-        """Resolve an exact live claim after the claim acknowledgement was lost.
-
-        ``claim_generation`` advances the lifecycle revision exactly once.  A
-        caller that lost its transaction acknowledgement may therefore accept
-        only the same claim at ``expected_preclaim_revision + 1`` while it is
-        still live, generating, and unpublished.  Database time remains the
-        lease authority.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         expected_preclaim_revision = _non_negative_int(
@@ -642,13 +617,6 @@ class DraftAgentRepository:
         claim_id: str,
         lease_seconds: int = 300,
     ) -> DraftAgentRecord:
-        """Renew one still-live exact claim without changing its revision.
-
-        The database clock decides both expiry and the new deadline.  An
-        already-expired lease can never be resurrected, and a successor claim
-        or lifecycle revision cannot be overwritten by an old generator.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         expected_revision = _non_negative_int(expected_revision, "expected_revision")
@@ -699,14 +667,6 @@ class DraftAgentRepository:
         claim_id: str,
         lease_seconds: int = 300,
     ) -> DraftAgentRecord:
-        """Reselect one expired exact claim while fencing its prior worker.
-
-        This is deliberately distinct from renewal: only an already-expired
-        lease can be reclaimed, and the successful re-selection advances the
-        lifecycle revision exactly once.  A worker retaining the pre-reclaim
-        revision can therefore no longer log progress or finish generation.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         expected_revision = _non_negative_int(expected_revision, "expected_revision")
@@ -759,14 +719,6 @@ class DraftAgentRepository:
         claim_id: str,
         generation_log: str,
     ) -> DraftAgentRecord:
-        """Replace the opaque progress log without invalidating an active claim.
-
-        Lifecycle state remains fenced by ``state_revision``. Progress emitted by
-        the holder of that exact live claim is deliberately not a lifecycle
-        transition, so this update must not increment the revision that
-        ``finish_generation`` subsequently consumes.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_id = _required_id(draft_id, "draft_id", maximum=512)
         expected_revision = _non_negative_int(expected_revision, "expected_revision")
@@ -1070,8 +1022,6 @@ class DraftAgentRepository:
         source_state_revision: int,
         for_update: bool = False,
     ) -> DraftPublicationRecord | None:
-        """Resolve the immutable publication identity for one draft revision."""
-
         owner_id = _required_id(owner_id, "owner_id")
         draft_uuid = _uuid_text(draft_uuid, "draft_uuid")
         source_state_revision = _non_negative_int(source_state_revision, "source_state_revision")
@@ -1097,8 +1047,6 @@ class DraftAgentRepository:
         target_revision_id: str,
         for_update: bool = False,
     ) -> DraftPublicationRecord | None:
-        """Resolve publication provenance without weakening owner isolation."""
-
         owner_id = _required_id(owner_id, "owner_id")
         target_agent_id = _required_id(target_agent_id, "target_agent_id", maximum=512)
         target_revision_id = _uuid_text(target_revision_id, "target_revision_id")
@@ -1123,8 +1071,6 @@ class DraftAgentRepository:
         after_created_at: datetime | None = None,
         after_publication_id: str | None = None,
     ) -> tuple[DraftPublicationRecord, ...]:
-        """Return a bounded global recovery inventory after host authorization."""
-
         limit = _bounded_limit(limit, maximum=1000)
         supplied_cursor = (
             after_created_at is not None,

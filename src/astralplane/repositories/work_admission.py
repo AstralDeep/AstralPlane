@@ -1,11 +1,6 @@
-"""Durable work-admission, lifecycle, and execution-fence storage.
-
-This module owns the PostgreSQL mechanics for the operation-admission tables.
-Every public operation receives a caller-owned Plane ``Transaction``; the
-repository never borrows a connection, opens a second pool, commits, or rolls
-back.  Returned values are immutable, driver-independent records. Admission
-configuration is published with ``bind_configs`` only after the caller knows
-its transaction committed, so failed commits cannot poison the process cache.
+"""Durable PostgreSQL mechanics for operation admission, lifecycle, and execution-fence
+state; each method takes a caller-owned Transaction and never commits or rolls back.
+Used by orchestrator/work_admission.py and astralplane.api.
 """
 
 from __future__ import annotations
@@ -74,26 +69,18 @@ _VOICE_CAPACITY_RETRY_AFTER_MS = 1_000
 
 
 class WorkAdmissionNotFoundError(RepositoryNotFoundError):
-    """An operation is absent or is not visible to the supplied owner."""
-
     default_code = "work_admission_not_found"
 
 
 class StaleWorkExecutionFenceError(RepositoryConflictError):
-    """A worker no longer owns the selected execution."""
-
     default_code = "work_admission_stale_execution_fence"
 
 
 class WorkAdmissionConfigurationError(RepositoryValidationError):
-    """The effective admission-class graph is incomplete or invalid."""
-
     default_code = "work_admission_configuration_invalid"
 
 
 class WorkAdmissionIntegrityError(RepositoryDataError):
-    """Durable admission state violated an atomicity invariant."""
-
     default_code = "work_admission_integrity_error"
 
 
@@ -358,13 +345,6 @@ class SlotLeaseRenewal:
 
 
 class _StatementSession:
-    """Cursor-shaped view over one caller-owned Plane transaction.
-
-    This deliberately contains no driver object.  It only retains detached
-    records returned by the neutral transaction API so the original sequence
-    of lock/check/update operations remains auditable.
-    """
-
     def __init__(self, transaction: Transaction) -> None:
         if not isinstance(transaction, Transaction):
             raise RepositoryValidationError(
@@ -602,8 +582,6 @@ def _safe_projection(record: OperationRecord) -> SafeOperationProjection:
 
 
 class WorkAdmissionRepository:
-    """Stateless durable mechanics bound to one effective configuration graph."""
-
     def __init__(self) -> None:
         self._configuration_lock = threading.RLock()
         self._configs: dict[AdmissionClass, AdmissionClassConfig] = {}
@@ -611,8 +589,6 @@ class WorkAdmissionRepository:
     def load_existing_configs(
         self, transaction: Transaction
     ) -> tuple[AdmissionClassConfig, ...]:
-        """Read one locked persisted snapshot without mutating repository state."""
-
         cursor = _StatementSession(transaction)
         cursor.execute(
             """
@@ -629,8 +605,6 @@ class WorkAdmissionRepository:
     def bind_configs(
         self, admission_classes: Sequence[AdmissionClassConfig]
     ) -> None:
-        """Bind a snapshot only after its caller-owned transaction committed."""
-
         configs = tuple(admission_classes)
         _validate_admission_graph(configs)
         with self._configuration_lock:
@@ -1268,7 +1242,7 @@ class WorkAdmissionRepository:
                 "accepted operation insert returned no record"
             )
         if selected_slots is not None:
-            if execution_token is None:  # pragma: no cover - branch invariant
+            if execution_token is None:  # pragma: no cover
                 raise WorkAdmissionIntegrityError(
                     "preselected execution is missing its token"
                 )
@@ -1644,8 +1618,6 @@ class WorkAdmissionRepository:
         operation_id: uuid.UUID,
         for_update: bool = False,
     ) -> OperationRecord | None:
-        """Resolve one full operation for an already-authorized system workflow."""
-
         operation_id = _require_uuid(operation_id, "operation_id")
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -2035,17 +2007,10 @@ class WorkAdmissionRepository:
             _StatementSession(transaction), fence
         )
 
+    # Caller must already hold owner/session and occurrence locks
     def assert_current_execution_lease(
         self, transaction: Transaction, fence: ExecutionFence
     ) -> OperationRecord:
-        """Lock and read an exact live execution and its complete capacity lease.
-
-        Caller owner/session and scheduled-occurrence locks precede this call.
-        Operation then sorted slot locks match expiry/cancel/renewal ordering;
-        no configuration-row lock, renewal, reselection or mutation occurs.
-        The caller must bound its transaction and recheck after later waits.
-        This observation supplies neither user nor delegated authority.
-        """
         if (type(fence) is not ExecutionFence
                 or type(fence.execution_generation) is not int
                 or not 1 <= fence.execution_generation <= 2**63 - 1):
@@ -2248,8 +2213,6 @@ class WorkAdmissionRepository:
         fence: ExecutionFence,
         request_generation: uuid.UUID,
     ) -> OperationRecord:
-        """Bind one immutable request generation under the execution fence."""
-
         fence = _validated_fence(fence)
         request_generation = _require_uuid(request_generation, "request_generation")
         cursor = _StatementSession(transaction)
@@ -2337,8 +2300,6 @@ class WorkAdmissionRepository:
         *,
         now: datetime | None,
     ) -> datetime | None:
-        """Return the oldest due time that the current purge predicate accepts."""
-
         cursor = _StatementSession(transaction)
         current_time = self._current_time(cursor, now)
         cursor.execute(

@@ -1,4 +1,6 @@
-"""Producer-side compatibility metadata and semantic-version tests."""
+"""Tests for src/astralplane/compatibility.py: producer-side schema compatibility
+metadata and deterministic, stably-ordered mismatch reason codes.
+"""
 
 from __future__ import annotations
 

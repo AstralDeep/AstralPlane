@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.agents: ownership, revision, host/runtime session,
+and request-record CRUD, CAS fencing, replay safety, and owner-scoped expiry
+discovery.
+"""
+
 from __future__ import annotations
 
 import uuid

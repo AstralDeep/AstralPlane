@@ -1,9 +1,6 @@
-"""Native psycopg statement and parameter handling.
-
-AstralPlane deliberately performs no lexical SQL translation. Question marks,
-percent signs, JSON operators, comments, and string literals reach the driver
-byte-for-byte as authored. Callers use psycopg's ``%s`` or ``%(name)s``
-placeholder contract directly.
+"""Native psycopg statement/parameter handling: AstralPlane performs no lexical SQL
+translation, so callers use psycopg's own placeholder contract directly against
+database/transaction.py.
 """
 
 from __future__ import annotations
@@ -18,8 +15,6 @@ NativeParameters: TypeAlias = tuple[object, ...] | dict[str, object] | None
 
 
 def validate_statement(statement: Statement) -> str:
-    """Validate structural bounds without interpreting SQL text."""
-
     if not isinstance(statement, str):
         raise SQLContractError("statement must be a string")
     if not statement.strip():
@@ -30,13 +25,6 @@ def validate_statement(statement: Statement) -> str:
 
 
 def normalize_parameters(parameters: Parameters) -> NativeParameters:
-    """Snapshot one native positional or named parameter collection.
-
-    Empty collections become ``None`` so a no-parameter statement is passed to
-    psycopg's one-argument ``execute`` form. This matters for literal percent
-    signs: AstralPlane neither scans nor doubles them.
-    """
-
     if isinstance(parameters, Mapping):
         normalized: dict[str, object] = {}
         for key, value in parameters.items():
@@ -53,8 +41,6 @@ def normalize_parameters(parameters: Parameters) -> NativeParameters:
 
 
 def execute_native(cursor: Any, statement: Statement, parameters: Parameters = ()) -> Any:
-    """Execute exact SQL through the driver's native parameter contract."""
-
     exact_statement = validate_statement(statement)
     native_parameters = normalize_parameters(parameters)
     if native_parameters is None:

@@ -1,4 +1,7 @@
-"""Attachment, materialization, blob-metadata, and artifact-version stores."""
+"""Attachment, materialization-lease, blob-metadata, and artifact-version stores, plus
+AttachmentMaterializationCoordinator's deadlock-safe two-phase commit around
+blob_store.py. Used by orchestrator/attachments/materialization.py and purge.py.
+"""
 
 from __future__ import annotations
 
@@ -62,8 +65,6 @@ _MAX_MATERIALIZATION_BYTES: Final = (1 << 63) - 1
 
 
 class AttachmentMaterializationState(StrEnum):
-    """Durable publication state for attachment metadata."""
-
     READY = "ready"
     PENDING = "pending"
 
@@ -85,8 +86,6 @@ class AttachmentRecord:
 
 @dataclass(frozen=True, slots=True)
 class PendingAttachmentMaterializationRecord:
-    """Owner-scoped upload intent hidden from ordinary attachment readers."""
-
     attachment_id: str
     owner_id: str
     filename: str
@@ -103,8 +102,6 @@ class PendingAttachmentMaterializationRecord:
 
 @dataclass(frozen=True, slots=True)
 class AttachmentMaterializationBeginResult:
-    """Exact replay result for a pending or already-finalized upload identity."""
-
     state: AttachmentMaterializationState
     pending: PendingAttachmentMaterializationRecord | None = None
     ready: AttachmentRecord | None = None
@@ -121,8 +118,6 @@ class AttachmentMaterializationBeginResult:
 
 @dataclass(frozen=True, slots=True)
 class _AttachmentMaterializationPublishFence:
-    """Private row-lock evidence consumed before the caller transaction can exit."""
-
     owner_id: str
     attachment_id: str
     filename: str
@@ -269,8 +264,6 @@ def _materialization_max_bytes(value: object) -> int:
 
 
 def _lock_active_blob_owner(transaction: Transaction, owner_id: str, *, operation: str) -> None:
-    """Serialize attachment publication against irreversible owner retirement."""
-
     transaction.execute(
         """
         INSERT INTO astralplane_blob_owner_state (
@@ -401,8 +394,6 @@ def _artifact_version(row: Mapping[str, Any]) -> ArtifactVersionRecord:
 
 
 class MaterializationRepository:
-    """DB-fenced pending, staged, and finalized attachment materialization lifecycle."""
-
     _FIELDS = """
         attachment_id, user_id, filename, content_type, category, extension,
         size_bytes, sha256, storage_path, created_at, deleted_at
@@ -431,8 +422,6 @@ class MaterializationRepository:
         lease_id: str,
         lease_seconds: int,
     ) -> AttachmentMaterializationBeginResult:
-        """Persist a hidden upload intent before any physical bytes are published."""
-
         attachment_id = _physical_attachment_id(attachment_id)
         owner_id = validate_blob_owner_id(owner_id)
         filename = _bounded_text(filename, "filename", maximum=1024)
@@ -555,8 +544,6 @@ class MaterializationRepository:
         expected_lease_version: int,
         lease_seconds: int,
     ) -> PendingAttachmentMaterializationRecord:
-        """Advance one unexpired DB-clock upload lease under exact owner/version CAS."""
-
         owner_id = validate_blob_owner_id(owner_id)
         attachment_id = _physical_attachment_id(attachment_id)
         lease_id = _lease_id(lease_id)
@@ -614,8 +601,6 @@ class MaterializationRepository:
         size_bytes: int,
         sha256: str,
     ) -> AttachmentRecord:
-        """Finalize metadata under the same locked fence used to publish staged bytes."""
-
         if not isinstance(fence, _AttachmentMaterializationPublishFence):
             raise RepositoryValidationError("fence must be locked attachment publication evidence")
         owner_id = validate_blob_owner_id(fence.owner_id)
@@ -729,8 +714,6 @@ class MaterializationRepository:
         lease_id: str,
         expected_lease_version: int,
     ) -> _AttachmentMaterializationPublishFence:
-        """Lock and validate the DB-clock lease before a short physical publish step."""
-
         owner_id = validate_blob_owner_id(owner_id)
         attachment_id = _physical_attachment_id(attachment_id)
         lease_id = _lease_id(lease_id)
@@ -788,8 +771,6 @@ class MaterializationRepository:
         expected_lease_version: int,
         content_type: str,
     ) -> AttachmentRecord:
-        """Lock, publish staged bytes, and finalize metadata before transaction exit."""
-
         if not isinstance(blobs, ExplicitRootStreamingBlobStore):
             raise RepositoryValidationError(
                 "blobs must be the configured Plane streaming blob store"
@@ -806,9 +787,6 @@ class MaterializationRepository:
         content_type = _bounded_text(content_type, "content_type", maximum=255)
         if content_type == _PENDING_CONTENT_TYPE:
             raise RepositoryValidationError("final content_type is reserved")
-        # ``BlobStagedWrite`` evidence comes from the exact fsync-backed descriptor, but validate
-        # its detached shape before any physical rename so deterministic caller/data errors never
-        # create a published path that must be recovered later.
         _non_negative_int(staged.evidence.size_bytes, "size_bytes")
         _digest(staged.evidence.sha256)
         fence = self._lock_pending_materialization_for_publish(
@@ -849,16 +827,6 @@ class MaterializationRepository:
         lease_id: str,
         expected_lease_version: int,
     ) -> BlobStagingSession:
-        """Open hidden storage while active-owner and live pending-row locks are held.
-
-        ``reservation`` must be acquired from the blob store before the caller enters this
-        transaction.  The returned capability streams outside the transaction, but the sentinel
-        and temporary file already exist before the row locks are released.  Expiry recovery and
-        owner retirement
-        therefore either delete that hidden state after this transaction or win the lock first and
-        prevent it from being created.
-        """
-
         if not isinstance(blobs, ExplicitRootStreamingBlobStore):
             raise RepositoryValidationError(
                 "blobs must be the configured Plane streaming blob store"
@@ -998,13 +966,6 @@ class AttachmentRepository:
 
 
 class BlobMetadataRepository:
-    """Read-only detached metadata for already materialized attachments.
-
-    Physical relocation is intentionally not a repository operation.  A future relocation
-    workflow must move and verify the configured blob under owner exclusion before changing its
-    durable locator; a database-only CAS cannot provide that authority.
-    """
-
     _FIELDS = """
         attachment_id, user_id, storage_path, sha256, size_bytes,
         created_at, deleted_at
@@ -1188,8 +1149,6 @@ class MessageAttachmentRepository:
 
 
 class ArtifactVersionRepository:
-    """Owner-scoped bounded component history serialized by a chat row lock."""
-
     _FIELDS = """
         id, chat_id, user_id, component_id, version_no,
         component, reason, created_at
@@ -1336,8 +1295,6 @@ class ArtifactVersionRepository:
         owner_id: str,
         conversation_id: str,
     ) -> int:
-        """Delete all component history for one owner-scoped chat cascade."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         result = transaction.execute(
@@ -1352,16 +1309,6 @@ class ArtifactVersionRepository:
 
 
 class AttachmentMaterializationCoordinator:
-    """Deadlock-safe transaction composition for one configured attachment blob root.
-
-    The coordinator acquires the filesystem owner reservation before entering PostgreSQL, creates
-    the hidden staging sentinel while the active-owner and pending-row locks are held, and returns
-    only after that short transaction commits.  Bytes then stream with no database transaction
-    open.  Publication is the inverse short transaction: the staged descriptor remains excluded,
-    the pending row is locked, bytes are atomically renamed, metadata is finalized, and commit
-    completes before success is returned.
-    """
-
     def __init__(
         self,
         *,
@@ -1400,8 +1347,6 @@ class AttachmentMaterializationCoordinator:
         )
 
     def close(self) -> None:
-        """Close the bounded control lane after all caller tasks have settled."""
-
         if self._closed:
             return
         self._closed = True
@@ -1422,8 +1367,6 @@ class AttachmentMaterializationCoordinator:
         lease_id: str,
         lease_seconds: int,
     ) -> AttachmentMaterializationBeginResult:
-        """Commit one hidden materialization intent before any staging bytes exist."""
-
         with self._database.transaction() as transaction:
             return self._repository.begin_pending_materialization(
                 transaction,
@@ -1455,8 +1398,6 @@ class AttachmentMaterializationCoordinator:
         lease_id: str,
         lease_seconds: int,
     ) -> AttachmentMaterializationBeginResult:
-        """Run the complete begin transaction off-loop with cancellation observation."""
-
         return await self._run_control(
             self.begin_pending_materialization,
             attachment_id=attachment_id,
@@ -1481,8 +1422,6 @@ class AttachmentMaterializationCoordinator:
         expected_lease_version: int,
         lease_seconds: int,
     ) -> PendingAttachmentMaterializationRecord:
-        """Commit one DB-clock lease renewal in a bounded transaction."""
-
         with self._database.transaction() as transaction:
             return self._repository.renew_pending_materialization(
                 transaction,
@@ -1502,8 +1441,6 @@ class AttachmentMaterializationCoordinator:
         expected_lease_version: int,
         lease_seconds: int,
     ) -> PendingAttachmentMaterializationRecord:
-        """Run the complete renewal off-loop and observe it through cancellation."""
-
         return await self._run_control(
             self.renew_pending_materialization,
             owner_id=owner_id,
@@ -1521,8 +1458,6 @@ class AttachmentMaterializationCoordinator:
         lease_id: str,
         expected_lease_version: int,
     ) -> BlobStagingSession:
-        """Reserve filesystem exclusion first, then commit one fenced stage-open transaction."""
-
         reservation = self._blobs.reserve_materialization_staging(owner_id=owner_id)
         return self._open_pending_materialization_staging_reserved(
             reservation=reservation,
@@ -1541,8 +1476,6 @@ class AttachmentMaterializationCoordinator:
         lease_id: str,
         expected_lease_version: int,
     ) -> BlobStagingSession:
-        """Create the sentinel under DB fences from an already-held FS reservation."""
-
         staging: BlobStagingSession | None = None
         try:
             with self._database.transaction() as transaction:
@@ -1571,8 +1504,6 @@ class AttachmentMaterializationCoordinator:
         lease_id: str,
         expected_lease_version: int,
     ) -> BlobStagingSession:
-        """Open staging off-loop; cancellation always aborts any returned capability."""
-
         self._ensure_open()
         reservation = await self._blobs.areserve_materialization_staging(owner_id=owner_id)
         try:
@@ -1600,8 +1531,6 @@ class AttachmentMaterializationCoordinator:
         expected_lease_version: int,
         content_type: str,
     ) -> AttachmentRecord:
-        """Publish and finalize under one transaction, returning only after commit."""
-
         with self._database.transaction() as transaction:
             return self._repository.publish_pending_materialization(
                 transaction,
@@ -1624,8 +1553,6 @@ class AttachmentMaterializationCoordinator:
         expected_lease_version: int,
         content_type: str,
     ) -> AttachmentRecord:
-        """Publish off-loop; commit uncertainty remains safely replayable by the durable fence."""
-
         return await self._run_control(
             self.publish_pending_materialization,
             staged=staged,
@@ -1638,8 +1565,6 @@ class AttachmentMaterializationCoordinator:
 
 
 class ArtifactRepository:
-    """Grouping of artifact stores without connection or transaction ownership."""
-
     def __init__(self) -> None:
         self.materializations = MaterializationRepository()
         self.attachments = AttachmentRepository()

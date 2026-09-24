@@ -1,9 +1,6 @@
-"""Bounded cross-domain read projections for agent-management surfaces.
-
-The repository owns only detached PostgreSQL reads. Rendering, authorization,
-agent-card policy, and fallback identity behavior remain in the composing
-application. The list context uses at most two statements and the detail
-context at most three, so callers do not need to reintroduce N+1 SQL.
+"""Read-only, query-budgeted projections joining agent, trust, and identity data for
+agent-management UI surfaces. Rendering and authorization stay with the caller; built
+on repositories/agents.py, identity.py, and tool_policy.py.
 """
 
 from __future__ import annotations
@@ -48,8 +45,6 @@ class AgentManagementDetailContext:
 
 
 class AgentManagementRepository:
-    """Read-only, query-budgeted agent-management projections."""
-
     def get_list_context(
         self,
         query: QueryExecutor,
@@ -70,7 +65,7 @@ class AgentManagementRepository:
             """,
             (owner,),
         )
-        if context is None:  # pragma: no cover - one-row CTE invariant
+        if context is None:  # pragma: no cover
             raise RepositoryDataError("agent-management list context returned no row")
         preferences = _preferences(context.get("preferences"))
         rows = query.fetch_all(
@@ -131,7 +126,7 @@ class AgentManagementRepository:
             """,
             (owner, agent),
         )
-        if context is None:  # pragma: no cover - one-row CTE invariant
+        if context is None:  # pragma: no cover
             raise RepositoryDataError("agent-management detail context returned no row")
         credentials = query.fetch_all(
             """

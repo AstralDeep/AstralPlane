@@ -1,4 +1,7 @@
-"""Real isolated import, ordinary guarded upgrade, repeat and data continuity."""
+"""Tests for scripts/migrate_qualification_database.py: an isolated import upgrades
+through the normal migration registry, refuses a missing schema, and never replaces
+existing public data.
+"""
 
 from __future__ import annotations
 

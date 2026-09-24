@@ -1,4 +1,7 @@
-"""Retry-safe maintenance units, input membership, and lease fencing."""
+"""Retry-safe persistence for maintenance units, their input membership, and claim-lease
+fencing. Used by orchestrator/knowledge_synthesis.py to coordinate retryable
+background maintenance work.
+"""
 
 from __future__ import annotations
 
@@ -86,8 +89,6 @@ class MaintenanceClaim:
 
 
 class MaintenanceRepository:
-    """Neutral maintenance persistence with explicit administrative methods."""
-
     _UNIT_FIELDS = (
         "unit_id, unit_kind, owner_user_id, scope_key, idempotency_key, state, "
         "lease_token, claim_generation, claimed_by, lease_expires_at, attempt_count, "
@@ -255,13 +256,6 @@ class MaintenanceRepository:
         observed_at: datetime,
         limit: int = 1000,
     ) -> tuple[MaintenanceUnitRecord, ...]:
-        """Release a bounded batch of expired claims under row locks.
-
-        Attempts already at their configured maximum become terminal; the
-        remainder become immediately retryable.  This operation is intended
-        to run in the same caller-owned transaction immediately before claim.
-        """
-
         observed = _aware(observed_at, "observed_at")
         maximum = _bounded_limit(limit, maximum=2000)
         result = transaction.execute(

@@ -1,4 +1,7 @@
-"""Focused contract tests for neutral preferences repositories."""
+"""Tests for astralplane.repositories.preferences: feedback submit/amend/supersede CAS,
+onboarding state transitions, profile reset fencing, and memory-record owner scoping,
+using a fake transaction.
+"""
 
 from __future__ import annotations
 

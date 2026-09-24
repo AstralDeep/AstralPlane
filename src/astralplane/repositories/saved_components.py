@@ -1,9 +1,6 @@
-"""Stable public name for publication-aware saved-component persistence.
-
-The durable ``saved_components`` table is already owned by
-:class:`~astralplane.repositories.workspaces.CanvasRepository`.  This module
-publishes the required consumer-facing repository name without introducing a
-second implementation or a divergent SQL path.
+"""Re-exports repositories/workspaces.py's CanvasRepository under the stable public name
+SavedComponentRepository, avoiding a second implementation or SQL path for the same
+table.
 """
 
 from __future__ import annotations
@@ -14,7 +11,7 @@ SavedComponentRecord = CanvasComponentRecord
 
 
 class SavedComponentRepository(CanvasRepository):
-    """Publication-aware component storage under its stable catalog name."""
+    pass
 
 
 __all__ = ("SavedComponentRecord", "SavedComponentRepository")

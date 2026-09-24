@@ -1,9 +1,6 @@
-"""Real-PostgreSQL conformance for the current AstralPlane schema.
-
-The suite is opt-in because AstralPlane has no runtime dependency on a driver.
-Set ``ASTRALPLANE_TEST_POSTGRES_DSN`` to an isolated PostgreSQL test database;
-each test still runs inside a fresh randomly named schema which is dropped on
-completion.
+"""Opt-in real-PostgreSQL conformance tests for the authority schema; set
+ASTRALPLANE_TEST_POSTGRES_DSN to run, each test in a fresh dropped schema. Covers
+binding, lifecycle, effect, and claim repositories end to end.
 """
 
 from __future__ import annotations
@@ -82,8 +79,6 @@ class CommandResult:
 
 
 class PostgresTransaction:
-    """Small real-driver adapter implementing AstralPlane's transaction protocol."""
-
     def __init__(self, connection: Any) -> None:
         self.connection = connection
 
@@ -476,11 +471,6 @@ def test_074_001_authority_ddl_is_repeat_safe_on_real_postgresql(
             assert "UNIQUE INDEX" in index["indexdef"]
             assert "WHERE" in index["indexdef"]
 
-    # The intent here is "the package advertises whatever the migration registry
-    # currently ends at", so this pins the registry head instead of a literal:
-    # the 088 series keeps growing (088.004 declarative agents, 088.005 owner
-    # guidance, 088.006 selected input) and a literal only records the day it
-    # was written.
     assert MIGRATION_REGISTRY.migrations[-1].target_revision == astralplane.SCHEMA_REVISION
     assert astralplane.CURRENT_DATA_PLANE_REVISION.schema_revision == astralplane.SCHEMA_REVISION
 

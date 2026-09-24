@@ -1,4 +1,6 @@
-"""Cadence materialization preserves valid definitions across host clock skew."""
+"""Real-PostgreSQL test for astralplane.repositories.scheduler: cadence materialization
+never regresses a job definition's time even when the host clock skews.
+"""
 
 from __future__ import annotations
 

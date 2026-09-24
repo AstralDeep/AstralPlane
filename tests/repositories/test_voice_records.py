@@ -1,4 +1,7 @@
-"""Neutral record-level contracts used by Deep's voice coordinator."""
+"""Tests for src/astralplane/repositories/voice.py: neutral record-level contracts used
+by Deep's voice coordinator, covering identity locks, owner-scoped reads, and dynamic
+patch fencing.
+"""
 
 from __future__ import annotations
 

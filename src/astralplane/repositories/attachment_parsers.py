@@ -1,10 +1,6 @@
-"""Typed attachment-parser registry mechanics over the legacy 066 table.
-
-Parser coverage is intentionally global after administrative promotion, while
-the upload, chat, draft, and requester provenance that produced a claim stays
-owner-scoped.  AstralPlane owns the unique-gap claim and lifecycle fences;
-AstralDeep continues to decide whether a gap should be claimed, who may approve
-it, and how parser code is generated or executed.
+"""Registry of generated attachment parsers: global coverage once promoted, with
+owner-scoped claim provenance kept separate. AstralPlane owns the unique-gap claim
+and lifecycle CAS; AstralDeep decides whether a gap gets claimed or approved.
 """
 
 from __future__ import annotations
@@ -31,8 +27,6 @@ from astralplane.repositories import (
 
 
 class AttachmentParserStatus(StrEnum):
-    """Lifecycle states already stored by the 066 attachment-parser table."""
-
     PENDING = "pending"
     LIVE = "live"
     FAILED = "failed"
@@ -40,8 +34,6 @@ class AttachmentParserStatus(StrEnum):
 
 
 class AttachmentParserClaimDisposition(StrEnum):
-    """Non-sensitive outcome of an atomic global-gap claim."""
-
     CLAIMED = "claimed"
     OWNER_REPLAY = "owner_replay"
     GAP_ALREADY_CLAIMED = "gap_already_claimed"
@@ -49,8 +41,6 @@ class AttachmentParserClaimDisposition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AttachmentParserCoverageRecord:
-    """Global parser coverage without requester or source provenance."""
-
     parser_id: str
     extension: str | None
     category: str
@@ -67,8 +57,6 @@ class AttachmentParserCoverageRecord:
 
 @dataclass(frozen=True, slots=True)
 class AttachmentParserRecord:
-    """Detached registry row; provenance fields are hidden from diagnostics."""
-
     parser_id: str
     extension: str | None
     category: str
@@ -100,16 +88,12 @@ class AttachmentParserRecord:
 
 @dataclass(frozen=True, slots=True)
 class AttachmentParserClaimResult:
-    """Gap claim result that never exposes another owner's provenance."""
-
     disposition: AttachmentParserClaimDisposition
     coverage: AttachmentParserCoverageRecord
     owner_record: AttachmentParserRecord | None = field(default=None, repr=False)
 
 
 class AttachmentParserRepository:
-    """Global coverage plus owner-isolated claim provenance and lifecycle CAS."""
-
     _FIELDS = (
         "id, extension, category, gap_fingerprint, status, draft_agent_id, "
         "live_agent_id, tool_name, source_attachment_id, source_chat_id, "
@@ -133,13 +117,6 @@ class AttachmentParserRepository:
         source_conversation_id: str | None,
         claimed_at: int,
     ) -> AttachmentParserClaimResult:
-        """Claim a gap, replay its owner claim, or return safe global coverage.
-
-        A failed or discarded row may be atomically reclaimed.  Pending and live
-        rows are immutable dedup hits, so concurrent uploads cannot create a
-        second parser draft for the same global file-type gap.
-        """
-
         owner = _required_id(owner_id, "owner_id")
         gap = _required_id(gap_fingerprint, "gap_fingerprint", maximum=512)
         parser_category = _bounded_text(category, "category", maximum=128)
@@ -227,8 +204,6 @@ class AttachmentParserRepository:
         *,
         gap_fingerprint: str,
     ) -> AttachmentParserCoverageRecord | None:
-        """Read global coverage without requester/source provenance."""
-
         gap = _required_id(gap_fingerprint, "gap_fingerprint", maximum=512)
         row = query.fetch_one(
             f"SELECT {self._COVERAGE_FIELDS} FROM attachment_parser "
@@ -275,8 +250,6 @@ class AttachmentParserRepository:
         *,
         draft_agent_id: str,
     ) -> AttachmentParserRecord | None:
-        """Read claim provenance after product-owned administrator authorization."""
-
         draft = _required_id(draft_agent_id, "draft_agent_id")
         row = query.fetch_one(
             f"SELECT {self._FIELDS} FROM attachment_parser WHERE draft_agent_id = %s",
@@ -310,8 +283,6 @@ class AttachmentParserRepository:
         status: AttachmentParserStatus | str,
         limit: int = 200,
     ) -> tuple[AttachmentParserRecord, ...]:
-        """List global provenance after product-owned administrator authorization."""
-
         lifecycle = _status(status, "status")
         maximum = _bounded_limit(limit, maximum=1000)
         rows = query.fetch_all(
@@ -332,8 +303,6 @@ class AttachmentParserRepository:
         status: AttachmentParserStatus | str,
         updated_at: int,
     ) -> AttachmentParserRecord:
-        """CAS a pending owner claim to failed or discarded."""
-
         owner = _required_id(owner_id, "owner_id")
         gap = _required_id(gap_fingerprint, "gap_fingerprint", maximum=512)
         expected = _status(expected_status, "expected_status")
@@ -378,8 +347,6 @@ class AttachmentParserRepository:
         approved_by: str,
         updated_at: int,
     ) -> AttachmentParserRecord:
-        """CAS a pending gap to globally live after host authorization."""
-
         gap = _required_id(gap_fingerprint, "gap_fingerprint", maximum=512)
         expected = _status(expected_status, "expected_status")
         if expected is not AttachmentParserStatus.PENDING:

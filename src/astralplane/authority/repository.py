@@ -1,9 +1,6 @@
-"""Owner-isolated PostgreSQL repositories for durable external authority.
-
-The composition host owns authorization and lifecycle policy.  This module
-owns only persistence invariants: immutable intent identity, optimistic
-fences, replay-safe receipt claims, and one savepoint-scoped claim/outbox unit.
-Every method operates on a caller-owned transaction and never commits it.
+"""Owner-isolated PostgreSQL repositories for durable external authority (claims,
+effects, lifecycle, bindings); owns only persistence invariants like optimistic
+fences and replay-safe receipts, never authorization policy.
 """
 
 from __future__ import annotations
@@ -45,26 +42,18 @@ from astralplane.repositories import (
 
 
 class AuthorityIdempotencyConflictError(RepositoryConflictError):
-    """A stable operation identifier already represents different work."""
-
     default_code = "authority_idempotency_conflict"
 
 
 class AuthorityCompareAndSetConflictError(RepositoryConflictError):
-    """An owner, state, version, or immutable-identity fence was stale."""
-
     default_code = "authority_compare_and_set_conflict"
 
 
 class ReceiptClaimConflictError(RepositoryConflictError):
-    """A receipt replay-uniqueness key already represents another claim."""
-
     default_code = "authority_receipt_claim_conflict"
 
 
 class ReceiptWatermarkConflictError(RepositoryConflictError):
-    """A receipt failed the global warden/lease/audience sequence fence."""
-
     default_code = "authority_receipt_watermark_conflict"
 
 
@@ -728,8 +717,6 @@ def _require_query_identifier(value: object, *, field: str) -> str:
 
 
 class AuthorityRepository:
-    """Neutral durable authority operations over one explicit transaction."""
-
     def __init__(self, outbox: OutboxStore | None = None) -> None:
         self._outbox = PostgresOutboxStore() if outbox is None else outbox
 
@@ -780,8 +767,6 @@ class AuthorityRepository:
         runtime_id: str,
         runtime_generation: int,
     ) -> AgentAuthorityBinding | None:
-        """Return the active binding for one exact owner-scoped runtime generation."""
-
         owner = _require_query_identifier(owner_id, field="owner id")
         agent = _require_query_identifier(agent_id, field="agent id")
         runtime = _require_query_identifier(runtime_id, field="runtime id")
@@ -818,8 +803,6 @@ class AuthorityRepository:
         agent_id: str,
         population: AuthorityPopulation,
     ) -> AgentAuthorityBinding | None:
-        """Return the deterministically latest binding for one governed population."""
-
         owner = _require_query_identifier(owner_id, field="owner id")
         agent = _require_query_identifier(agent_id, field="agent id")
         if not isinstance(population, AuthorityPopulation):
@@ -895,8 +878,6 @@ class AuthorityRepository:
         *,
         expected_version: int,
     ) -> AgentAuthorityBinding:
-        """Bind one provisioning intent to its issued remote authority exactly once."""
-
         exact = _require_model(replacement, AgentAuthorityBinding, "binding")
         _require_next_version(exact.version, expected_version)
         if exact.state is not AuthorityBindingState.ACTIVE:
@@ -952,8 +933,6 @@ class AuthorityRepository:
         *,
         expected_version: int,
     ) -> AgentAuthorityBinding:
-        """Close one never-issued intent while retaining its durable evidence."""
-
         exact = _require_model(replacement, AgentAuthorityBinding, "binding")
         pending = (
             pending_authority_identity(exact.binding_id, field="warden"),
@@ -1028,13 +1007,6 @@ class AuthorityRepository:
         due_at: datetime,
         limit: int = 50,
     ) -> tuple[AuthorityLifecycleOperation, ...]:
-        """Lock one bounded owner partition of due recovery work.
-
-        The caller must transition selected rows in this same transaction;
-        ``SKIP LOCKED`` prevents another reconciler from selecting them before
-        that compare-and-set transition commits.
-        """
-
         try:
             owner = require_identifier(owner_id, field="owner id")
             due = require_utc(due_at, field="due at")
@@ -1140,6 +1112,7 @@ class AuthorityRepository:
         row = transaction.fetch_one(_GET_EFFECT, (owner_id, operation_id))
         return None if row is None else _effect_from_row(row)
 
+    # Must transition rows here; commit alone just releases locks
     def list_recoverable_protected_effects(
         self,
         transaction: Transaction,
@@ -1148,15 +1121,6 @@ class AuthorityRepository:
         updated_before: datetime,
         limit: int = 50,
     ) -> tuple[ProtectedEffectOperation, ...]:
-        """Lock a bounded owner partition of stale nonterminal effect work.
-
-        Every selected operation must be transitioned with its compare-and-set
-        fence in this same caller-owned transaction. Committing without that
-        transition merely releases the locks and permits the row to be selected
-        again; ``SKIP LOCKED`` prevents concurrent reconcilers from selecting it
-        while this transaction remains open.
-        """
-
         owner = _require_query_identifier(owner_id, field="owner id")
         try:
             cutoff = require_utc(updated_before, field="updated before")
@@ -1196,13 +1160,6 @@ class AuthorityRepository:
         effect_updated_before: datetime,
         limit: int = 200,
     ) -> tuple[str, ...]:
-        """List bounded owner partitions containing due lifecycle/effect work.
-
-        This scheduling query takes no row locks and performs no transition.
-        Callers must pass each returned owner into the corresponding bounded
-        recovery method, whose ``FOR UPDATE SKIP LOCKED`` query owns claims.
-        """
-
         try:
             due = require_utc(lifecycle_due_at, field="lifecycle due at")
             cutoff = require_utc(

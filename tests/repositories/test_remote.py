@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.remote: machine and execution-record validation,
+owner-scoped CRUD and replay, trusted-key compare-and-set, and count-checked account
+retirement.
+"""
+
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,7 @@
-"""Actual PostgreSQL policy fencing, including ordinary reverse-order writers."""
+"""Real-PostgreSQL tests for tool-policy fencing in astralplane.repositories:
+reverse-order writers never deadlock against the policy fence, and stale snapshots or
+malformed preferences are refused.
+"""
 
 from __future__ import annotations
 
@@ -62,7 +65,6 @@ def clean_facts(catalog_database):
 
 @contextmanager
 def independent(fixture):
-    """Each concurrent actor has a distinct owned driver/pool/transaction."""
     connection = psycopg2.connect(
         make_dsn(
             os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"],
@@ -81,7 +83,6 @@ def snapshot(fixture, tx, owner=OWNER):
 
 
 def wait_for_lock(tx, pid):
-    """Observe the precise worker's PostgreSQL wait, not a scheduling guess."""
     end = time.monotonic() + 3
     while time.monotonic() < end:
         row = tx.fetch_one(
@@ -147,7 +148,7 @@ def test_exact_facts_are_detached_and_owner_scoped(catalog_database):
     assert len(value.overrides) == 1 and not value.overrides[0].enabled
     assert value.disabled and value.is_safe and value.is_public is False
     assert value.user_agent_owner == OWNER and value.user_agent_deleted
-    assert value.draft_status == "pending"  # Exact existing newest/tie-break ordering.
+    assert value.draft_status == "pending"
     assert not other.disabled and other.overrides == ()
     with pytest.raises(FrozenInstanceError):
         value.disabled = False
@@ -164,7 +165,6 @@ def test_absent_facts_do_not_create_rows(catalog_database):
 
 @pytest.mark.parametrize("table", TABLES)
 def test_every_ordinary_writer_conflicts_immediately(catalog_database, table):
-    # ROW EXCLUSIVE is the automatically acquired INSERT/UPDATE/DELETE table lock.
     with independent(catalog_database) as writer, writer.transaction() as block:
         block.execute(f"DELETE FROM {table} WHERE FALSE")
         started = time.monotonic()
@@ -174,7 +174,7 @@ def test_every_ordinary_writer_conflicts_immediately(catalog_database, table):
         ):
             snapshot(catalog_database, tx)
         assert time.monotonic() - started < 1
-        assert block.fetch_one("SELECT 1 AS n")["n"] == 1  # Blocker remains held.
+        assert block.fetch_one("SELECT 1 AS n")["n"] == 1
     with catalog_database.database.transaction() as tx:
         assert snapshot(catalog_database, tx).scopes[0].enabled
 
@@ -216,7 +216,6 @@ def test_fence_blocks_phantom_and_existing_writers_until_transaction_ends(
             elif kind == "global":
                 repo.prune_agent_overrides(tx, agent_id=AGENT, live_tool_names=[])
             else:
-                # Generic preference writers also participate, without using tool_policy.
                 tx.execute(
                     "INSERT INTO user_preferences(user_id,preferences) VALUES (%s,%s)",
                     (OWNER, '{"disabled_agents":["web-research-1"]}'),
@@ -265,7 +264,7 @@ def test_reverse_policy_then_config_writer_cannot_deadlock(catalog_database):
             catalog_database.catalog.encrypted_llm_config.get_user_for_update(tx, owner_id=OWNER)
             proceed.set()
             wait_for_lock(tx, pid[0])
-            snapshot(catalog_database, tx)  # NOWAIT abort releases our config to the writer.
+            snapshot(catalog_database, tx)
         assert future.result(timeout=3) is True
     with catalog_database.database.transaction() as tx:
         assert not snapshot(catalog_database, tx).scopes[0].enabled
@@ -279,7 +278,6 @@ def test_config_then_revoke_is_observed_after_config_wait(catalog_database):
     def read():
         with independent(catalog_database) as db, db.transaction() as tx:
             tx.execute("SET LOCAL statement_timeout = '4s'")
-            # Mirrors the old pre-wait check; the final snapshot must replace it.
             assert repo.list_scopes(tx, owner_id=OWNER, agent_id=AGENT)[0].enabled
             pid.append(tx.fetch_one("SELECT pg_backend_pid() AS pid")["pid"])
             entered.set()

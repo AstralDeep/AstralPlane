@@ -1,4 +1,7 @@
-"""Detached, immutable records for bounded persistent assignments."""
+"""Detached, immutable record types for persistent-assignment state, controls, actions,
+and reconciliation outcomes; carry no authority themselves. Used throughout
+repositories/assignments.py and AstralDeep's orchestrator/persistent_agents code.
+"""
 
 from __future__ import annotations
 
@@ -44,8 +47,6 @@ class AssignmentDefinition(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentOperationAuthority(_Record):
-    """Host-verified reference metadata, never an authentication or dispatch permit."""
-
     owner_id: str = field(repr=False)
     origin: str
     reference_kind: str
@@ -55,8 +56,6 @@ class AssignmentOperationAuthority(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentOperationSpec(_Record):
-    """Bounded one-shot intent supplied through the trusted host's admission service."""
-
     kind: str
     authority: AssignmentOperationAuthority = field(repr=False)
     deadline_at: datetime
@@ -124,8 +123,6 @@ class AssignmentControlResult(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentOperationRead(_Record):
-    """Owner-scoped controller snapshot; never a dispatch/authority grant."""
-
     assignment: AssignmentRecord = field(repr=False)
     disposition: str
     continuation_supported: bool
@@ -206,9 +203,6 @@ class AssignmentResourceAmount(_Record):
     elapsed_ms: int = 0
     spend_micro_units: int | None = None
     currency: str | None = None
-    # Additive (FR-022): per-dimension charge provenance, e.g. {"tokens": "estimated"}.
-    # Absent for every pre-088.008 row; never a duplicate counter. One of
-    # observed|estimated|uncertain|none per populated dimension key.
     basis: Mapping[str, str] | None = field(default=None, repr=False)
 
 
@@ -323,8 +317,6 @@ class AssignmentActionReconciliation(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentActionReconciliationPreparation(_Record):
-    """Read/lock-only current facts; never authority outside the caller's transaction."""
-
     assignment: AssignmentRecord = field(repr=False)
     action: AssignmentActionRecord = field(repr=False)
     replayed: bool
@@ -332,8 +324,6 @@ class AssignmentActionReconciliationPreparation(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentOwnerWaitPreparation(_Record):
-    """Locked safe-control facts, valid only in the caller's current transaction."""
-
     assignment: AssignmentRecord = field(repr=False)
     replayed: bool
     invalidated_action_ids: tuple[str, ...] = ()
@@ -342,8 +332,6 @@ class AssignmentOwnerWaitPreparation(_Record):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentWakePreparation(_Record):
-    """Locked receipt/current-state facts, never authority to continue execution."""
-
     assignment: AssignmentRecord = field(repr=False)
     replayed: bool
 

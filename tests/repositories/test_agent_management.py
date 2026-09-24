@@ -1,3 +1,7 @@
+"""Tests for astralplane.repositories.agent_management: list/detail context queries are
+bounded, owner-scoped, and fail closed on corrupt or truncated data.
+"""
+
 from __future__ import annotations
 
 import json

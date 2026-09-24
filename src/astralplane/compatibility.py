@@ -1,4 +1,7 @@
-"""Machine-readable AstralPlane producer compatibility inspection."""
+"""Machine-readable inspection of AstralPlane's producer schema/revision compatibility,
+built from database/migrations.py and database/revision.py for api.py's
+inspect_compatibility().
+"""
 
 from __future__ import annotations
 

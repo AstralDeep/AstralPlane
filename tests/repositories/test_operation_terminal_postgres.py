@@ -1,4 +1,7 @@
-"""Observed commands and conservative account cleanup against real PostgreSQL."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments: action commands
+require strict observed state, orphan liabilities defer cleanup instead of guessing,
+and retirement serializes against new admission.
+"""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -256,7 +259,7 @@ def test_unknown_assignment_and_opaque_action_survive_retirement_without_starvat
             data["attempts"][0]["state"] = "future"
         else:
             data["interactive_proposal_id"] = {"untrusted": "proposal-id"}
-        data["state"] = "succeeded"  # The indexed settled state is not proof.
+        data["state"] = "succeeded"
 
     change_action(tx, value.action_id, corrupt)
     mutate(tx, record, lambda d: d["operation"].update(version=3, future={"opaque": True}))
@@ -326,8 +329,6 @@ def test_unknown_stop_receipt_and_safe_empty_purge(tx, repo, version_path):
 def test_orphan_liability_defers_operation_cleanup_and_blocks_legacy_caller(tx, repo, profile):
     record = (create_operation if profile == "one_shot" else create)(repo, tx)
     mutate(tx, record, lambda d: d["usage"]["outstanding"].update(tool_calls=1))
-    # Same decision as the existing Deep cleanup caller: refusal prevents
-    # scheduling; only the explicit new adapter can commit orphan retirement.
     with pytest.raises(RepositoryConflictError), tx.savepoint("legacy_retire"):
         result = repo.retire_owner(tx, owner_id="owner")
         assert result.unresolved_action_ids
@@ -438,8 +439,6 @@ def test_unclaimed_expiry_does_not_mutate_ineligible_work(tx, repo, excluded):
 def test_unclaimed_deadline_retains_liability_for_reconciliation(tx, repo, liability):
     if liability in {"approval", "uncertain"}:
         record, _, _ = (proposed if liability == "approval" else uncertain)(repo, tx)
-        # Simulate the durable unclaimed state after a normal yield. Recovery
-        # must retain approval data rather than treating expiry as permission.
         data = plain(tx.fetch_one(
             "SELECT data FROM persistent_assignment WHERE id=%s", (record.assignment_id,)
         )["data"])

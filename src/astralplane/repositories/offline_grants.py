@@ -1,8 +1,6 @@
-"""Owner-isolated encrypted offline-grant persistence.
-
-Refresh-token encryption, token exchange, consent policy, and revocation at the
-identity provider remain in the embedding product.  AstralPlane exposes only
-opaque encrypted bytes and durable grant lifecycle mechanics.
+"""Owner-isolated persistence for encrypted offline refresh-token grants and their
+optional finite admission allowance. Token exchange, encryption, and IdP-side
+revocation stay with the caller; exposes only opaque bytes and lifecycle mechanics.
 """
 
 from __future__ import annotations
@@ -25,8 +23,6 @@ from astralplane.repositories import (
 
 
 class OfflineGrantRevocationState(StrEnum):
-    """Idempotent result of an owner-scoped single-grant revocation."""
-
     REVOKED = "revoked"
     ALREADY_REVOKED = "already_revoked"
     MISSING = "missing"
@@ -34,8 +30,6 @@ class OfflineGrantRevocationState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class OfflineGrantRecord:
-    """Detached durable grant including its opaque encrypted token bytes."""
-
     grant_id: str
     owner_id: str
     agent_id: str | None
@@ -45,22 +39,15 @@ class OfflineGrantRecord:
     revoked_at: int | None
     created_at: int | None
     updated_at: int | None
-    # Additive (088.008): a finite admission allowance. Both None on every
-    # pre-088.008 grant and on any grant created without one — unlimited
-    # admissions, unchanged legacy semantics.
     max_admissions: int | None = None
     consumed_admissions: int | None = None
 
     @property
     def active(self) -> bool:
-        """Whether the durable record has not been explicitly revoked."""
-
         return self.revoked_at is None
 
     @property
     def admissions_remaining(self) -> int | None:
-        """Remaining admissions, or ``None`` when the grant has no finite allowance."""
-
         if self.max_admissions is None:
             return None
         return self.max_admissions - (self.consumed_admissions or 0)
@@ -68,8 +55,6 @@ class OfflineGrantRecord:
 
 @dataclass(frozen=True, slots=True)
 class OfflineGrantReference:
-    """Token-free metadata used to locate standing delegated authority."""
-
     grant_id: str
     owner_id: str
     agent_id: str | None
@@ -78,8 +63,6 @@ class OfflineGrantReference:
 
 
 class OfflineGrantRepository:
-    """Persist encrypted refresh tokens under owner and expiry predicates."""
-
     _FIELDS = (
         "id, user_id, agent_id, refresh_token_enc, issued_at, expires_at, "
         "revoked_at, created_at, updated_at, max_admissions, consumed_admissions"
@@ -97,13 +80,6 @@ class OfflineGrantRepository:
         expires_at: int,
         max_admissions: int | None = None,
     ) -> OfflineGrantRecord:
-        """Insert a grant or accept an exact immutable replay of its identity.
-
-        ``max_admissions`` is optional and additive: omitted (the default),
-        the grant keeps unlimited-admissions legacy semantics. Given, the
-        grant starts with zero consumed admissions and a finite allowance.
-        """
-
         grant = _uuid_text(grant_id, "grant_id")
         owner = _required_id(owner_id, "owner_id")
         agent = _optional_id(agent_id, "agent_id")
@@ -146,6 +122,7 @@ class OfflineGrantRepository:
             raise RepositoryConflictError("offline grant replay changed immutable semantics")
         return record
 
+    # Racing chargers: exactly one wins, never double-charged
     def consume_admission(
         self,
         transaction: Transaction,
@@ -154,13 +131,6 @@ class OfflineGrantRepository:
         grant_id: str,
         as_of: int,
     ) -> OfflineGrantRecord:
-        """Atomically charge one admission against a finite grant allowance.
-
-        A grant with no configured allowance (``max_admissions IS NULL``) has
-        unlimited admissions and this call always succeeds for it. Two
-        concurrent callers racing a grant's last unit see exactly one success;
-        the loser is refused, never double-charged.
-        """
         owner = _required_id(owner_id, "owner_id")
         grant = _uuid_text(grant_id, "grant_id")
         observed_at = _non_negative_int(as_of, "as_of")
@@ -215,8 +185,6 @@ class OfflineGrantRepository:
         grant_id: str,
         as_of: int,
     ) -> OfflineGrantRecord | None:
-        """Resolve opaque token bytes only through an owner and live-state predicate."""
-
         owner = _required_id(owner_id, "owner_id")
         grant = _uuid_text(grant_id, "grant_id")
         observed_at = _non_negative_int(as_of, "as_of")
@@ -237,15 +205,6 @@ class OfflineGrantRepository:
         owner_id: str,
         grant_id: str,
     ) -> OfflineGrantRecord:
-        """Read a locked active owner/grant at fresh database time, without exchange.
-
-        Canonical callers hold owner 79 before session/occurrence/operation/slot
-        locks, and take this grant lock before guidance rows. The nonblocking
-        owner check also refuses a misordered standalone caller rather than
-        waiting upstream. Failed NOWAIT checks roll back only this savepoint.
-        Compare the returned complete record to the original captured grant;
-        this method does not authorize adoption, decrypt, refresh or renew.
-        """
         owner = str(_required_id(owner_id, "owner_id"))
         grant = _uuid_text(grant_id, "grant_id")
         try:
@@ -293,12 +252,6 @@ class OfflineGrantRepository:
         encrypted_refresh_token: bytes,
         as_of: int,
     ) -> OfflineGrantRecord | None:
-        """Replace opaque credential state without reviving a stale or revoked grant.
-
-        The product owns encrypted credential-reference/rotation semantics. A
-        failed predicate returns no credential, including when revocation wins
-        while a caller is acquiring or settling an exchange.
-        """
         owner = _required_id(owner_id, "owner_id")
         grant = _uuid_text(grant_id, "grant_id")
         expected = _opaque_bytes(expected_encrypted_refresh_token)
@@ -324,8 +277,6 @@ class OfflineGrantRepository:
         as_of: int,
         agent_id: str | None = None,
     ) -> OfflineGrantReference | None:
-        """Prefer an agent-specific live grant, then the owner's newest live grant."""
-
         owner = _required_id(owner_id, "owner_id")
         agent = _optional_id(agent_id, "agent_id")
         observed_at = _non_negative_int(as_of, "as_of")
@@ -381,8 +332,6 @@ class OfflineGrantRepository:
         owner_id: str,
         revoked_at: int,
     ) -> int:
-        """Idempotently revoke every still-live grant owned by one principal."""
-
         owner = _required_id(owner_id, "owner_id")
         observed_at = _non_negative_int(revoked_at, "revoked_at")
         result = transaction.execute(

@@ -1,8 +1,6 @@
-"""Owner-isolated persistent conversation-step lifecycle storage.
-
-AstralPlane persists already-redacted step details and applies durable replay
-and state fences.  PHI redaction, orphan healing, WebSocket emission, and the
-decision to start or terminate a step remain product-owned.
+"""Owner-scoped storage for conversation-step records: create, get, list, and a
+compare-and-set finish. Used by astralplane.api and AstralDeep's plane-repository
+adapters.
 """
 
 from __future__ import annotations
@@ -29,8 +27,6 @@ from astralplane.repositories import (
 
 
 class ChatStepStatus(StrEnum):
-    """Durable statuses present in the extracted 066 conversation trail."""
-
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     ERRORED = "errored"
@@ -44,8 +40,6 @@ class ChatStepStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ChatStepRecord:
-    """Detached already-redacted step lifecycle record."""
-
     step_id: str
     conversation_id: str
     owner_id: str
@@ -67,8 +61,6 @@ class ChatStepRecord:
 
 
 class ChatStepRepository:
-    """Persist step trails under conversation ownership and lifecycle CAS."""
-
     _FIELDS = (
         "id, chat_id, user_id, turn_message_id, kind, name, status, "
         "args_truncated, args_was_truncated, result_summary, "
@@ -89,8 +81,6 @@ class ChatStepRepository:
         args_was_truncated: bool,
         started_at: int,
     ) -> ChatStepRecord:
-        """Create an in-progress step or accept its exact immutable replay."""
-
         identity = _required_id(step_id, "step_id", maximum=128)
         owner = _required_id(owner_id, "owner_id")
         conversation = _required_id(conversation_id, "conversation_id")
@@ -207,8 +197,6 @@ class ChatStepRepository:
         conversation_id: str,
         limit: int = 1000,
     ) -> tuple[ChatStepRecord, ...]:
-        """Return the persisted trail in deterministic chronological order."""
-
         owner = _required_id(owner_id, "owner_id")
         conversation = _required_id(conversation_id, "conversation_id")
         limit = _bounded_limit(limit, maximum=1000)
@@ -236,8 +224,6 @@ class ChatStepRepository:
         result_was_truncated: bool = False,
         error_message: str | None = None,
     ) -> ChatStepRecord:
-        """Move one owner-scoped live step to a terminal status by CAS."""
-
         owner = _required_id(owner_id, "owner_id")
         identity = _required_id(step_id, "step_id", maximum=128)
         expected = _status(expected_status, "expected_status")

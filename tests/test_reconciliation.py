@@ -1,4 +1,7 @@
-"""Durable cross-process reconciliation lifecycle tests."""
+"""Tests for src/astralplane/reconciliation.py: golden-plan hook execution,
+concurrent-runner serialization, durable failure marking, and plan/digest mismatch
+refusal.
+"""
 
 from __future__ import annotations
 

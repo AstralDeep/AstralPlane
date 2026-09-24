@@ -1,4 +1,8 @@
-"""Strict, fixed-manifest cleanup for synthetic verification harness namespaces."""
+"""Deletes only the fixed, synthetic user namespaces used by the
+verification/security-benchmark harnesses, in a caller-owned transaction. Used by
+security_benchmark/isolation.py and verification/isolation.py to tear down test
+fixtures.
+"""
 
 from __future__ import annotations
 
@@ -73,8 +77,6 @@ def _bare_run_id(run_id: object, namespace: str) -> str:
 
 
 class HarnessCleanupRepository:
-    """Delete only fixed, synthetic user namespaces in a caller-owned transaction."""
-
     def purge_run(
         self,
         transaction: Transaction,

@@ -1,4 +1,7 @@
-"""Real PostgreSQL owner, replay, lease, effect and budget conformance for 079."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments: one-shot operation
+creation, claim, recovery, framework-credential binding, and owner/replay/race
+conformance against a live schema.
+"""
 
 from __future__ import annotations
 
@@ -267,7 +270,6 @@ def test_current_assignment_structure_digest(database):
 
 
 def session_observation(tx, *, owner_id="owner", session_id="session-reference"):
-    """Synthetic host observation of an exact real PostgreSQL session row."""
     from astralplane.repositories.history import (
         SessionExecutionObservation,
         SessionRecord,
@@ -298,7 +300,6 @@ def session_observation(tx, *, owner_id="owner", session_id="session-reference")
 
 
 def framework_credential_observation(tx, *, owner_id="owner", credential_id=None):
-    """Issue a real framework credential and its matching fresh execution observation."""
     from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
     from astralplane.repositories.history import (
         FrameworkCredentialFence,
@@ -356,7 +357,6 @@ def framework_credential_observation(tx, *, owner_id="owner", credential_id=None
 
 
 def create_operation(repo, tx, **changes):
-    """Use only application-owned opaque references, never synthetic bearer claims."""
     from astralplane.repositories.assignment_models import (
         AssignmentOperationAuthority,
         AssignmentOperationSpec,
@@ -398,7 +398,6 @@ def create_operation(repo, tx, **changes):
 
 
 def operation_observation(tx, record):
-    """Resolve only the fixture operation's exact original incarnation."""
     from astralplane.repositories.history import SessionExecutionObservation, SessionRepository
 
     sessions = SessionRepository()
@@ -413,7 +412,6 @@ def operation_observation(tx, record):
 
 
 def claim_operations(repo, tx, *, worker_id, limit=20, lease_seconds=30):
-    """An explicit fixture host observes and claims each discovered operation separately."""
     return tuple(
         repo.claim_operation_for_administration(
             tx,
@@ -618,7 +616,6 @@ def test_recovery_filters_profiles_before_batch_limit(tx, repo, profile):
         "one_shot": repo.recover_expired_operations_for_administration,
     }
     other = "one_shot" if profile == "persistent" else "persistent"
-    # The other profile is oldest. Filtering after LIMIT would starve this profile.
     expire_claim(tx, records[other])
     expire_claim(tx, records[profile])
     result = recover[profile](tx, limit=1)
@@ -759,7 +756,6 @@ def test_one_shot_framework_receipt_is_bound_to_issuing_reference(tx, repo):
 
 
 def test_one_shot_framework_authority_refuses_an_unverified_observation(tx, repo):
-    """The execution guard admits framework origin but still refuses the wrong observation."""
     from astralplane.repositories.assignment_models import (
         AssignmentOperationAuthority,
         AssignmentOperationSpec,
@@ -770,7 +766,6 @@ def test_one_shot_framework_authority_refuses_an_unverified_observation(tx, repo
         "owner", "framework", "credential", "unissued-credential-id", now + timedelta(minutes=5)
     )
     operation = AssignmentOperationSpec("chat", authority, now + timedelta(minutes=1), "none")
-    # A session observation is the wrong authority type for a framework-origin operation.
     with pytest.raises(RepositoryConflictError, match="assignment_authorization_unavailable"):
         create_operation(
             repo,
@@ -838,7 +833,6 @@ def test_profile_and_receipt_structure_repeat_verification(database):
 
 
 def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo):
-    """Build the exact pinned predecessor, then use the real guarded candidate edge."""
     import psycopg2
 
     from astralplane.database import migrations as m
@@ -1155,8 +1149,6 @@ def test_usage_basis_persists_through_settlement_and_is_absent_from_legacy_rows(
     )
     persisted_actual = row["data"]["result"]["actual"]
     assert persisted_actual["basis"] == {"tool_calls": "observed", "tokens": "estimated"}
-    # A legacy action's result predates 088.008 and simply has no "actual" key
-    # at all, let alone a basis map — record_action_outcome never synthesizes one.
     other = create(repo, tx, assignment_id=uid())
     other_current = claim(repo, tx)
     other_binding = bind(repo, tx, other_current.fence)
@@ -2465,7 +2457,6 @@ def test_terminal_retirement_expires_remote_capability_before_removing_link(tx, 
         tx, owner_id="owner", assignment_id=record.assignment_id, action_id=created.action_id
     )
     assert not invalidated.ever_started
-    # Deletion independently closes even a stale retained remote capability.
     tx.execute(
         "UPDATE remote_operation_proposal SET status=%s WHERE proposal_id=%s",
         (remote_state, proposal.proposal_id),
@@ -2684,7 +2675,6 @@ def test_completed_episode_generation_is_nonsecret_restart_evidence(tx, repo):
 
 
 def test_public_assignment_contract_behaviors():
-    """No-argument contract matrix entry executes actual owner/replay/race behavior."""
     fixture = database.__wrapped__()
     db = next(fixture)
     try:

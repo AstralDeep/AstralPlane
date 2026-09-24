@@ -1,4 +1,7 @@
-"""Owner-scoped persistence for qualification runs, evidence, and review audit."""
+"""Owner-scoped persistence for qualification test runs, evidence, and a hash-chained
+review audit trail spanning legacy v1 and current v2 entry formats. Used by
+AstralDeep's qual_audit/database.py.
+"""
 
 from __future__ import annotations
 
@@ -192,8 +195,6 @@ def _digest(value: object, field: str, *, allow_empty: bool = True) -> str:
 
 
 def quality_audit_chain_hash(record: QualityAuditEntryRecord) -> str:
-    """Return the canonical digest referenced by the next owner-chain entry."""
-
     if not isinstance(record, QualityAuditEntryRecord):
         raise RepositoryValidationError("record must be a QualityAuditEntryRecord")
     entry_id = _required_id(record.entry_id, "entry_id")
@@ -201,8 +202,6 @@ def quality_audit_chain_hash(record: QualityAuditEntryRecord) -> str:
         raise RepositoryValidationError("qualification audit action is unsupported")
     timestamp = _aware_time(record.timestamp, "timestamp").isoformat()
     if record.hash_version == 1:
-        # Compatibility with qualification histories written before Plane
-        # owned this chain.  New writes never select this version.
         payload = f"{entry_id}{record.action}{timestamp}".encode()
     elif record.hash_version == 2:
         payload = (
@@ -237,8 +236,6 @@ def verify_quality_audit_chain(
     *,
     require_genesis: bool = True,
 ) -> bool:
-    """Verify one ordered owner chain across legacy v1 and canonical v2 entries."""
-
     if isinstance(records, (str, bytes)) or not isinstance(records, Sequence):
         raise RepositoryValidationError("records must be an ordered sequence")
     entries = tuple(records)
@@ -349,8 +346,6 @@ def _artifact(row: Mapping[str, Any]) -> QualityLatexArtifactRecord:
 
 
 class QualityAuditRepository:
-    """One caller-transaction-bound facade over the qualification audit tables."""
-
     _RUN_FIELDS = (
         "owner_id, id, started_at, finished_at, system_state, categories, status"
     )
@@ -726,6 +721,7 @@ class QualityAuditRepository:
         )
         return tuple(_evidence(row) for row in rows)
 
+    # Locked so concurrent reviews can't fork the audit chain
     def append_review_and_transition(
         self,
         transaction: Transaction,
@@ -739,14 +735,6 @@ class QualityAuditRepository:
         timestamp: datetime,
         expected_verification_status: str,
     ) -> QualityCaseReviewResult | None:
-        """Atomically append one serialized audit review and transition its case.
-
-        The owner advisory lock covers the empty-chain case, for which no row
-        exists to lock.  A case row lock and status predicate provide the
-        optimistic fence.  The repository, rather than its caller, derives the
-        chain link from the locked head so concurrent reviewers cannot fork it.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         entry_id = _required_id(entry_id, "entry_id")
         case_id = _required_id(case_id, "case_id")

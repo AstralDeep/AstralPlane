@@ -1,3 +1,8 @@
+"""Tests for src/astralplane/repositories/work_admission.py: config load/publish
+atomicity, submission replay idempotency, CAS fencing, voice capacity admission, and
+purge-eligibility predicates.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -36,8 +41,6 @@ class _Result:
 
 
 class _Transaction:
-    """One deterministic caller-owned transaction with detached results."""
-
     def __init__(self, results: list[_Result] | None = None) -> None:
         self._results = deque(results or [])
         self.calls: list[tuple[str, tuple[object, ...]]] = []

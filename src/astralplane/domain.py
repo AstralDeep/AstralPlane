@@ -1,4 +1,6 @@
-"""Host-neutral identifiers and immutable values shared by Plane repositories."""
+"""Host-neutral identifiers and immutable values (OwnerContext, VersionedIdentity,
+MutationReceipt) shared by every astralplane.authority module and repository.
+"""
 
 from __future__ import annotations
 
@@ -23,8 +25,6 @@ _MAX_TEXT = 16_384
 
 
 def require_identifier(value: str, *, field: str) -> str:
-    """Return one bounded opaque identifier or fail without echoing its value."""
-
     if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
         raise DomainValidationError(f"{field} must be a canonical bounded identifier")
     return value
@@ -49,8 +49,6 @@ def freeze_domain_value(
     _depth: int = 0,
     _budget: list[int] | None = None,
 ) -> DomainValue:
-    """Detach JSON-like state into exact builtins with bounded recursion and size."""
-
     if _depth > _MAX_DEPTH:
         raise DomainValidationError(f"{field} exceeds the maximum nesting depth")
     budget = [_MAX_ITEMS] if _budget is None else _budget

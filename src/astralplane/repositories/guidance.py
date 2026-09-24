@@ -1,10 +1,7 @@
-"""Owner guidance persistence and exact revision invalidation.
-
-The host obtains owner 79 and any caller-session locks before entering this
-boundary, then guards current human policy and audit in the same transaction.
-We reacquire owner 79, lock affected assignments/actions in canonical order,
-then resource heads. No owner-0, session, or network access follows a head lock.
-A preparation is a read fence, never a capability; final methods recheck it.
+"""Owner-scoped persistence for skill catalogs and explicit notes, invalidating
+dependent assignment/action guidance references under canonical lock order on
+revision change. Used by orchestrator/user_skill_catalog.py and
+repositories/assignments.py.
 """
 
 from __future__ import annotations
@@ -122,7 +119,6 @@ def _head(row):
             integer(row["deleted_at"], minimum=row["updated_at"], maximum=row["updated_at"])
             if row["enabled"] is not False:
                 raise ValueError
-        # Reuse the exact definition metadata grammar without reading content.
         SkillDefinition(
             row["name"], "metadata check", tuple(row["applies_to"]), row["alias"], row["enabled"]
         )
@@ -204,14 +200,7 @@ def _receipt(row):
 
 
 class SkillsRepository:
-    """One owner catalog; immutable history is not current execution authority."""
-
     def lock_owner(self, transaction, *, owner_id):
-        """Serialize an owner read with mutations; caller authorization is separate.
-
-        Call after any current-human session guards, before reading heads. This
-        takes owner79/active-owner-state only, never a resource or owner0 lock.
-        """
         _lock_owner(transaction, owner_id)
 
     def get(self, query, *, owner_id, skill_id, include_deleted=False):
@@ -290,8 +279,6 @@ class SkillsRepository:
     def prepare_change(self, transaction, *, command):
         if type(command) is not SkillCommand:
             raise RepositoryValidationError("typed skill command required")
-        # Reconstruct so object.__setattr__ on an externally constructed DTO is
-        # not a way to skip the closed command and nested definition grammar.
         command = SkillCommand(
             **{
                 **{k: v for k, v in asdict(command).items() if k != "definition"},
@@ -531,12 +518,6 @@ class SkillsRepository:
             raise RepositoryDataError("invalid skill materialization marker") from exc
 
     def materialize_legacy_skills(self, transaction, *, owner_id, entries, manifest_digest):
-        """One atomic cutover, including empty catalogs; never re-import after it.
-
-        The host captures exact safe files and rechecks that manifest under its
-        converged writer/owner lock immediately before commit. SQL cannot lock
-        an out-of-band editor. Retained files cease being live sources afterward.
-        """
         owner(owner_id)
         digest(manifest_digest)
         if type(entries) is not tuple or any(
@@ -665,14 +646,7 @@ def _note(row):
 
 
 class ExplicitNotesRepository:
-    """Current-only note methods mixed into the existing personalization facade."""
-
     def lock_explicit_note_owner(self, transaction, *, owner_id):
-        """Hold owner79/active-owner-state for a coherent current-note read.
-
-        This is consistency only. The host owns authentication and final caller
-        validation, and takes its session guards before this read boundary.
-        """
         _lock_owner(transaction, owner_id)
 
     def get_explicit_note(self, query, *, owner_id, note_id, include_disabled=True):
@@ -715,8 +689,6 @@ class ExplicitNotesRepository:
             ),
             (owner_id, now, now, include_disabled, after_id, after_id, limit),
         )
-        # A read can wait on a statement boundary. Expiry is judged after the
-        # actual rows are returned, not only by the predicate's earlier sample.
         now = _clock(query)
         notes = tuple(_note(row) for row in rows)
         return tuple(
@@ -759,7 +731,6 @@ class ExplicitNotesRepository:
             or type(record) is not ExplicitNoteRecord
         ):
             raise RepositoryValidationError("typed explicit note preparation and record required")
-        # Caller-supplied preparations carry no authority; re-lock and compare.
         frozen_current = preparation.current
         if type(frozen_current) is ExplicitNoteRecord:
             frozen_current = ExplicitNoteRecord(**asdict(frozen_current))
@@ -869,13 +840,6 @@ class ExplicitNotesRepository:
         reason,
         skip_locked=False,
     ):
-        """Read/lock exact erasure disposition before the host's transactional audit.
-
-        Identical retirement replay is recognized under the owner and head locks.
-        The host audits only a miss, calls forget/expire (which rechecks), then
-        checks its caller again before committing this same transaction. Expired
-        ciphertext is returned only here for trusted retirement, never selection.
-        """
         owner(owner_id)
         identifier(note_id)
         integer(expected_revision, minimum=1, maximum=MAX_REVISION - 1)

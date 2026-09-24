@@ -1,9 +1,6 @@
-"""Keycloak/OIDC identity-observation persistence.
-
-AstralPlane stores detached identity claims but does not authenticate users,
-interpret roles, or decide authorization.  Every ordinary read is scoped to
-the immutable OIDC subject supplied by the caller; the deliberately global
-inventory method is named explicitly for administrative composition.
+"""Persists detached Keycloak/OIDC identity claims and external-identity links, scoped
+to the caller-supplied OIDC subject. Does not authenticate or authorize; used by
+orchestrator/external_identity_links.py and repositories/agent_management.py.
 """
 
 from __future__ import annotations
@@ -28,8 +25,6 @@ from astralplane.repositories import (
 
 @dataclass(frozen=True, slots=True)
 class IdentityRecord:
-    """One detached observation of an external identity provider subject."""
-
     owner_id: str
     email: str | None
     username: str | None
@@ -59,8 +54,6 @@ class ExternalIdentityNonceReplayError(RepositoryConflictError):
 
 
 class IdentityRepository:
-    """Persist identity observations without owning IAM or role policy."""
-
     def upsert_identity(
         self,
         transaction: Transaction,
@@ -104,7 +97,7 @@ class IdentityRepository:
                 observed_at,
             ),
         )
-        if row is None:  # pragma: no cover - PostgreSQL RETURNING invariant
+        if row is None:  # pragma: no cover
             raise RepositoryDataError("identity upsert returned no row")
         return _identity(row)
 
@@ -116,8 +109,6 @@ class IdentityRepository:
     def list_identities_for_administration(
         self, transaction: Transaction, *, limit: int = 200
     ) -> tuple[IdentityRecord, ...]:
-        """Return a bounded global inventory for an already-authorized caller."""
-
         limit = _bounded_limit(limit, maximum=1000)
         rows = transaction.fetch_all(
             """
@@ -143,8 +134,6 @@ class IdentityRepository:
         nonce_ttl_seconds: int = 300,
         nonce_cap: int = 10,
     ) -> ExternalIdentityLinkRecord:
-        """Atomically store a verified one-to-one external identity link."""
-
         owner = _required_id(owner_id, "owner_id")
         agent = _required_id(agent_id, "agent_id", maximum=512)
         provider_name = _bounded_text(provider, "provider", maximum=128)

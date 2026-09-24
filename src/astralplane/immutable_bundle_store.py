@@ -1,22 +1,7 @@
-"""Neutral durable publication for immutable generated bundles.
-
-The runtime database stores only a validated relative path and digests.  This
-module owns the corresponding filesystem transaction: write a revision into a
-generation-specific staging directory, flush every byte and directory entry,
-validate the staged bytes, then atomically rename that directory into the
-immutable revision namespace. Runtime activation and database transitions stay
-with the composing application; this seam only owns filesystem durability.
-
-The filesystem protocol assumes a qualified local filesystem, a protected and
-stable artifact-root ancestry, and cooperating publishers that all take this
-store's root-directory lock.  Holding and revalidating every directory
-component closes accidental symlink/junction and lock-path replacement races;
-it is not a defence against a hostile same-UID or root actor.  The filesystem
-commit and an application's generation-claim transition are intentionally
-separate durability domains. A process crash between them can therefore leave
-an exact orphan until a durable publication journal/startup reconciler handles
-it at the composition boundary; this module does not claim cross-domain
-atomicity.
+"""Filesystem transaction layer for publishing immutable generated bundles: stage,
+flush, validate, then atomically rename into a revision namespace. Used by
+repositories/generated_agent_publications.py; database transitions stay with the
+caller.
 """
 
 from __future__ import annotations
@@ -41,14 +26,14 @@ from typing import Any
 
 from astralplane.errors import PlaneError
 
-try:  # POSIX advisory lock.
+try:
     import fcntl as _fcntl
-except ImportError:  # pragma: no cover - selected on Windows.
+except ImportError:  # pragma: no cover
     _fcntl = None  # type: ignore[assignment]
 
-try:  # Windows byte-range advisory lock.
+try:
     import msvcrt as _msvcrt
-except ImportError:  # pragma: no cover - selected on POSIX.
+except ImportError:  # pragma: no cover
     _msvcrt = None  # type: ignore[assignment]
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -76,8 +61,6 @@ _DirectoryIdentity = tuple[int, int]
 
 @dataclass(frozen=True)
 class _PinnedDirectoryChain:
-    """One no-follow directory chain held for a bounded filesystem action."""
-
     target: Path
     identity: _DirectoryIdentity
     entries: tuple[tuple[Path, _DirectoryIdentity], ...]
@@ -104,32 +87,22 @@ class _PathEntryState:
 
 
 class ArtifactPublicationError(PlaneError):
-    """Base class for safe immutable-publication failures."""
-
     default_code = "immutable_bundle_publication_failed"
 
 
 class ArtifactCollisionError(ArtifactPublicationError):
-    """An immutable revision path already identifies different bytes."""
-
     default_code = "immutable_bundle_collision"
 
 
 class ArtifactIntegrityError(ArtifactPublicationError):
-    """Published bytes do not match their manifest or expected digest."""
-
     default_code = "immutable_bundle_integrity_failed"
 
 
 class ArtifactPublicationRevokedError(ArtifactPublicationError):
-    """Publication authority was revoked before the immutable commit."""
-
     default_code = "immutable_bundle_publication_revoked"
 
 
 class ArtifactReconciliationError(ArtifactPublicationError):
-    """An exact committed artifact could not be reconciled safely."""
-
     default_code = "immutable_bundle_reconciliation_failed"
 
     def __init__(
@@ -154,8 +127,6 @@ def _check_publication_not_revoked(
 
 
 def _move_file_ex_write_through(source: Path, destination: Path) -> int:
-    """Run the no-replace Win32 rename and return its last-error code."""
-
     import ctypes
     from ctypes import wintypes
 
@@ -186,8 +157,6 @@ def _open_win32_directory(
     *,
     share_delete: bool,
 ) -> tuple[int, int, int, int]:
-    """Open one directory without following its final reparse point."""
-
     import ctypes
     from ctypes import wintypes
 
@@ -274,8 +243,6 @@ def _close_win32_handle(handle: int) -> None:
 
 
 def _win32_directory_information(path: Path) -> tuple[int, int, int]:
-    """Read no-follow Win32 attributes and stable file identity."""
-
     handle, attributes, volume_serial, file_id = _open_win32_directory(
         path,
         share_delete=True,
@@ -287,8 +254,6 @@ def _win32_directory_information(path: Path) -> tuple[int, int, int]:
 
 
 def _directory_identity(path: Path) -> _DirectoryIdentity:
-    """Return one trustworthy directory identity without following links."""
-
     if os.name == "nt":
         try:
             file_attributes, volume_serial, file_id = (
@@ -329,8 +294,6 @@ def _directory_identity(path: Path) -> _DirectoryIdentity:
 
 
 def _path_entry_exists(path: Path) -> bool:
-    """Return whether the exact path entry exists, including broken links."""
-
     try:
         path.lstat()
     except FileNotFoundError:
@@ -423,8 +386,6 @@ def _pin_directory_chain(
     require_leaf_new: bool = False,
     windows_leaf_share_delete: bool = False,
 ) -> Iterator[_PinnedDirectoryChain]:
-    """Open every path component without following links and hold the chain."""
-
     absolute = _absolute_without_link_resolution(path)
     anchor = Path(absolute.anchor)
     relative_parts = absolute.relative_to(anchor).parts
@@ -567,8 +528,6 @@ def _move_posix_no_replace(
     source_parent_descriptor: int | None = None,
     destination_parent_descriptor: int | None = None,
 ) -> int:
-    """Atomically rename a directory on POSIX without replacing any entry."""
-
     import ctypes
 
     libc = ctypes.CDLL(None, use_errno=True)
@@ -631,16 +590,10 @@ def _validate_replace_paths(
         raise ArtifactIntegrityError(
             "artifact revision parent identity changed before durable replace"
         )
-    # Destination absence is decided only by the native no-replace primitive.
-    # A separate exists check would recreate the publication TOCTOU that this
-    # function is meant to close and could overwrite a racing directory on
-    # platforms whose ordinary replace primitive permits replacement.
 
 
 @dataclass(frozen=True, slots=True)
 class ImmutableBundleContract:
-    """Declarative immutable-bundle format owned by a composing application."""
-
     file_names: tuple[str, ...]
     manifest_filename: str = "manifest.json"
     scope_identity_field: str = "scope_id"
@@ -708,8 +661,6 @@ class ImmutableBundleContract:
 
 @dataclass(frozen=True, slots=True)
 class BundlePublicationKey:
-    """Validated identifiers that derive every publication-relative path."""
-
     scope_id: str
     staging_id: str
     source_revision: int
@@ -731,16 +682,12 @@ class BundlePublicationKey:
 
 @dataclass(frozen=True, slots=True)
 class BundlePublicationPaths:
-    """Canonical POSIX-relative paths derived from one publication key."""
-
     staging_relative_path: str
     revision_relative_path: str
     quarantine_relative_path: str
 
 
 def paths_for(key: BundlePublicationKey) -> BundlePublicationPaths:
-    """Derive the one canonical staging, revision, and quarantine layout."""
-
     if not isinstance(key, BundlePublicationKey):
         raise TypeError("publication key is required")
     return BundlePublicationPaths(
@@ -764,8 +711,6 @@ def paths_for(key: BundlePublicationKey) -> BundlePublicationPaths:
 
 @dataclass(frozen=True, slots=True)
 class BundlePublicationReceipt:
-    """Exact filesystem commit identity used for claim reconciliation."""
-
     paths: BundlePublicationPaths
     publication_key: BundlePublicationKey
     storage_identity: _DirectoryIdentity
@@ -775,14 +720,6 @@ class BundlePublicationReceipt:
 
 @dataclass(frozen=True, slots=True)
 class StagedBundleReceipt:
-    """Live same-process authority to promote one exact durable staging entry.
-
-    Only the key and expected digests/manifest metadata belong in the durable
-    journal.  The filesystem identity is process-local evidence and is always
-    reconstructed and revalidated by :meth:`ImmutableBundleStore.recover`
-    after a process restart.
-    """
-
     paths: BundlePublicationPaths
     publication_key: BundlePublicationKey
     storage_identity: _DirectoryIdentity
@@ -793,8 +730,6 @@ class StagedBundleReceipt:
 
 @dataclass(frozen=True, slots=True)
 class PublishedBundle:
-    """One re-hashed immutable bundle loaded from durable storage."""
-
     bundle_relative_path: str
     bundle_sha256: str
     manifest_sha256: str
@@ -810,14 +745,10 @@ class PublishedBundle:
     )
 
     def manifest_dict(self) -> dict[str, Any]:
-        """Return a detached JSON-compatible manifest copy."""
-
         return json.loads(self.manifest_json)
 
 
 class BundleRecoveryDisposition(StrEnum):
-    """Bounded recovery classifications that never imply fake success."""
-
     FINAL_VALID = "final_valid"
     STAGING_PROMOTED = "staging_promoted"
     ABSENT = "absent"
@@ -828,8 +759,6 @@ class BundleRecoveryDisposition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class BundleRecoveryResult:
-    """Evidence returned by one locked recovery inspection or promotion."""
-
     disposition: BundleRecoveryDisposition
     published: PublishedBundle | None = None
     observed_identity: _DirectoryIdentity | None = field(
@@ -862,8 +791,6 @@ def canonical_bundle_digest(
     files: Mapping[str, str],
     contract: ImmutableBundleContract,
 ) -> str:
-    """Hash canonical UTF-8 bundle text in the contract's exact inventory."""
-
     if not isinstance(contract, ImmutableBundleContract):
         raise TypeError("immutable bundle contract is required")
     canonical = json.dumps(
@@ -913,16 +840,6 @@ def runtime_metadata_for_manifest(
     contract: ImmutableBundleContract,
     manifest: Mapping[str, Any] | str,
 ) -> Mapping[str, Any]:
-    """Validate manifest v2 shape and return its deeply immutable metadata.
-
-    This helper deliberately needs no bundle files.  A startup reconciler can
-    derive the exact metadata passed to :meth:`ImmutableBundleStore.recover`
-    from the canonical manifest JSON persisted in its journal, without
-    duplicating Plane's core-field split or accepting a weaker manifest shape.
-    File bytes and their declared hashes are still revalidated by the store
-    before any staging promotion.
-    """
-
     if not isinstance(contract, ImmutableBundleContract):
         raise TypeError("immutable bundle contract is required")
     if isinstance(manifest, str):
@@ -1026,8 +943,6 @@ def runtime_metadata_for_manifest(
 
 @dataclass(frozen=True, slots=True)
 class FinalizedBundle:
-    """Deeply immutable canonical bundle accepted by the filesystem engine."""
-
     contract: ImmutableBundleContract
     files: Mapping[str, str]
     bundle_sha256: str
@@ -1126,8 +1041,6 @@ class FinalizedBundle:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> FinalizedBundle:
-        """Build the typed contract from a detached application mapping."""
-
         if not isinstance(value, Mapping):
             raise TypeError("bundle value must be a mapping")
         required = {
@@ -1148,19 +1061,10 @@ class FinalizedBundle:
         )
 
     def manifest_dict(self) -> dict[str, Any]:
-        """Return a detached JSON-compatible manifest copy."""
-
         return json.loads(self.manifest_json)
 
 
 class ImmutableBundleStore:
-    """Publish and load exact immutable bundles under one explicit root.
-
-    Args:
-        root: Persistent same-filesystem root supplied by the application.
-        contract: Exact bundle inventory and manifest format.
-    """
-
     def __init__(
         self,
         root: os.PathLike[str] | str,
@@ -1185,8 +1089,6 @@ class ImmutableBundleStore:
 
     @property
     def root(self) -> Path:
-        """Resolved storage root (primarily for diagnostics and tests)."""
-
         return self._root
 
     @contextmanager
@@ -1248,9 +1150,7 @@ class ImmutableBundleStore:
         descriptor: int | None = None,
     ) -> None:
         if os.name == "nt":
-            # Windows does not expose POSIX directory descriptors through
-            # ``os.open``. Files are flushed individually and the namespace
-            # transition below uses MoveFileExW(MOVEFILE_WRITE_THROUGH).
+            # No POSIX directory fd on Windows; uses MoveFileExW instead
             return
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         owned_descriptor = descriptor is None
@@ -1368,15 +1268,6 @@ class ImmutableBundleStore:
         mismatch_handler: Callable[[_DirectoryIdentity], bool] | None = None,
         equivalent_destination_check: Callable[[], bool] | None = None,
     ) -> str:
-        """Retry only transient Windows path holds under a strict bound.
-
-        ``ERROR_ACCESS_DENIED`` is ambiguous on Windows: it can mean a real
-        ACL refusal or a short-lived handle without delete sharing.  Retrying
-        it is therefore deliberately bounded and never changes the atomic,
-        write-through operation.  A persistent ACL refusal is re-raised with
-        its original Win32 code after the final attempt.
-        """
-
         source_identity = (
             _directory_identity(source)
             if expected_source_identity is None
@@ -1505,14 +1396,10 @@ class ImmutableBundleStore:
 
     @contextmanager
     def _publication_lock(self) -> Iterator[None]:
-        # POSIX locks the pinned root directory itself, so replacing a lock-file
-        # pathname cannot create a second flock domain. Windows retains the CRT
-        # byte-range lock while the whole root ancestry is held without delete
-        # sharing and revalidates the exact lock-file identity after admission.
         with self._pin_store_directory(self._root) as root_pin:
             if _fcntl is not None:
                 descriptor = root_pin.descriptor
-                if descriptor is None:  # pragma: no cover - platform invariant.
+                if descriptor is None:  # pragma: no cover
                     raise ArtifactPublicationError(
                         "POSIX artifact root descriptor is unavailable"
                     )
@@ -1524,7 +1411,7 @@ class ImmutableBundleStore:
                     _fcntl.flock(descriptor, _fcntl.LOCK_UN)
                 return
 
-            if _msvcrt is None:  # pragma: no cover - supported hosts expose one API.
+            if _msvcrt is None:  # pragma: no cover
                 raise ArtifactPublicationError("platform file locking is unavailable")
             lock_path = self._root / ".publication.lock"
             descriptor = os.open(
@@ -1588,7 +1475,7 @@ class ImmutableBundleStore:
                     written = os.write(descriptor, view)
                 except InterruptedError:
                     continue
-                if written <= 0:  # pragma: no cover - defensive OS invariant
+                if written <= 0:  # pragma: no cover
                     raise OSError("short artifact write")
                 view = view[written:]
             os.fsync(descriptor)
@@ -1612,7 +1499,7 @@ class ImmutableBundleStore:
                     shutil.rmtree(path)
                 else:
                     parent_descriptor = pinned.parent_descriptor
-                    if parent_descriptor is None:  # pragma: no cover - invariant.
+                    if parent_descriptor is None:  # pragma: no cover
                         raise ArtifactPublicationError(
                             "staging parent descriptor is unavailable"
                         )
@@ -1633,15 +1520,6 @@ class ImmutableBundleStore:
         retry_check: Callable[[], None] | None = None,
         cancellation_event: threading.Event | None = None,
     ) -> None:
-        """Exclusively quarantine one exact path entry without following it.
-
-        The publication source is required to be a regular directory, but a
-        path-swap at the native call can install a file, symlink, or junction at
-        the immutable destination.  That entry must be moved out of the live
-        namespace without traversing it.  Parent chains remain pinned for the
-        operation and the destination is always a native no-replace rename.
-        """
-
         with self._pin_store_directory(source_path.parent) as source_parent_pin:
             source_state = _path_entry_state(
                 source_path,
@@ -1779,7 +1657,7 @@ class ImmutableBundleStore:
                             destination_path,
                             descriptor=destination_pin.descriptor,
                         )
-                # Make destination appearance durable before source removal.
+                # Destination fsync must land before the source-parent fsync
                 self._fsync_directory(
                     destination_path.parent,
                     descriptor=destination_parent_pin.descriptor,
@@ -1891,8 +1769,6 @@ class ImmutableBundleStore:
         *,
         expected_identity: _DirectoryIdentity,
     ) -> bool:
-        """Move only the just-published object out of the immutable namespace."""
-
         try:
             self._relocate_exact_directory(
                 revision_path,
@@ -1909,8 +1785,6 @@ class ImmutableBundleStore:
         *,
         expected_identity: _DirectoryIdentity,
     ) -> None:
-        """Re-flush a native commit observed during idempotent recovery."""
-
         with self._pin_store_directory(revision_path) as revision_pin:
             if revision_pin.identity != expected_identity:
                 raise ArtifactIntegrityError(
@@ -2016,8 +1890,6 @@ class ImmutableBundleStore:
         relative_path: str,
         expected_identity: _DirectoryIdentity,
     ) -> PublishedBundle | None:
-        """Load any complete contract-valid bundle at an observed identity."""
-
         try:
             with self._pin_store_directory(
                 path,
@@ -2200,8 +2072,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None,
         fault_hook: Callable[[str], None] | None,
     ) -> PublishedBundle:
-        """Promote one already-validated, identity-pinned staging directory."""
-
         self._fault(fault_hook, "after_validate")
         if fence_check is not None:
             fence_check("before_replace")
@@ -2320,8 +2190,6 @@ class ImmutableBundleStore:
                         revision_path,
                         descriptor=source_pin.descriptor,
                     )
-                    # The destination namespace must be durable before
-                    # recording removal from the source namespace.
                     self._fsync_directory(
                         revision_path.parent,
                         descriptor=destination_parent_pin.descriptor,
@@ -2349,15 +2217,13 @@ class ImmutableBundleStore:
                 fsync_parent=False,
             )
             self._fsync_existing_directory(staging_path.parent)
-            if existing is None:  # pragma: no cover - guarded above.
+            if existing is None:  # pragma: no cover
                 raise ArtifactIntegrityError(
                     "idempotent publication did not identify a revision"
                 )
             return existing
 
-        # Re-open and re-hash while the publication lock still excludes
-        # cooperating writers. Returning the staged object would hide
-        # corruption between validation and the native move.
+        # Re-verifies here so post-move corruption isn't hidden
         try:
             published = self.load(
                 relative_path,
@@ -2393,14 +2259,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None = None,
         fault_hook: Callable[[str], None] | None = None,
     ) -> PublishedBundle:
-        """Durably publish one finalized revision, or replay the same bytes.
-
-        ``fence_check`` is called before staging and before the atomic replace.
-        A database-backed caller uses it to re-check the current generation
-        claim and operation execution generation. The filesystem store
-        deliberately does not own those database transitions.
-        """
-
         with self._publication_lock():
             return self._publish_locked(
                 finalized,
@@ -2419,14 +2277,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None = None,
         fault_hook: Callable[[str], None] | None = None,
     ) -> StagedBundleReceipt:
-        """Write and validate durable staging, without publishing it.
-
-        The returned receipt is live same-process evidence.  A caller may
-        release this method, persist the key/digests/manifest metadata in its
-        own journal, then call :meth:`promote_staged`; no database work is
-        performed while the store-global filesystem lock is held.
-        """
-
         if not isinstance(finalized, FinalizedBundle):
             raise TypeError("finalized must be FinalizedBundle")
         if not isinstance(key, BundlePublicationKey):
@@ -2470,8 +2320,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None = None,
         fault_hook: Callable[[str], None] | None = None,
     ) -> PublishedBundle:
-        """Revalidate and publish the exact staging entry in a live receipt."""
-
         expected_paths, expected_metadata = self._validated_staged_receipt(
             receipt
         )
@@ -2587,14 +2435,6 @@ class ImmutableBundleStore:
         return expected_paths, expected_metadata
 
     def quarantine_staged(self, receipt: StagedBundleReceipt) -> None:
-        """Durably quarantine the exact staging object after terminal failure.
-
-        The composing application calls this off-loop and shield/joined before
-        terminalizing a post-stage/pre-promotion journal row.  It never follows
-        or removes a path and is idempotent after a native move whose later
-        directory flush was interrupted.
-        """
-
         expected_paths, expected_metadata = self._validated_staged_receipt(
             receipt
         )
@@ -2702,15 +2542,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None = None,
         fault_hook: Callable[[str], None] | None = None,
     ) -> BundleRecoveryResult:
-        """Inspect or resume one journaled publication without bundle memory.
-
-        Recovery trusts only the validated key, digests, and bounded manifest
-        metadata persisted by the caller.  It reconstructs filesystem identity
-        from pinned paths and never deletes an entry; invalid staging is moved
-        to its exclusive publication-specific quarantine path only while its
-        exact observed identity remains unchanged.
-        """
-
         if not isinstance(key, BundlePublicationKey):
             raise TypeError("publication key is required")
         if _SHA256.fullmatch(expected_bundle_sha256 or "") is None:
@@ -2970,7 +2801,7 @@ class ImmutableBundleStore:
                 detail="invalid or partial staging was quarantined by exact identity",
             )
 
-        if staged is None:  # pragma: no cover - guarded by the load above.
+        if staged is None:  # pragma: no cover
             raise ArtifactIntegrityError("recovery did not validate staging bytes")
         try:
             published = self._promote_validated_staging(
@@ -3006,13 +2837,6 @@ class ImmutableBundleStore:
         )
 
     def quarantine_receipt(self, receipt: BundlePublicationReceipt) -> None:
-        """Move the exact committed object out of the live namespace.
-
-        This is the filesystem half of a generation-claim conflict. It never
-        mutates application state and never removes a path whose stable
-        directory identity differs from the publication receipt.
-        """
-
         if not isinstance(receipt, BundlePublicationReceipt):
             raise TypeError("bundle publication receipt is required")
         if not isinstance(receipt.publication_key, BundlePublicationKey):
@@ -3037,10 +2861,6 @@ class ImmutableBundleStore:
                 and quarantine_state.is_directory
                 and not quarantine_state.is_reparse
             ):
-                # A prior exact move may have committed and then raised while
-                # flushing its directory graph.  Absence/presence alone is not
-                # durable completion evidence, so every retry re-flushes Q,
-                # then Q's parent, then the original source parent.
                 with self._pin_store_directory(
                     quarantine_path,
                 ) as quarantine_pin, self._pin_store_directory(
@@ -3091,8 +2911,6 @@ class ImmutableBundleStore:
         cancellation_event: threading.Event | None,
         fault_hook: Callable[[str], None] | None,
     ) -> PublishedBundle:
-        """Publish while holding the cross-process revision lock."""
-
         if not isinstance(finalized, FinalizedBundle):
             raise TypeError("finalized must be FinalizedBundle")
         if not isinstance(key, BundlePublicationKey):
@@ -3132,10 +2950,6 @@ class ImmutableBundleStore:
                 revision_path,
                 expected_identity=existing.storage_identity,
             )
-            # A separately returned ``stage()`` receipt may still own this
-            # key during the deliberate journal gap.  An idempotent final
-            # revision is not authority to delete a potentially different
-            # live staging object; its own promoter or recovery handles it.
             self._fsync_existing_directory(staging_path.parent)
             return self._with_receipt(
                 existing,
@@ -3179,8 +2993,6 @@ class ImmutableBundleStore:
         expected_digest: str,
         expected_manifest_digest: str | None = None,
     ) -> PublishedBundle:
-        """Load and re-hash one immutable revision beneath this store's root."""
-
         if _SHA256.fullmatch(expected_digest or "") is None:
             raise ValueError("expected_digest must be lowercase SHA-256")
         if (

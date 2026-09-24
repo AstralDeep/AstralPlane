@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.audit: canonical-JSON hash-chain construction,
+genesis/continuation append, tamper detection, and owner-scoped trajectory queries
+against real PostgreSQL.
+"""
+
 from __future__ import annotations
 
 import hashlib

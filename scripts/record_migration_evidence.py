@@ -1,4 +1,6 @@
-"""Run the bounded migration/recovery matrix and write digest-only local evidence."""
+"""Runs the bounded migration/recovery check matrix and writes digest-only local
+evidence, without retaining SQL parameters or credentials.
+"""
 
 from __future__ import annotations
 

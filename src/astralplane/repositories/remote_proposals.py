@@ -1,4 +1,7 @@
-"""Single-use remote-operation confirmation proposal persistence."""
+"""Single-use confirmation proposals gating destructive remote-compute operations:
+pending, approved/declined, and consumed states. Used by
+orchestrator/remote_confirmation.py, which owns the approval policy.
+"""
 
 from __future__ import annotations
 
@@ -42,8 +45,6 @@ class RemoteOperationProposalRecord:
 
 
 class RemoteOperationProposalRepository:
-    """Durable mechanics for caller-authorized confirmation policy."""
-
     _FIELDS = (
         "proposal_id, owner_user_id, chat_id, machine_id, agent_id, verb, "
         "args_json, args_fingerprint, summary, status, created_at, expires_at, "
@@ -124,8 +125,6 @@ class RemoteOperationProposalRepository:
         decision: str,
         decided_at: int,
     ) -> RemoteOperationProposalRecord | None:
-        """Apply an approved/declined decision only while pending and unexpired."""
-
         owner = _required_id(owner_id, "owner_id")
         proposal = _required_id(proposal_id, "proposal_id")
         if decision not in {"approved", "declined"}:
@@ -181,8 +180,6 @@ class RemoteOperationProposalRepository:
         expected_args_fingerprint: str,
         consumed_at: int,
     ) -> RemoteOperationProposalRecord | None:
-        """Atomically consume one approved, matching, unexpired proposal."""
-
         owner = _required_id(owner_id, "owner_id")
         proposal = _required_id(proposal_id, "proposal_id")
         tool_name = _bounded_text(expected_tool_name, "expected_tool_name", maximum=256)
@@ -236,7 +233,7 @@ def _validated(record: RemoteOperationProposalRecord) -> RemoteOperationProposal
     if not isinstance(record.arguments, Mapping):
         raise RepositoryValidationError("arguments must be a mapping")
     arguments = _structured_json(_canonical_json(record.arguments, "arguments"), "arguments")
-    if not isinstance(arguments, Mapping):  # pragma: no cover - canonical input invariant
+    if not isinstance(arguments, Mapping):  # pragma: no cover
         raise RepositoryValidationError("arguments must be a mapping")
     summary = _bounded_text(record.summary, "summary", maximum=2048)
     if record.status not in _STATUSES:

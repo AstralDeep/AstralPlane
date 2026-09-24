@@ -1,4 +1,8 @@
-"""Durable, cross-process post-migration reconciliation."""
+"""Runs required post-migration reconciliation hooks to completion under a durable
+cross-process coordinator, keyed by name and version. Coordinated via
+reconciliation_store.py's locking and invoked from database/bootstrap.py during
+startup.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +34,6 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 @dataclass(frozen=True, slots=True)
 class ReconciliationPlan:
-    """Exact required hook set bound to one schema revision."""
-
     schema_revision: str
     plan_digest: str
     hooks: tuple[ReconciliationHookIdentity, ...]
@@ -39,8 +41,6 @@ class ReconciliationPlan:
 
 @dataclass(frozen=True, slots=True)
 class ReconciliationHookReport:
-    """Detached durable status for one required hook."""
-
     hook: ReconciliationHookIdentity
     attempt: int
     already_complete: bool
@@ -49,8 +49,6 @@ class ReconciliationHookReport:
 
 @dataclass(frozen=True, slots=True)
 class ReconciliationReport:
-    """Proof that every hook in one exact plan is durably complete."""
-
     schema_revision: str
     plan_digest: str
     advisory_lock: tuple[int, int]
@@ -145,14 +143,6 @@ def _validate_marker(
 
 
 class ReconciliationRunner:
-    """Run required hooks under a supplied durable cross-process coordinator.
-
-    Hooks are keyed by name and version and must be idempotent. Marker methods
-    are required to durably persist before returning. ``KeyboardInterrupt`` and
-    ``SystemExit`` are not caught or wrapped; a best-effort durable interrupted
-    marker is written from ``finally`` before termination continues.
-    """
-
     def __init__(
         self,
         coordinator: ReconciliationCoordinator,
@@ -297,9 +287,6 @@ class ReconciliationRunner:
                     ) from exc
                 finally:
                     if not completed and not ordinary_failure:
-                        # Do not catch KeyboardInterrupt/SystemExit. This
-                        # best-effort marker write runs during stack unwinding,
-                        # and termination then continues unchanged.
                         with suppress(Exception):
                             self._durable_failure(
                                 session,
@@ -318,9 +305,6 @@ class ReconciliationRunner:
                     )
                 )
 
-            # Re-read the durable store under the same cross-process lock. A
-            # report is ready evidence only if every exact required marker is
-            # still present and complete.
             for identity in plan.hooks:
                 marker = session.get_marker(identity)
                 try:

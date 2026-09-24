@@ -1,7 +1,6 @@
-"""PostgreSQL-native transactional outbox storage mechanics.
-
-The caller owns every transaction.  Product code owns topic registration and
-handler execution; this module only persists, leases, and fences delivery work.
+"""PostgreSQL-backed transactional outbox storage: persists, leases, and fences delivery
+work under caller-owned transactions. Topic registration and handler execution stay
+with product code; used by astralplane.api and authority/repository.py.
 """
 
 from __future__ import annotations
@@ -313,8 +312,6 @@ def _require_single_update(
 
 
 class PostgresOutboxStore:
-    """Durable outbox operations over one caller-owned PostgreSQL transaction."""
-
     def enqueue(
         self,
         transaction: Transaction,

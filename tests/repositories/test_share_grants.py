@@ -1,4 +1,7 @@
-"""Immutable snapshot share-grant repository tests."""
+"""Tests for astralplane.repositories.share_grants: digest-bound immutable snapshot
+creation without repr disclosure, owner-scoped listing, and atomic
+digest/revocation/expiry recheck on open.
+"""
 
 from __future__ import annotations
 

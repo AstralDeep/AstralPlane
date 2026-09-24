@@ -1,4 +1,7 @@
-"""Remote confirmation proposal ownership and single-use tests."""
+"""Tests for astralplane.repositories.remote_proposals: proposal create/replay
+idempotency, owner-scoped reads, pending/expiry/consume CAS, and fail-closed handling
+of corrupt persisted rows.
+"""
 
 from __future__ import annotations
 

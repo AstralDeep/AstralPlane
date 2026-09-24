@@ -1,4 +1,6 @@
-"""Enforce AstralPlane's one-way runtime dependency boundary."""
+"""Tests that astralplane's runtime package never imports AstralDeep,
+agent_constitution, or UI/PySide6 modules, keeping the dependency direction one-way.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +9,10 @@ from pathlib import Path
 
 FORBIDDEN_IMPORT_ROOTS = frozenset(
     {
-        # Composed Astral projects.
         "astraldeep",
         "astralprims",
         "astralprojection",
         "lets",
-        # AstralDeep's package and legacy backend-root imports.
         "agent_constitution",
         "agents",
         "audit",
@@ -33,7 +33,6 @@ FORBIDDEN_IMPORT_ROOTS = frozenset(
         "verification",
         "voice_agent",
         "webrender",
-        # UI, API, media, agent transport, and remote-execution implementations.
         "PySide6",
         "fastapi",
         "fastmcp",

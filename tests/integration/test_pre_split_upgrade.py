@@ -1,4 +1,7 @@
-"""Executable 066.001 through the current recovery path."""
+"""Tests for astralplane.database.migrations: the pre-split PostgreSQL and blob fixture
+upgrades to the current schema, repeats as a no-op, rejects predecessor damage, and
+rolls back cleanly on failure.
+"""
 
 from __future__ import annotations
 
@@ -51,8 +54,6 @@ from tests.fixtures.pre_split.loader import (
 
 
 class _NonClosingDriverPool:
-    """Adapt one dedicated integration connection to the production database facade."""
-
     def __init__(self, connection: Any) -> None:
         self.connection = connection
         self.borrowed = False

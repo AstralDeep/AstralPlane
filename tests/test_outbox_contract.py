@@ -1,4 +1,6 @@
-"""Structural coverage for the neutral durable-outbox public contract."""
+"""Tests for src/astralplane/contracts: the neutral durable-outbox Protocol exposes a
+complete, driver-independent lease and failure lifecycle.
+"""
 
 from __future__ import annotations
 

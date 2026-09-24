@@ -1,4 +1,7 @@
-"""Actual PostgreSQL admission/claim incarnation binding and legacy settlement."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments and history: admission
+binds an exact session incarnation, claims are exclusive and replay-safe, and legacy
+v1 permits settle once without reopening execution.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -38,7 +41,6 @@ from astralplane.repositories.history import SessionExecutionObservation, Sessio
 
 
 def arguments(tx):
-    """New intent plus a real stored incarnation, without creating any operation."""
     observation = session_observation(tx, session_id=uid())
     values = definition(tx)
     now = observation.started_at
@@ -238,7 +240,6 @@ def test_receipt_replay_keeps_v1_binding_and_precedes_new_observation_or_intent(
 def test_creation_expiry_ceiling_preserves_exact_subsecond_boundary(
     tx, repo, year, overrun_microseconds
 ):
-    """An exact hard expiry is valid; even a rounded-away microsecond is refused."""
     args = arguments(tx)
     observed = args["authority"]
     sessions = SessionRepository()
@@ -254,7 +255,7 @@ def test_creation_expiry_ceiling_preserves_exact_subsecond_boundary(
     fresh = session_observation(tx, session_id=original.session_id)
     expiry = hard_expiry + timedelta(microseconds=overrun_microseconds)
     if year == 9999:
-        assert expiry.timestamp() == hard_seconds  # Native float cannot retain this overrun.
+        assert expiry.timestamp() == hard_seconds
     args["authority"] = fresh
     args["operation"] = replace(
         args["operation"],
@@ -413,7 +414,6 @@ def test_actual_lock_wait_crossing_observation_expiry_has_no_partial_claim_or_cr
                     exact_claim(repo, tx, record, authority=args["authority"])
                 else:
                     repo.create_operation(tx, **args)
-            # Catch and commit deliberately; savepoint must preserve the preexisting state.
             return rows(tx)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -447,7 +447,6 @@ def test_actual_lock_wait_crossing_observation_expiry_has_no_partial_claim_or_cr
 
 
 def legacy_record(tx, record, session_id="session-reference"):
-    """Restore the historical v1 envelope around its unchanged authentic action ledger."""
     mutate(
         tx,
         record,
@@ -550,7 +549,6 @@ def test_v1_expired_lease_recovers_liabilities_without_scheduling_retry(tx, repo
 
 
 def install_historical_ledgers(tx):
-    """Load exact synthetic public-718 API receipts; never use v2 creation to mint v1 work."""
     import hashlib
     import json
     from pathlib import Path
@@ -589,7 +587,6 @@ def test_genuine_718_issued_and_uncertain_ledgers_remain_settleable(tx, repo, re
     )
 
     fixture = install_historical_ledgers(tx)
-    # Delete all current owner sessions. Old factual settlement must never need a replacement.
     tx.execute("DELETE FROM web_session WHERE user_id='owner'")
     for permit in fixture["permits"]:
         assignment = repo.get_assignment(
@@ -933,14 +930,12 @@ def test_request_host_caps_before_first_operation_call_release_worker_while_bloc
 
         with independent_database(schema) as db:
             with pytest.raises(psycopg2.Error) as failure, db.transaction() as tx:
-                # This explicit host entry call is required; repositories do not set global caps.
                 SessionRepository.bound_request_execution_waits(tx)
                 if record:
                     exact_claim(repo, tx, record, authority=args["authority"])
                 else:
                     repo.create_operation(tx, **args)
             assert failure.value.pgcode in {"55P03", "57014"}
-            # Reuse the returned connection while the original blocker is still held.
             with db.transaction() as tx:
                 assert tx.fetch_one("SELECT 1 AS alive")["alive"] == 1
                 assert (

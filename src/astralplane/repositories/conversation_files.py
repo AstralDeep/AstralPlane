@@ -1,8 +1,6 @@
-"""Owner-isolated conversation file-link metadata persistence.
-
-The repository stores only the legacy mapping between an original display
-name and a caller-controlled backend storage key.  Blob I/O, path resolution,
-upload policy, parsing, and physical deletion remain outside this boundary.
+"""Owner-isolated mapping between a conversation's uploaded file display names and their
+backend storage keys. Blob I/O, upload policy, and physical deletion stay with the
+caller; only the mapping is tracked here.
 """
 
 from __future__ import annotations
@@ -28,8 +26,6 @@ from astralplane.repositories import (
 
 @dataclass(frozen=True, slots=True)
 class ConversationFileRecord:
-    """Detached file-link metadata; the backend storage key is log-redacted."""
-
     mapping_id: int
     conversation_id: str
     owner_id: str
@@ -39,8 +35,6 @@ class ConversationFileRecord:
 
 
 class ConversationFileRepository:
-    """Append and enumerate file links beneath one owner-owned conversation."""
-
     _FIELDS = "id, chat_id, user_id, original_name, backend_path, uploaded_at"
 
     def add_mapping(
@@ -53,8 +47,6 @@ class ConversationFileRepository:
         backend_path: str,
         uploaded_at: int,
     ) -> ConversationFileRecord:
-        """Append one legacy mapping after proving conversation ownership."""
-
         owner = _required_id(owner_id, "owner_id")
         conversation = _required_id(conversation_id, "conversation_id")
         display_name = _bounded_text(original_name, "original_name", maximum=4096)
@@ -103,8 +95,6 @@ class ConversationFileRepository:
         conversation_id: str,
         limit: int = 1000,
     ) -> tuple[ConversationFileRecord, ...]:
-        """Return upload order with a stable row-id tie breaker."""
-
         owner = _required_id(owner_id, "owner_id")
         conversation = _required_id(conversation_id, "conversation_id")
         limit = _bounded_limit(limit, maximum=1000)
@@ -127,8 +117,6 @@ class ConversationFileRepository:
         conversation_id: str,
         mapping_id: int,
     ) -> bool:
-        """Remove mapping metadata only; physical blob deletion is caller-owned."""
-
         owner = _required_id(owner_id, "owner_id")
         conversation = _required_id(conversation_id, "conversation_id")
         identity = _positive_int(mapping_id, "mapping_id")

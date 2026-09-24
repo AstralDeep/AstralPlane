@@ -1,4 +1,7 @@
-"""Cross-repository guards for AstralPlane's stable persistence contract."""
+"""Cross-repository contract matrix proving every public repository in
+astralplane.repositories behaves consistently under replay, scope, race, and failure,
+rather than trusting docstrings as proof.
+"""
 
 from __future__ import annotations
 
@@ -27,12 +30,10 @@ _NOW = datetime(2026, 8, 14, 18, tzinfo=UTC)
 
 
 class VisibleDriverError(RuntimeError):
-    """Sentinel proving repository methods do not hide persistence failures."""
+    pass
 
 
 class FailingExecutor:
-    """Capture the first SQL boundary and fail exactly as the driver would."""
-
     def __init__(self, failure: VisibleDriverError) -> None:
         self.failure = failure
         self.calls: list[tuple[str, str, object]] = []
@@ -69,8 +70,6 @@ Probe = Callable[[api.RepositoryCatalog, FailingExecutor], None]
 
 @dataclass(frozen=True, slots=True)
 class RepositoryContract:
-    """Executable evidence required from one public catalog member."""
-
     key: str
     repository_factory: Callable[[], object]
     source_path: str
@@ -485,7 +484,7 @@ REPOSITORY_CONTRACT_MATRIX = (
         _OWNER,
         "user_id = %s",
         ("expected_status", "ended_at IS NULL"),
-        ("ON CONFLICT (id)", "immutable replay"),
+        ("ON CONFLICT (id)", "step replay changed immutable semantics"),
         None,
         ("RepositoryConflictError", "RepositoryNotFoundError"),
     ),
@@ -854,8 +853,6 @@ REPOSITORY_CONTRACT_MATRIX = (
 
 @dataclass(frozen=True, slots=True)
 class BehavioralEvidence:
-    """Existing executable proofs rerun from the cross-catalog contract gate."""
-
     key: str
     scope_node: str
     replay_node: str | None
@@ -1199,8 +1196,6 @@ def test_matrix_exactly_covers_the_public_repository_catalog() -> None:
 def test_behavioral_scope_replay_concurrency_and_failure_contracts(
     evidence: BehavioralEvidence,
 ) -> None:
-    """Rerun concrete repository behaviors instead of accepting source tokens as proof."""
-
     assert bool(evidence.replay_node) != bool(evidence.replay_not_applicable)
     assert bool(evidence.concurrency_node) != bool(evidence.concurrency_not_applicable)
     nodes = (

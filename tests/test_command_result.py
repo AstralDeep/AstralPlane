@@ -1,4 +1,6 @@
-"""Detached command-result and record lifetime regressions."""
+"""Tests for src/astralplane/database/pool.py and transaction.py: detached command
+results survive pool release, and cursor/fetch failures abort rather than commit.
+"""
 
 from __future__ import annotations
 

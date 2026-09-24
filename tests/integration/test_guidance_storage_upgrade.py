@@ -1,4 +1,7 @@
-"""Representative populated 088.004 upgrade, transactional recovery and repeat."""
+"""Tests for astralplane.database.migrations: the owner-guidance schema upgrade
+preserves real history, runtime notes, and issued liabilities, and refuses a wrong
+predecessor without partial writes.
+"""
 
 from dataclasses import replace
 from uuid import uuid4
@@ -22,8 +25,6 @@ from tests.integration.test_session_issuer_upgrade import load_liabilities, reta
 
 
 def prior_runner(database):
-    # Exact historical verifier identities at e1dfd714, never a new digest
-    # presented as the predecessor. The edge statements remain immutable.
     registry = m.MigrationRegistry(
         tuple(
             edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "088.004"
@@ -56,14 +57,6 @@ def current_runner(database):
     )
 
 
-# Head-relative on purpose (mirrors test_scheduler_policy_upgrade.py): this
-# module only pins the 088.004 -> 088.006 owner-guidance/selected-input
-# edges, not the data-plane's overall tip. A later feature (e.g. 088.007
-# scheduler policy, 088.008 framework credentials) legitimately stacks its
-# own edge on top, which moves CURRENT_DATA_PLANE_REVISION past "088.006".
-# Hard-coding "088.006" as the run() target would then fail immediately on
-# MigrationRunner's own "composition expected a different data-plane
-# revision" guard, before any of this module's structural assertions run.
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
 
 
@@ -103,9 +96,6 @@ def seed_populated(tx):
         display_name="Stored draft",
         definition={"version": 1, "purpose": "Exact prior definition"},
     )
-    # The current 006 writer requires its selected-agent index. Seed exact
-    # valid 004 declaration/receipt shapes here instead of pretending the new
-    # repository is a predecessor writer. No expanded/private values are added.
     definition, definition_digest = definition_snapshot(command.definition)
     tx.execute(
         "INSERT INTO user_agent(agent_id,owner_user_id,display_name,status,agent_kind,"
@@ -182,7 +172,7 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
     assert "astralplane-088-selected-input" in upgrade_steps
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
-        # 088.008 adds two additive nullable columns to user_offline_grant.
+        # Later migration adds nullable cols here; excluded from diff
         for row in after["user_offline_grant"]:
             assert row.pop("max_admissions") is None
             assert row.pop("consumed_admissions") is None

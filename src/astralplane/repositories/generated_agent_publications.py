@@ -1,9 +1,6 @@
-"""Durable database authority for generated-agent artifact publication.
-
-The repository intentionally owns only PostgreSQL intent, lifecycle, and
-reconciliation fences.  A filesystem store commits immutable bytes separately;
-callers must reconcile that external commit against these records after a
-crash instead of treating the two domains as one atomic transaction.
+"""Database-side intent, lifecycle, and reconciliation fences for generated-agent
+artifact publication; immutable_bundle_store.py commits bytes separately, reconciled
+after a crash rather than as one transaction.
 """
 
 from __future__ import annotations
@@ -87,8 +84,6 @@ GENERATED_AGENT_BUNDLE_CONTRACT = ImmutableBundleContract(
 
 @dataclass(frozen=True, slots=True)
 class GeneratedAgentPublicationOperationBinding:
-    """Fields a caller copies into one Plane ``OperationRequest``."""
-
     operation_kind: str
     idempotency_namespace: str
     idempotency_key: str
@@ -98,8 +93,6 @@ class GeneratedAgentPublicationOperationBinding:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedAgentPublicationIntent:
-    """One replay-stable publication row and its non-routable revision."""
-
     publication: DraftPublicationRecord
     revision: AgentRevisionRecord
     replayed: bool
@@ -107,14 +100,6 @@ class GeneratedAgentPublicationIntent:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedAgentPublicationResultMetadata:
-    """Bounded draft-generation outputs committed with publication success.
-
-    The draft schema stores these values as opaque text (the composing product
-    currently uses JSON text for the three reports).  Keeping them in one
-    immutable value makes the terminal write and every exact replay explicit;
-    Plane does not reinterpret product-owned report schemas.
-    """
-
     error_message: str | None = None
     security_report: str | None = None
     validation_report: str | None = None
@@ -147,13 +132,6 @@ class GeneratedAgentPublicationResultMetadata:
 
 
 def canonical_generated_agent_manifest_digest(manifest: Mapping[str, Any]) -> str:
-    """Hash the established generated-agent ``manifest.json`` byte contract.
-
-    The runtime manifest is canonical UTF-8 JSON followed by exactly one LF.
-    PostgreSQL stores the parsed JSON object, so this function reconstructs the
-    same deterministic bytes without relying on JSONB key order.
-    """
-
     if not isinstance(manifest, Mapping):
         raise RepositoryValidationError("manifest must be a JSON object")
     canonical = _canonical_json(manifest, "manifest") + "\n"
@@ -171,8 +149,6 @@ def generated_agent_publication_paths(
     target_agent_id: str,
     target_revision_id: str,
 ) -> BundlePublicationPaths:
-    """Derive the only accepted POSIX-relative paths for one journal identity."""
-
     try:
         return paths_for(
             BundlePublicationKey(
@@ -202,8 +178,6 @@ def generated_agent_publication_operation_binding(
     promotion_token: str,
     compatibility_state: str = "compatible",
 ) -> GeneratedAgentPublicationOperationBinding:
-    """Build the exact original-operation identity required by ``begin_intent``."""
-
     owner_id = _required_id(owner_id, "owner_id")
     publication_id = _uuid_text(publication_id, "publication_id")
     draft_uuid = _uuid_text(draft_uuid, "draft_uuid")
@@ -265,8 +239,6 @@ def generated_agent_publication_recovery_operation_binding(
     publication: DraftPublicationRecord,
     revision: AgentRevisionRecord,
 ) -> GeneratedAgentPublicationOperationBinding:
-    """Build the one idempotent child-operation identity for a recovery snapshot."""
-
     publication = _publication_snapshot(publication)
     if publication.state not in _NONTERMINAL_STATES:
         raise RepositoryValidationError("only a nonterminal publication can be recovered")
@@ -289,14 +261,6 @@ def generated_agent_publication_recovery_operation_binding(
 
 
 class GeneratedAgentPublicationRepository:
-    """Coordinate the publication journal under caller-owned transactions.
-
-    Every mutating method serializes one owner, verifies a current durable work
-    execution fence, and applies an optimistic publication ``state_revision``
-    fence.  No method changes ``user_agent.active_revision_id`` or claims that
-    a filesystem operation committed atomically with PostgreSQL.
-    """
-
     def __init__(
         self,
         *,
@@ -328,13 +292,6 @@ class GeneratedAgentPublicationRepository:
         attempt: ExecutionFence,
         compatibility_state: str = "compatible",
     ) -> GeneratedAgentPublicationIntent:
-        """Create or replay one claimed intent plus a prepared revision.
-
-        The target ``user_agent`` must already exist.  A caller creating a new
-        generated agent may compose ``AgentRepository.create_agent`` and this
-        call in the same Plane transaction.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         publication_id = _uuid_text(publication_id, "publication_id")
         draft_uuid = _uuid_text(draft_uuid, "draft_uuid")
@@ -536,8 +493,6 @@ class GeneratedAgentPublicationRepository:
         draft_uuid: str,
         source_state_revision: int,
     ) -> DraftPublicationRecord | None:
-        """Get one owner-scoped publication by its immutable source identity."""
-
         return self._drafts.get_publication_by_source(
             transaction,
             owner_id=owner_id,
@@ -553,8 +508,6 @@ class GeneratedAgentPublicationRepository:
         target_agent_id: str,
         target_revision_id: str,
     ) -> DraftPublicationRecord | None:
-        """Get owner-scoped publication provenance for one candidate revision."""
-
         return self._drafts.get_publication_by_target_revision(
             transaction,
             owner_id=owner_id,
@@ -570,8 +523,6 @@ class GeneratedAgentPublicationRepository:
         after_created_at: datetime | None = None,
         after_publication_id: str | None = None,
     ) -> tuple[DraftPublicationRecord, ...]:
-        """Return a deterministic bounded nonterminal startup inventory."""
-
         return self._drafts.list_reconcilable_publications_for_administration(
             transaction,
             limit=limit,
@@ -586,15 +537,6 @@ class GeneratedAgentPublicationRepository:
         expected: DraftPublicationRecord,
         attempt: ExecutionFence,
     ) -> DraftPublicationRecord:
-        """Authenticate an exact live publication fence without mutation.
-
-        Filesystem composition calls this immediately before staging and again
-        immediately before its native no-replace move.  The check binds the
-        immutable journal snapshot, current operation execution, live DB-time
-        draft claim, and prepared revision; a journal transition is not used as
-        a substitute for this pre-move authority check.
-        """
-
         expected = _publication_snapshot(expected)
         if expected.state not in _NONTERMINAL_STATES:
             raise RepositoryValidationError("only a nonterminal publication has a current attempt")
@@ -621,14 +563,6 @@ class GeneratedAgentPublicationRepository:
         attempt: ExecutionFence,
         lease_seconds: int = 300,
     ) -> DraftAgentRecord:
-        """Renew the exact live publication claim using PostgreSQL time.
-
-        Renewal never changes the source lifecycle revision.  An expired
-        lease, successor claim/revision, changed target, stale publication
-        snapshot, or stale operation execution therefore fails closed instead
-        of resurrecting superseded generation authority.
-        """
-
         expected = _publication_snapshot(expected)
         if expected.state not in _NONTERMINAL_STATES:
             raise RepositoryValidationError("only a nonterminal publication claim can be renewed")
@@ -667,12 +601,6 @@ class GeneratedAgentPublicationRepository:
         new_attempt: ExecutionFence,
         lease_seconds: int = 300,
     ) -> DraftPublicationRecord:
-        """CAS-bind a new attempt and renew only the exact unchanged claim.
-
-        The draft source revision is deliberately not incremented.  If another
-        worker replaced or completed the claim, the whole statement is a no-op.
-        """
-
         expected = _publication_snapshot(expected)
         if expected.state not in _NONTERMINAL_STATES:
             raise RepositoryValidationError("only nonterminal publications can be rebound")
@@ -787,18 +715,11 @@ class GeneratedAgentPublicationRepository:
         new_operation: OperationRecord,
         new_attempt: ExecutionFence,
     ) -> None:
-        """Prove reselection or exact child lineage before changing authority.
-
-        A reselected generation of the same operation is safe because Plane's
-        operation CAS has already invalidated the stored generation. A distinct
-        recovery must be the deterministic child of the exact terminal operation.
-        """
-
         if publication.operation_id is None:
             raise RepositoryConflictError("publication prior operation was already purged")
         try:
             prior_operation_id = uuid.UUID(publication.operation_id)
-        except ValueError as exc:  # Defensive against corrupt legacy rows.
+        except ValueError as exc:
             raise RepositoryDataError("publication operation identity is invalid") from exc
         if prior_operation_id == new_attempt.operation_id:
             prior_generation = publication.operation_execution_generation
@@ -831,8 +752,6 @@ class GeneratedAgentPublicationRepository:
         expected: DraftPublicationRecord,
         attempt: ExecutionFence,
     ) -> DraftPublicationRecord:
-        """Advance an exact claimed intent after durable staging completes."""
-
         return self._simple_transition(
             transaction,
             expected=expected,
@@ -852,13 +771,6 @@ class GeneratedAgentPublicationRepository:
         manifest_digest: str,
         generation_result: GeneratedAgentPublicationResultMetadata,
     ) -> DraftPublicationRecord:
-        """Persist exact validated digests and recovery-critical draft outputs.
-
-        The report values land before filesystem promotion and without changing
-        the draft lifecycle revision, so a crash after the native move can
-        recover the exact validation evidence instead of inventing empty data.
-        """
-
         expected = _publication_snapshot(expected)
         if expected.state != "staged":
             raise RepositoryValidationError("validation requires a staged publication")
@@ -972,8 +884,6 @@ class GeneratedAgentPublicationRepository:
         failure_code: str,
         safe_error_message: str,
     ) -> DraftPublicationRecord:
-        """Atomically fail the journal, exact draft claim, and prepared revision."""
-
         expected = _publication_snapshot(expected)
         if expected.state not in _NONTERMINAL_STATES:
             raise RepositoryValidationError("only a nonterminal publication can fail")
@@ -1092,13 +1002,6 @@ class GeneratedAgentPublicationRepository:
         attempt: ExecutionFence,
         generation_result: GeneratedAgentPublicationResultMetadata | None = None,
     ) -> DraftPublicationRecord:
-        """Finalize only PostgreSQL state for one validated immutable revision.
-
-        Filesystem publication must already have committed and been re-read by
-        the caller.  This method does not inspect bytes and does not activate the
-        candidate revision.
-        """
-
         expected = _publication_snapshot(expected)
         if expected.state != "validated":
             raise RepositoryValidationError("publication commit requires validated state")
@@ -1292,8 +1195,6 @@ class GeneratedAgentPublicationRepository:
         revision: AgentRevisionRecord,
         attempt: ExecutionFence,
     ) -> OperationRecord:
-        """Authenticate the recorded attempt without demanding live execution."""
-
         if not isinstance(attempt, ExecutionFence):
             raise RepositoryValidationError("attempt must be an ExecutionFence")
         _assert_bound_attempt(publication, attempt)
@@ -1932,7 +1833,6 @@ def _prospective_publication(
     staging_relative_path: str,
     revision_relative_path: str,
 ) -> DraftPublicationRecord:
-    # Only identity fields are consumed by ``_assert_current_draft``.
     from datetime import UTC, datetime
 
     return DraftPublicationRecord(

@@ -1,4 +1,7 @@
-"""088.001 populated upgrade issues identities once and guards the complete catalog."""
+"""Tests for astralplane.database.migrations: the session-incarnation schema upgrade
+issues identities once, preserves every prior session field, and rolls back cleanly
+on a failed identity edge.
+"""
 
 from dataclasses import replace
 from uuid import UUID, uuid4
@@ -78,9 +81,6 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
             agent_id=None,
             created_at=10,
         )
-        # Raw insert on the pre-088.008 column set: the 088.008 repository code
-        # now always names max_admissions/consumed_admissions, which do not
-        # exist yet at this schema revision (088.001).
         tx.execute(
             "INSERT INTO user_offline_grant (id, user_id, agent_id, refresh_token_enc, "
             "issued_at, expires_at, revoked_at, created_at, updated_at) "
@@ -122,8 +122,7 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
             table: tuple(dict(row) for row in tx.fetch_all("SELECT * FROM " + table))
             for table in tables
         }
-        # 088.008 adds two additive nullable columns to user_offline_grant;
-        # every other liability table stays byte-identical.
+        # Later migration adds nullable cols here; excluded from diff
         grants_after = tuple(dict(row) for row in after_unchanged["user_offline_grant"])
         for row in grants_after:
             assert row.pop("max_admissions") is None
@@ -221,7 +220,6 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
 
 
 def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty_postgres_schema):
-    """The fixture was issued by actual immutable 718 APIs, not reconstructed model state."""
     import json
     from collections.abc import Mapping
     from pathlib import Path
@@ -260,8 +258,7 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
                 row.pop("issuing_issuer", None)
                 row.pop("issuing_client_id", None)
         if table == "user_offline_grant":
-            # 088.008 adds two additive nullable columns; a legacy grant
-            # (issued before that revision) always has both unset.
+            # Legacy grants predate that migration; both fields stay unset
             for row in values:
                 assert row.pop("max_admissions", None) is None
                 assert row.pop("consumed_admissions", None) is None

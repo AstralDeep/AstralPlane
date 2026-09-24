@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.tool_policy: owner-scoped scope and override
+state, legacy-override backfill that never clobbers an existing choice, and
+transactional permission cleanup.
+"""
+
 from __future__ import annotations
 
 import json

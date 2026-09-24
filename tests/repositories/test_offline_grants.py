@@ -1,4 +1,7 @@
-"""Encrypted offline-grant repository tests."""
+"""Tests for astralplane.repositories.offline_grants: opaque-ciphertext grant creation
+and redaction, owner/exchange lookups, admission-allowance charging, and ciphertext
+rotation fencing.
+"""
 
 from __future__ import annotations
 

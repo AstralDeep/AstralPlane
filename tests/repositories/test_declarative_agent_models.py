@@ -1,4 +1,7 @@
-"""Closed command shape and detached storage geometry, independent of IAM policy."""
+"""Tests for astralplane.repositories.agent_models and agents: declarative-agent command
+shape, bounded definition depth, canonical UTF-8 digesting, and clone/receipt
+validation, independent of IAM policy.
+"""
 
 import json
 from dataclasses import FrozenInstanceError, replace

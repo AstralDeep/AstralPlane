@@ -1,4 +1,7 @@
-"""Durable purge tombstones and explicit-root blob mechanics."""
+"""Durable purge tombstones and blob-destruction mechanics: schedules logical deletion,
+then converges physical cleanup via PostgresPurgeStore and DurablePurgeExecutor.
+Builds on blob_store.py and repositories/artifacts.py; used by astralplane.api.
+"""
 
 from __future__ import annotations
 
@@ -354,8 +357,6 @@ class PurgeStatus(StrEnum):
 
 
 class PurgeTargetScope(StrEnum):
-    """Physical deletion selected by a durable, restart-safe tombstone."""
-
     EXACT_KEY = "exact_key"
     ATTACHMENT_PREFIX = "attachment_prefix"
     OWNER_NAMESPACE = "owner_namespace"
@@ -363,8 +364,6 @@ class PurgeTargetScope(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PurgeTombstone:
-    """Detached durable proof that logical and physical deletion must converge."""
-
     tombstone_id: str
     owner_id: str
     object_kind: str
@@ -384,8 +383,6 @@ class PurgeTombstone:
 
 @dataclass(frozen=True, slots=True)
 class PurgeScheduleResult:
-    """Atomic logical-deletion intent detached from caller-owned transaction state."""
-
     tombstone: PurgeTombstone
     tombstone_created: bool
     metadata_rows_soft_deleted: int
@@ -399,8 +396,6 @@ class PurgeAttemptState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PurgeAttemptResult:
-    """Redacted purge result; raw blob locators never appear here."""
-
     state: PurgeAttemptState
     tombstone_id: str
     attempt: int
@@ -409,8 +404,6 @@ class PurgeAttemptResult:
 
 @runtime_checkable
 class _StreamingPurgeBlobStore(Protocol):
-    """Private executor-authorized destruction plus public absence evidence."""
-
     def _delete_for_purge(
         self,
         authority: _BlobPurgeAuthority,
@@ -427,8 +420,6 @@ _PURGE_EXECUTOR_AUTHORITY_TOKEN: Final = object()
 
 
 class _PurgeExecutorAuthority:
-    """Private capability required for physical-result tombstone transitions."""
-
     __slots__ = ("_token",)
 
     def __init__(self, token: object) -> None:
@@ -513,8 +504,6 @@ def _utc(value: datetime, *, name: str) -> datetime:
 
 
 def storage_locator_sha256(*, owner_id: str, key: str) -> str:
-    """Hash the normalized owner-scoped locator without exposing it in diagnostics."""
-
     owner = _bounded_owner_id(owner_id)
     normalized = validate_blob_storage_key(key)
     return hashlib.sha256(f"{owner}\0{normalized}".encode()).hexdigest()
@@ -745,8 +734,6 @@ def _require_update(
 
 
 class PostgresPurgeStore:
-    """Owner-scoped durable purge tombstones in caller-owned transactions."""
-
     def schedule_attachment_prefix(
         self,
         transaction: Transaction,
@@ -756,8 +743,6 @@ class PostgresPurgeStore:
         requested_at: datetime,
         deleted_at: int,
     ) -> PurgeScheduleResult:
-        """Atomically record purge intent and soft-delete one owner attachment."""
-
         owner = _bounded_owner_id(owner_id)
         attachment = _bounded_identifier(attachment_id, name="attachment_id")
         requested = _utc(requested_at, name="requested_at")
@@ -827,8 +812,6 @@ class PostgresPurgeStore:
         expected_lease_version: int,
         deleted_at: int,
     ) -> PurgeScheduleResult:
-        """Fence one pending publisher and atomically schedule its physical cleanup."""
-
         owner = _bounded_owner_id(owner_id)
         attachment = _bounded_identifier(attachment_id, name="attachment_id")
         lease = _bounded_identifier(lease_id, name="lease_id")
@@ -905,8 +888,6 @@ class PostgresPurgeStore:
         *,
         limit: int = 100,
     ) -> tuple[PurgeScheduleResult, ...]:
-        """Claim expired DB-clock leases and create deterministic cleanup work."""
-
         bound = _bounded_recovery_limit(limit)
         result = transaction.execute(
             _CLAIM_EXPIRED_PENDING_MATERIALIZATIONS_SQL,
@@ -952,8 +933,6 @@ class PostgresPurgeStore:
         self,
         query: QueryExecutor,
     ) -> bool:
-        """Report whether another expired hidden-upload recovery batch remains."""
-
         record = query.fetch_one(
             _HAS_EXPIRED_PENDING_MATERIALIZATIONS_FOR_ADMINISTRATION_SQL
         )
@@ -972,8 +951,6 @@ class PostgresPurgeStore:
         requested_at: datetime,
         deleted_at: int,
     ) -> PurgeScheduleResult:
-        """Atomically record whole-owner purge intent and soft-delete its metadata."""
-
         owner = _bounded_owner_id(owner_id)
         requested = _utc(requested_at, name="requested_at")
         deleted = _deleted_at(deleted_at)
@@ -1054,13 +1031,6 @@ class PostgresPurgeStore:
         *,
         tombstone_id: str,
     ) -> PurgeTombstone | None:
-        """Load one migrated exact-key record without granting physical I/O authority.
-
-        Historical 074.003 owner and locator values can be valid predecessor data while being
-        intentionally rejected by the hardened streaming store.  This administrative lookup is
-        bounded by the predecessor contract and never passes those values to blob mechanics.
-        """
-
         identifier = _bounded_identifier(tombstone_id, name="tombstone_id")
         record = query.fetch_one(
             _LOAD_LEGACY_FOR_ADMINISTRATION_SQL,
@@ -1085,8 +1055,6 @@ class PostgresPurgeStore:
         observed_at: datetime,
         limit: int = 100,
     ) -> tuple[PurgeTombstone, ...]:
-        """Return a bounded, deterministic cross-owner recovery batch."""
-
         timestamp = _utc(observed_at, name="observed_at")
         bound = _bounded_recovery_limit(limit)
         records = query.fetch_all(
@@ -1101,8 +1069,6 @@ class PostgresPurgeStore:
         return tuple(_from_record(record) for record in records)
 
     def has_incomplete_for_administration(self, query: QueryExecutor) -> bool:
-        """Report degraded durable-purge state without disclosing owner identities."""
-
         record = query.fetch_one(_HAS_INCOMPLETE_FOR_ADMINISTRATION_SQL)
         if record is None or not isinstance(record.get("has_incomplete"), bool):
             raise PlaneError(
@@ -1188,8 +1154,6 @@ class PostgresPurgeStore:
         verified_absent_at: datetime,
         resolution_evidence_sha256: str,
     ) -> CommandResultContract:
-        """Record external operator attestation for one exact predecessor identity."""
-
         _require_purge_executor_authority(authority)
         owner = _bounded_legacy_owner_id(owner_id)
         identifier = _bounded_identifier(tombstone_id, name="tombstone_id")
@@ -1343,8 +1307,6 @@ class PostgresPurgeStore:
 
 
 class DurablePurgeExecutor:
-    """Converge one tombstone without ever hiding a partial failure."""
-
     def __init__(
         self,
         *,
@@ -1367,8 +1329,6 @@ class DurablePurgeExecutor:
         observed_at: datetime,
         limit: int = 100,
     ) -> tuple[PurgeTombstone, ...]:
-        """Read one bounded recovery batch in a short database transaction."""
-
         timestamp = _utc(observed_at, name="observed_at")
         bound = _bounded_recovery_limit(limit)
         with self._database.transaction() as transaction:
@@ -1379,8 +1339,6 @@ class DurablePurgeExecutor:
             )
 
     def has_incomplete_for_administration(self) -> bool:
-        """Return whether any pending, failed, or manual-review purge remains."""
-
         with self._database.transaction() as transaction:
             return self._store.has_incomplete_for_administration(transaction)
 
@@ -1391,8 +1349,6 @@ class DurablePurgeExecutor:
         retry_at: datetime,
         limit: int = 100,
     ) -> tuple[PurgeAttemptResult, ...]:
-        """Converge a bounded batch without holding a database transaction over I/O."""
-
         timestamp = _utc(observed_at, name="observed_at")
         next_retry = _utc(retry_at, name="retry_at")
         if next_retry <= timestamp:
@@ -1549,15 +1505,6 @@ class DurablePurgeExecutor:
         observed_at: datetime,
         resolution_evidence_sha256: str,
     ) -> PurgeAttemptResult:
-        """Resolve one migrated exact-key tombstone under explicit operator evidence.
-
-        The operator evidence digest identifies a retained external procedure record.  Plane does
-        not send a migrated raw locator to the hardened blob store: the operator attests that the
-        predecessor publisher was quiesced and its exact persisted target was handled outside this
-        contract.  The expected owner and locator digest bind that attestation to the record the
-        operator inspected.  Exact replay is accepted; any changed identity or evidence conflicts.
-        """
-
         timestamp = _utc(observed_at, name="observed_at")
         expected_owner = _bounded_legacy_owner_id(expected_owner_id)
         expected_locator_digest = _lowercase_digest(

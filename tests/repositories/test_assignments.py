@@ -1,4 +1,7 @@
-"""Persistent assignment storage invariants (feature 079)."""
+"""Tests for astralplane.repositories.assignment_models and assignments:
+assignment-definition immutability, resource-amount-basis vocabulary, currency-cap
+trust rules, and one-shot operation-definition bounds.
+"""
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -65,7 +68,6 @@ def test_resource_amount_basis_is_absent_by_default_and_never_a_duplicate_counte
     amount = AssignmentResourceAmount(model_calls=1, tokens=200, elapsed_ms=1000)
     assert amount.basis is None
     validated = AssignmentRepository._amount(amount)
-    # Legacy shape unchanged: no synthesized "basis" key appears when absent.
     assert "basis" not in validated or validated["basis"] is None
 
 
@@ -99,7 +101,6 @@ def test_resource_amount_basis_rejects_unknown_dimensions_or_values(basis):
 
 
 def test_resource_amount_basis_round_trips_through_a_legacy_reconstructed_dict():
-    """A persisted pre-088.008 dict (no 'basis' key) still reconstructs the dataclass."""
     legacy = {
         "model_calls": 1,
         "tool_calls": 0,
@@ -161,7 +162,6 @@ def test_naive_time_is_refused():
 
 
 def operation_definition(**changes):
-    """One-shot ceilings have no synthetic recurrence or offline permission."""
     limits = {
         k: v
         for k, v in definition().limits.items()

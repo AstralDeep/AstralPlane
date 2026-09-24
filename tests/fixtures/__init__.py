@@ -1,1 +1,3 @@
-"""Versioned synthetic fixtures used by AstralPlane verification."""
+"""Marks the versioned synthetic-fixture package used by AstralPlane's integration tests
+as importable.
+"""

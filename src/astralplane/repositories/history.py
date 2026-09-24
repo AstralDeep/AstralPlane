@@ -1,4 +1,7 @@
-"""Owner-isolated conversation, message, and durable web-session repositories."""
+"""Owner-isolated conversations, revisioned messages, and durable encrypted web
+sessions, including host-verified execution/consent observation fences. Widely
+imported across AstralDeep's orchestrator session and work-authority modules.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +33,6 @@ from astralplane.repositories._issuing_identity import _issuing_pair
 
 @dataclass(frozen=True, slots=True)
 class ConversationRecord:
-    """Detached metadata for one owner-scoped conversation."""
-
     conversation_id: str
     owner_id: str
     title: str
@@ -46,8 +47,6 @@ class ConversationRecord:
 
 @dataclass(frozen=True, slots=True)
 class ConversationSummaryRecord:
-    """Recent non-empty conversation metadata plus its latest visible content."""
-
     conversation_id: str
     owner_id: str
     title: str
@@ -63,8 +62,6 @@ class ConversationSummaryRecord:
 
 @dataclass(frozen=True, slots=True)
 class MessageRecord:
-    """Detached message content visible at an authoritative render revision."""
-
     message_id: int
     conversation_id: str
     owner_id: str
@@ -78,8 +75,6 @@ class MessageRecord:
 
 @dataclass(frozen=True, slots=True)
 class SessionRecord:
-    """Opaque session state; only a new ``put`` input may omit incarnation_id."""
-
     session_id: str
     owner_id: str
     access_token_ciphertext: str
@@ -96,8 +91,6 @@ class SessionRecord:
 
 @dataclass(frozen=True, slots=True)
 class SessionCredentialFence:
-    """Ephemeral exact encrypted-state identity; never a credential or IAM claim."""
-
     owner_id: str = field(repr=False)
     session_id: str = field(repr=False)
     created_at: int
@@ -113,22 +106,12 @@ class SessionCredentialFence:
 
 @dataclass(frozen=True, slots=True)
 class SessionExecutionState:
-    """An exact owner-scoped row observation with a database-clock sample."""
-
     credential: SessionCredentialFence = field(repr=False)
     observed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class SessionExecutionObservation:
-    """Host-verified remote observation, valid for at most fifteen seconds.
-
-    The host captures started_at from Plane before its external refresh, then
-    supplies the exact persisted post-refresh credential fence. Token validation
-    and roles remain host responsibilities; this record carries neither tokens
-    nor claims and must never be persisted or exposed to a client.
-    """
-
     credential: SessionCredentialFence = field(repr=False)
     started_at: datetime
     valid_until: datetime
@@ -137,13 +120,6 @@ class SessionExecutionObservation:
 
 @dataclass(frozen=True, slots=True)
 class SessionConsentObservation:
-    """Ordinary authenticated consent; never forced-refresh execution authority.
-
-    The host retains the original database-clock sample and credential through
-    grant creation. Normal IAM, roles and request-origin policy remain host-owned.
-    This observation is ephemeral and valid for at most fifteen seconds.
-    """
-
     credential: SessionCredentialFence = field(repr=False)
     started_at: datetime
     valid_until: datetime
@@ -152,12 +128,6 @@ class SessionConsentObservation:
 
 @dataclass(frozen=True, slots=True)
 class FrameworkCredentialFence:
-    """Ephemeral exact framework-credential identity; never the plaintext token.
-
-    Independently owner-lifetime bound, unlike a delegation chain: it carries
-    no parent reference and is never attenuated from another authority.
-    """
-
     owner_id: str = field(repr=False)
     credential_id: str = field(repr=False)
     token_hash: str = field(repr=False)
@@ -171,22 +141,12 @@ class FrameworkCredentialFence:
 
 @dataclass(frozen=True, slots=True)
 class FrameworkCredentialExecutionState:
-    """An exact owner-scoped framework-credential row observation, database-clock timed."""
-
     credential: FrameworkCredentialFence = field(repr=False)
     observed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class FrameworkCredentialObservation:
-    """Host-verified fresh framework-credential row observation, valid <=15s.
-
-    The host captures ``started_at`` from Plane immediately before resolving
-    the caller's bearer token, then supplies the exact locked-row fence this
-    observation names. This record carries no plaintext token, authorizes no
-    mutation by itself, and must never be persisted or exposed to a client.
-    """
-
     credential: FrameworkCredentialFence = field(repr=False)
     started_at: datetime
     valid_until: datetime
@@ -194,7 +154,6 @@ class FrameworkCredentialObservation:
 
 
 def _incarnation(value: object) -> str:
-    """Validate the canonical text representation of a database-issued UUID4."""
     if (
         not isinstance(value, str)
         or re.fullmatch(
@@ -407,8 +366,6 @@ def _session(row: Any) -> SessionRecord:
 
 
 class ConversationRepository:
-    """Durable conversation metadata with stable-ID replay protection."""
-
     _SELECT = """
         SELECT id, user_id, title, agent_id, created_at, updated_at,
                COALESCE(render_revision, 0) AS render_revision,
@@ -489,15 +446,6 @@ class ConversationRepository:
         conversation_id: str,
         for_update: bool = False,
     ) -> ConversationRecord | None:
-        """Resolve exact conversation existence without weakening owner reads.
-
-        Administrative callers may use this only after an owner-scoped lookup
-        has failed and must not expose the returned record.  The separate
-        method keeps ordinary product reads structurally owner-scoped while
-        supporting APIs that intentionally distinguish missing from foreign
-        resources.
-        """
-
         conversation_id = _required_id(conversation_id, "conversation_id")
         if not isinstance(for_update, bool):
             raise RepositoryValidationError("for_update must be boolean")
@@ -530,8 +478,6 @@ class ConversationRepository:
         owner_id: str,
         limit: int = 20,
     ) -> tuple[ConversationSummaryRecord, ...]:
-        """List recent owner chats that have at least one visible message."""
-
         owner_id = _required_id(owner_id, "owner_id")
         limit = _bounded_limit(limit, maximum=200)
         rows = query.fetch_all(
@@ -659,8 +605,6 @@ class ConversationRepository:
 
 
 class MessageRepository:
-    """Conversation messages with revisioned publication visibility."""
-
     _FIELDS = (
         "message.id, message.chat_id, message.user_id, message.role, message.content, "
         "message.timestamp, message.conversation_commit_id, message.commit_position, "
@@ -669,11 +613,7 @@ class MessageRepository:
 
     @staticmethod
     def _stored_content(content: object) -> str:
-        # The legacy table stores content as TEXT and historical rows may contain
-        # either raw prose or JSON.  Canonically encode every new value, including
-        # strings, so JSON-looking prose such as ``"[]"`` cannot be decoded later
-        # as a different type.  ``_content_value`` continues to accept both the
-        # legacy raw-prose representation and the canonical representation.
+        # Encode as JSON so prose like '[]' can't be misread as data
         return _canonical_json(content, "content")
 
     def append(
@@ -815,14 +755,6 @@ class MessageRepository:
         content: object,
         timestamp: int | None = None,
     ) -> MessageRecord:
-        """Serialize and append the next invisible message in a staged publication.
-
-        Locking the publication and conversation before reading the next position
-        prevents concurrent appenders from choosing the same ordered slot. Voice
-        assistant-result publications may outlive their execution-base chat head;
-        other publication roles must still own the exact staged base revision.
-        """
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id = _required_id(publication_id, "publication_id")
@@ -873,10 +805,10 @@ class MessageRepository:
             """,
             (publication_id, conversation_id, owner_id),
         )
-        if position_row is None:  # pragma: no cover - aggregate SELECT invariant
+        if position_row is None:  # pragma: no cover
             raise RepositoryDataError("publication position query returned no row")
         position = int(_row_value(position_row, "next_position"))
-        if position < 0:  # pragma: no cover - SQL aggregate invariant
+        if position < 0:  # pragma: no cover
             raise RepositoryDataError("publication position query returned a negative value")
         if timestamp is None:
             timestamp_row = transaction.fetch_one(
@@ -885,7 +817,7 @@ class MessageRepository:
                        AS observed_at
                 """
             )
-            if timestamp_row is None:  # pragma: no cover - scalar SELECT invariant
+            if timestamp_row is None:  # pragma: no cover
                 raise RepositoryDataError("database timestamp query returned no row")
             timestamp = int(_row_value(timestamp_row, "observed_at")) + position
         return self.append(
@@ -933,8 +865,6 @@ class MessageRepository:
         conversation_id: str,
         message_id: int,
     ) -> MessageRecord | None:
-        """Return one owner-scoped message only when its publication is visible."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         message_id = _positive_int(message_id, "message_id")
@@ -969,8 +899,6 @@ class MessageRepository:
         publication_id: str,
         limit: int = 1000,
     ) -> tuple[MessageRecord, ...]:
-        """Return one publication's ordered messages, including while staged."""
-
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         publication_id = _required_id(publication_id, "publication_id")
@@ -1088,8 +1016,6 @@ class MessageRepository:
 
 
 class SessionRepository:
-    """Durable encrypted web sessions, always fenced by owner identity."""
-
     _SELECT = """
         SELECT sid, user_id, access_token_enc, refresh_token_enc,
                interactive_anchor, hard_expires_at, last_refresh_at,
@@ -1099,18 +1025,6 @@ class SessionRepository:
 
     @staticmethod
     def bound_request_execution_waits(transaction: Transaction) -> None:
-        """Cap SQL waits for one request-authority transaction, not ordinary sessions.
-
-        Call immediately after opening the transaction, before session reads or
-        locks. Each lock waits at most 100 ms and each statement at most 1000 ms;
-        stricter configured nonzero limits remain in force. PostgreSQL restores
-        these local settings on commit or rollback. A timeout must escape the
-        transaction so its locks and pooled connection are released.
-
-        This does not bound pool checkout, connection establishment, total
-        transaction duration, or a nonresponsive server/network. It is not an
-        alternative to the original database-clock authority deadline.
-        """
         transaction.execute(
             """
             SELECT set_config(
@@ -1126,19 +1040,12 @@ class SessionRepository:
 
     @staticmethod
     def execution_fence(record: SessionRecord) -> SessionCredentialFence:
-        """Bind exact opaque ciphertext, including replacement with reused timestamps.
-
-        Only already encrypted canonical session records may enter this boundary.
-        The binding is ephemeral and is not a hash of a plaintext token.
-        """
         if not isinstance(record, SessionRecord):
             raise RepositoryValidationError("typed session record required")
         encrypted = []
         for value in (record.access_token_ciphertext, record.refresh_token_ciphertext):
             encrypted.append(_bounded_text(value, "encrypted credential", maximum=131072))
         issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
-        # Keep legacy v2 fence bytes exact. The extra canonical object cannot be
-        # confused with the legacy two-string domain and contains no credential.
         bound_state = (
             encrypted
             if issuer is None
@@ -1169,11 +1076,6 @@ class SessionRepository:
         owner_id: str,
         session_id: str,
     ) -> SessionExecutionState | None:
-        """Read this exact session and database time before host remote validation.
-
-        This unlocked observation authorizes no mutation. It deliberately has no
-        owner/latest or administrative-session fallback.
-        """
         record = self.get(query, owner_id=owner_id, session_id=session_id)
         if record is None:
             return None
@@ -1201,7 +1103,7 @@ class SessionRepository:
             self._SELECT + " WHERE sid = %s AND user_id = %s FOR UPDATE",
             (credential.session_id, credential.owner_id),
         )
-        # clock_timestamp, not the transaction-start timestamp: the SELECT can wait.
+        # clock_timestamp() here since the row lock above can wait
         now = transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
         if row is None:
             _session_unavailable()
@@ -1220,12 +1122,6 @@ class SessionRepository:
         *,
         observation: SessionExecutionObservation,
     ) -> SessionExecutionState:
-        """Lock owner/session and validate fresh host observation in this transaction.
-
-        Call before assignment/admission/action locks and again after their waits.
-        No returned record is authority outside the caller's current transaction.
-        Local deletion/rotation and owner retirement serialize against these locks.
-        """
         observation = _session_observation(observation)
         current = self._assert_credential(transaction, observation.credential)
         if not observation.started_at <= current.observed_at < observation.valid_until:
@@ -1238,12 +1134,6 @@ class SessionRepository:
         *,
         observation: SessionConsentObservation,
     ) -> SessionExecutionState:
-        """Fence ordinary consent before and after grant writes in one transaction.
-
-        Acquire this owner/session fence before grant locks, then call again after
-        any write/lock wait and before commit. Exceptions must roll back the caller's
-        transaction. This distinct record cannot authorize assignment execution.
-        """
         if (
             type(observation) is not SessionConsentObservation
             or type(observation.version) is not int
@@ -1258,14 +1148,6 @@ class SessionRepository:
         return current
 
     def put(self, transaction: Transaction, record: SessionRecord) -> SessionRecord:
-        """Issue a database identity, or replay exact already-stored issuance.
-
-        An explicit incarnation can only replay the complete existing record.
-        It can never create a row, including after deletion. Omitted identities
-        are generated by PostgreSQL and must be taken from this returned record.
-        Owner retirement serializes before issuance; no token or remote I/O runs
-        in this transaction.
-        """
         issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
@@ -1345,8 +1227,6 @@ class SessionRepository:
         expected_last_refresh_at: int,
         expected_credential: SessionCredentialFence | None = None,
     ) -> SessionRecord:
-        """Replace encrypted tokens only from one exact older refresh generation."""
-
         issuer, client_id = _issuing_pair(record.issuing_issuer, record.issuing_client_id)
         session_id = _required_id(record.session_id, "session_id")
         owner_id = _required_id(record.owner_id, "owner_id")
@@ -1454,12 +1334,6 @@ class SessionRepository:
         owner_id: str,
         incarnation_id: str,
     ) -> SessionRecord | None:
-        """Resolve only this owner's original issuance, never a replacement SID.
-
-        This unlocked read is not authority. A host requiring freshness captures
-        a database-clock execution observation and rechecks it under the ordinary
-        owner/session locks after remote validation.
-        """
         owner = _required_id(owner_id, "owner_id")
         incarnation = _incarnation(incarnation_id)
         row = query.fetch_one(
@@ -1474,12 +1348,6 @@ class SessionRepository:
         *,
         session_id: str,
     ) -> SessionRecord | None:
-        """Resolve an opaque cookie session before its owner is known.
-
-        This deliberately unscoped lookup is named as an administrative boundary;
-        all mutations still require the owner identity returned by this read.
-        """
-
         session_id = _required_id(session_id, "session_id")
         row = query.fetch_one(
             self._SELECT + " WHERE sid = %s",
@@ -1494,8 +1362,6 @@ class SessionRepository:
         owner_id: str,
         observed_at: int,
     ) -> SessionRecord | None:
-        """Return the owner's most recently refreshed non-expired session."""
-
         owner_id = _required_id(owner_id, "owner_id")
         observed_at = _non_negative_int(observed_at, "observed_at")
         row = query.fetch_one(
@@ -1519,8 +1385,6 @@ class SessionRepository:
         resumed: bool,
         expected_incarnation_id: str,
     ) -> SessionRecord:
-        """Compare-and-set the reconnect marker without rotating token state."""
-
         owner_id = _required_id(owner_id, "owner_id")
         session_id = _required_id(session_id, "session_id")
         incarnation = _incarnation(expected_incarnation_id)
@@ -1564,7 +1428,6 @@ class SessionRepository:
         session_id: str,
         expected_incarnation_id: str,
     ) -> bool:
-        """Delete only the incarnation observed by the caller before any await."""
         owner_id = _required_id(owner_id, "owner_id")
         session_id = _required_id(session_id, "session_id")
         incarnation = _incarnation(expected_incarnation_id)
@@ -1582,11 +1445,6 @@ class SessionRepository:
         session_id: str,
         expected_incarnation_id: str,
     ) -> SessionRecord | None:
-        """Atomically remove a session and return its exact final encrypted tokens.
-
-        Refresh settlement and revocation are ordered by the same row lock;
-        callers must not revoke credential bytes from a stale process cache.
-        """
         owner = _required_id(owner_id, "owner_id")
         session = _required_id(session_id, "session_id")
         incarnation = _incarnation(expected_incarnation_id)
@@ -1601,8 +1459,6 @@ class SessionRepository:
         return None if row is None else _session(row)
 
     def delete_owner(self, transaction: Transaction, *, owner_id: str) -> int:
-        """Delete every session in an authorized account-retirement transaction."""
-
         owner_id = _required_id(owner_id, "owner_id")
         result = transaction.execute(
             "DELETE FROM web_session WHERE user_id = %s",
@@ -1617,15 +1473,6 @@ class SessionRepository:
         return result.rowcount
 
     def retire_all_for_recovery(self, transaction: Transaction) -> int:
-        """Retire every restored session in one externally governed transaction.
-
-        Admission and all writers must already be quiescent. This method neither
-        proves that precondition nor reopens traffic. No owner inventory or row
-        decoding can omit an inactive, unknown, expired or malformed session.
-        Callers must verify the exact current schema before this mutation, and
-        discard every application session cache before reopening admission.
-        Grants, work, audit and outstanding liabilities remain untouched.
-        """
         self.bound_request_execution_waits(transaction)
         transaction.execute("LOCK TABLE web_session IN ACCESS EXCLUSIVE MODE")
         result = transaction.execute("DELETE FROM web_session")
@@ -1647,8 +1494,6 @@ class SessionRepository:
         *,
         observed_at: int,
     ) -> int:
-        """Delete hard-cap-expired sessions across owners at one trusted instant."""
-
         observed_at = _non_negative_int(observed_at, "observed_at")
         result = transaction.execute(
             "DELETE FROM web_session WHERE hard_expires_at <= %s",
@@ -1663,8 +1508,6 @@ class SessionRepository:
 
 
 class HistoryRepository:
-    """Convenience grouping without connection or transaction ownership."""
-
     def __init__(self) -> None:
         self.conversations = ConversationRepository()
         self.messages = MessageRepository()

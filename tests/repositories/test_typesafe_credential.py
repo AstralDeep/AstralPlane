@@ -1,10 +1,6 @@
-"""089.001 TypeSafe credential and data-sharing acknowledgment repositories.
-
-Two halves. The scripted half pins the SQL shape and the validation contract
-without a driver. The PostgreSQL half runs against a real isolated schema at
-revision 089.001 and proves the behaviors the feature actually depends on:
-owner isolation, the fingerprint condition on outcome recording, and an
-acknowledgment upsert that never rewrites when the owner first consented.
+"""Tests for astralplane.repositories.preferences and secrets: TypeSafe credential
+storage and data-sharing acknowledgment, covering owner isolation,
+fingerprint-conditioned outcomes, and first-consent-preserving upsert.
 """
 
 from __future__ import annotations
@@ -49,9 +45,6 @@ def _credential_row(**overrides: object) -> dict[str, object]:
     }
     row.update(overrides)
     return row
-
-
-# -- scripted: SQL shape and validation ----------------------------------
 
 
 def test_read_is_owner_scoped_and_ciphertext_is_redacted() -> None:
@@ -268,9 +261,6 @@ def test_acknowledgment_requires_a_timezone_aware_time() -> None:
         )
 
 
-# -- PostgreSQL: the behaviors the feature depends on --------------------
-
-
 @pytest.fixture
 def credentials(database):
     with database.transaction() as transaction:
@@ -373,7 +363,6 @@ def test_a_stale_outcome_cannot_mark_a_newly_saved_key(credentials) -> None:
         key_fingerprint=FINGERPRINT,
         verified_at=NOW,
     )
-    # The owner replaces the key while a 401 from the old one is still in flight.
     repository.upsert_user(
         credentials,
         owner_id=owner,
@@ -451,12 +440,6 @@ def test_a_valid_outcome_advances_last_verified_at(credentials) -> None:
 
 
 def test_the_live_catalog_carries_the_declared_constraints(credentials) -> None:
-    """The database, not just the repository, refuses an undeclared outcome.
-
-    Triggering the violation would poison the shared transaction, so this reads
-    the catalog instead: the CHECK is present and names every declared outcome,
-    and the fingerprint column carries its own format CHECK.
-    """
     rows = credentials.fetch_all(
         "SELECT pg_get_constraintdef(constraint_record.oid) AS definition "
         "FROM pg_constraint AS constraint_record "
@@ -539,7 +522,6 @@ def test_clearing_a_credential_leaves_the_acknowledgment(credentials) -> None:
 
 
 def test_rollback_drops_both_tables_and_leaves_the_rest(credentials) -> None:
-    """Rehearse the documented 089.001 -> 088.008 recovery on a live schema."""
     owner = _owner()
     EncryptedTypeSafeCredentialRepository().upsert_user(
         credentials,

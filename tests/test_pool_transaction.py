@@ -1,4 +1,7 @@
-"""Pool lifecycle, transaction ownership, and savepoint tests."""
+"""Tests for src/astralplane/database/pool.py and transaction.py: connection
+checkout/reset/release failure handling, commit/rollback ownership, and savepoint
+recovery.
+"""
 
 from __future__ import annotations
 

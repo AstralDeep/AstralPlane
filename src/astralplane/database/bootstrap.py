@@ -1,4 +1,7 @@
-"""One explicit migration-and-reconciliation boot lifecycle."""
+"""One explicit migration-and-reconciliation boot lifecycle: BootInitializer publishes
+ready only after the migration commits and every required cross-process
+reconciliation hook durably completes.
+"""
 
 from __future__ import annotations
 
@@ -23,14 +26,10 @@ _SAFE_BOOT_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class BootMigrationRunner(Protocol):
-    """Migration runner surface consumed by the boot coordinator."""
-
     def run(self, *, expected_revision: str) -> MigrationReport: ...
 
 
 class BootReconciliationRunner(Protocol):
-    """Durable required-reconciliation surface consumed at boot."""
-
     def plan_digest(self, *, schema_revision: str) -> str: ...
 
     def run(
@@ -50,16 +49,12 @@ class BootStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InitializationFailure:
-    """Safe failure attribution retained for waiters and diagnostics."""
-
     error_type: str
     message: str
 
 
 @dataclass(frozen=True, slots=True)
 class InitializationReport:
-    """Detached proof that migration and required reconciliation completed."""
-
     identity: str
     expected_revision: str
     migration: MigrationReport
@@ -90,15 +85,6 @@ def _state_for(identity: str) -> _SharedBootState:
 
 
 class BootInitializer:
-    """Coordinate one fail-closed boot attempt per database identity.
-
-    Construction is inert. ``READY`` is published only after the migration is
-    committed and the supplied cross-process reconciler proves every exact
-    required hook durably complete. Independent initializer objects converge
-    on one in-process attempt; the migration and reconciliation runners retain
-    their distinct PostgreSQL advisory identities for cross-process safety.
-    """
-
     def __init__(
         self,
         identity: str,
@@ -138,7 +124,6 @@ class BootInitializer:
     def _publish_failure(self, *, error_type: str) -> None:
         failure = InitializationFailure(
             error_type=error_type,
-            # Driver and hook exception text can contain credentials or data.
             message="initialization attempt failed",
         )
         with self._state.condition:
@@ -225,8 +210,6 @@ class BootInitializer:
             raise
         finally:
             if not attempt_complete:
-                # KeyboardInterrupt/SystemExit are not caught. ``finally``
-                # publishes fail-closed state and lets termination continue.
                 with self._state.condition:
                     if self._state.status is BootStatus.RUNNING:
                         self._state.status = BootStatus.FAILED
@@ -238,8 +221,6 @@ class BootInitializer:
                         self._state.condition.notify_all()
 
     def reset_failed(self) -> bool:
-        """Explicitly permit a retry after an operator-visible failed attempt."""
-
         with self._state.condition:
             if self._state.status is BootStatus.RUNNING:
                 raise InitializationError("cannot reset an initializer while it is running")

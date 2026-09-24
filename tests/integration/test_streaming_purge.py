@@ -1,4 +1,7 @@
-"""Real-PostgreSQL crash-boundary evidence for streaming durable purge."""
+"""Real-PostgreSQL tests for astralplane.purge: concurrent casefold-identity contention,
+schedule rollback and physical reconciliation, and two executors converging on one
+purge prefix without forking.
+"""
 
 from __future__ import annotations
 
@@ -331,8 +334,6 @@ def test_schedule_rollback_then_commit_and_physical_reconciliation(
 
 
 class _BarrierBlobStore:
-    """Synchronize two executors after their independent tombstone reads."""
-
     def __init__(self, delegate: StreamingBlobStore) -> None:
         self._delegate = delegate
         self._barrier = threading.Barrier(2)
@@ -409,7 +410,7 @@ def test_two_postgres_executors_converge_one_prefix_without_fork(
                 retry_at=_NOW + timedelta(minutes=1),
             )
             results.append(result.state)
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             errors.append(exc)
 
     threads = tuple(threading.Thread(target=run, args=(executor,)) for executor in executors)

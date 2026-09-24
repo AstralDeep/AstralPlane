@@ -1,4 +1,7 @@
-"""Caller-owned transactions with detached immutable results."""
+"""Caller-owned transactions (Transaction, PlaneDatabase) over database/pool.py
+connections that detach every result into immutable DetachedRecord/CommandResult
+values before the cursor closes.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +33,6 @@ def _freeze(value: Any) -> Any:
 
 
 class DetachedRecord(Mapping[str, Any]):
-    """A driver-independent immutable row copied before cursor closure."""
-
     __slots__ = ("_values",)
 
     def __init__(self, values: Mapping[str, Any]) -> None:
@@ -61,8 +62,6 @@ class DetachedRecord(Mapping[str, Any]):
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
-    """Immutable command metadata with optional detached RETURNING rows."""
-
     rowcount: int
     status_message: str | None
     returned_records: tuple[DetachedRecord, ...] = ()
@@ -96,8 +95,6 @@ def _detach_row(row: Any, description: Any) -> DetachedRecord:
 
 
 class Transaction:
-    """One explicit transaction over a connection borrowed by ``PlaneDatabase``."""
-
     def __init__(
         self,
         connection: Any,
@@ -164,8 +161,6 @@ class Transaction:
             cursor.close()
 
     def execute(self, statement: Statement, parameters: Parameters = ()) -> CommandResult:
-        """Execute a command and detach every result before closing its cursor."""
-
         cursor = self._cursor()
         operation_failed = False
         try:
@@ -223,8 +218,6 @@ class Transaction:
 
     @contextmanager
     def savepoint(self, name: str) -> Iterator[Transaction]:
-        """Create a bounded identifier savepoint without taking commit ownership."""
-
         self._ensure_usable()
         if _SAVEPOINT_NAME.fullmatch(name) is None:
             raise TransactionStateError("savepoint name is not a safe PostgreSQL identifier")
@@ -275,8 +268,6 @@ class Transaction:
 
 
 class PlaneDatabase:
-    """Database facade that grants transaction ownership only to context scopes."""
-
     def __init__(self, pool: ConnectionPool) -> None:
         self._pool = pool
 
@@ -290,8 +281,6 @@ class PlaneDatabase:
             except BaseException:
                 with suppress(BaseException):
                     transaction._finish(failed=True)
-                # Preserve the operation failure. The enclosing pool scope
-                # still resets or discards the connection before return.
                 raise
             else:
                 transaction._finish(failed=False)

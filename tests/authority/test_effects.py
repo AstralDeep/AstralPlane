@@ -1,4 +1,7 @@
-"""Durable protected-effect operation tests."""
+"""Tests for astralplane.authority.effects: protected-effect operation shape,
+terminal-status exclusivity, receipt/result digest fencing, and identifier
+validation.
+"""
 
 from __future__ import annotations
 

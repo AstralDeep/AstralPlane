@@ -1,9 +1,6 @@
-"""PostgreSQL-backed durable reconciliation coordination and marker storage.
-
-The coordinator deliberately holds a session advisory lock on one dedicated
-pooled connection while marker transitions commit independently.  A
-transaction-scoped lock cannot provide that guarantee because every durable
-marker commit would release it.
+"""PostgreSQL-backed coordination for reconciliation.py: holds a session advisory lock
+on one dedicated connection while marker transitions commit independently, since a
+transaction-scoped lock would release on each commit.
 """
 
 from __future__ import annotations
@@ -222,8 +219,6 @@ def _marker_from_row(row: object, description: object) -> ReconciliationMarker:
 
 
 class PostgresReconciliationSession:
-    """Marker transitions bound to one exact plan and one locked connection."""
-
     def __init__(self, connection: Any, *, schema_revision: str, plan_digest: str) -> None:
         self._connection = connection
         self._schema_revision = validate_revision(
@@ -317,9 +312,7 @@ class PostgresReconciliationSession:
         try:
             self._connection.commit()
         except BaseException as exc:
-            # A commit interruption is outcome-uncertain.  Closing the session
-            # is the only fail-closed response: PostgreSQL releases the
-            # session lock and the pool discards the connection.
+            # Commit outcome is uncertain; close session to fail closed
             self._rollback_after_failure()
             self._discard()
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -330,8 +323,6 @@ class PostgresReconciliationSession:
         return marker
 
     def get_marker(self, hook: ReconciliationHookIdentity) -> ReconciliationMarker | None:
-        """Read one exact-plan marker without retaining a read transaction."""
-
         parameters = self._parameters(hook)
         row, description = self._read_row(_GET_MARKER_SQL, parameters, action="read")
         try:
@@ -357,8 +348,6 @@ class PostgresReconciliationSession:
         return marker
 
     def mark_started(self, hook: ReconciliationHookIdentity) -> ReconciliationMarker:
-        """Durably start a new monotonic attempt before returning."""
-
         parameters = self._parameters(hook)
         return self._commit_marker(
             _MARK_STARTED_SQL,
@@ -374,8 +363,6 @@ class PostgresReconciliationSession:
         *,
         result_digest: str,
     ) -> ReconciliationMarker:
-        """Durably complete the current started attempt before returning."""
-
         exact_digest = _validate_digest(result_digest, field="reconciliation result digest")
         parameters = (exact_digest, *self._parameters(hook))
         return self._commit_marker(
@@ -392,8 +379,6 @@ class PostgresReconciliationSession:
         *,
         error_type: str,
     ) -> ReconciliationMarker:
-        """Durably fail the current started attempt before returning."""
-
         if not isinstance(error_type, str) or _SAFE_IDENTITY.fullmatch(error_type) is None:
             raise ReconciliationError("reconciliation error type must be a bounded identifier")
         parameters = (error_type, *self._parameters(hook))
@@ -407,13 +392,6 @@ class PostgresReconciliationSession:
 
 
 class PostgresReconciliationCoordinator:
-    """Hold the canonical session lock while independently committing markers.
-
-    The supplied pool must be able to dedicate one connection to coordination
-    for the whole hook run.  If hooks use the same driver pool for data work,
-    that pool therefore needs at least two connections.
-    """
-
     def __init__(self, pool: ConnectionPool) -> None:
         if not isinstance(pool, ConnectionPool):
             raise TypeError("pool must be an AstralPlane ConnectionPool")
@@ -484,8 +462,6 @@ class PostgresReconciliationCoordinator:
         schema_revision: str,
         plan_digest: str,
     ) -> Iterator[PostgresReconciliationSession]:
-        """Yield a plan-bound marker store under the canonical session lock."""
-
         if advisory_lock != RECONCILIATION_ADVISORY_LOCK:
             raise ReconciliationError(
                 "reconciliation coordinator requires the canonical advisory lock"

@@ -1,4 +1,7 @@
-"""Actual issued liabilities survive owner controls and due-claim admission."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments: pause/resume
+preserves issued liabilities without scheduling, and a due claim always rechecks
+factual consumption rather than trusting a status label.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -39,8 +42,6 @@ def held_operation(tx, repo, *, state="uncertain", boundary="unreplayable"):
     reserved = reserve(repo, tx, claim.fence, item)
     permit = start(repo, tx, claim.fence, reserved, binding)
     if state == "uncertain":
-        # No result authority: authentic consumption remains mandatory even
-        # after remote/local output revalidation has become inconclusive.
         repo.record_action_outcome(
             tx,
             owner_id="owner",
@@ -147,10 +148,7 @@ def test_due_label_cannot_hide_unknown_consumption_from_exact_claim(tx, repo):
     values, _, before = held_operation(tx, repo)
     paused = control(repo, tx, before).assignment
     resumed = control(repo, tx, paused, "resume").assignment
-    # A historical row may have the old runnable phase while preserving its
-    # valid issued ledger. The claim must validate the ledger, not its label.
     mutate(tx, resumed, lambda data: data.update(phase="waiting", next_wake_at=data["updated_at"]))
-    # Match the indexed scheduling column as an upgrade fixture, not a grant.
     tx.execute(
         "UPDATE persistent_assignment SET next_wake_at=%s WHERE id=%s",
         (resumed.updated_at, resumed.assignment_id),
@@ -311,8 +309,6 @@ def test_named_writes_refuse_unknown_or_stale_sibling_without_mutation(tx, repo,
             outcome=AssignmentActionOutcome("uncertain", digest("unknown-live-sibling"), {}),
         )
     else:
-        # Closed historical/forward-version fixtures preserve the issued token.
-        # They never create a new permit or serve as settlement evidence.
         data = plain(
             tx.fetch_one(
                 "SELECT data FROM persistent_assignment_action WHERE id=%s", (sibling.action_id,)

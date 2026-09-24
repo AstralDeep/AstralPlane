@@ -1,4 +1,6 @@
-"""Behavioral and failure-path tests for the PostgreSQL outbox mechanics."""
+"""Tests for src/astralplane/outbox.py: transactional enqueue, SKIP LOCKED claim
+ordering, lease expiry/redelivery, and fenced ack/retry/dead-letter transitions.
+"""
 
 from __future__ import annotations
 
@@ -154,7 +156,8 @@ class MemoryOutboxTransaction:
                     updated_at=updated_at,
                 )
                 records.append(copy.deepcopy(row))
-            return tuple(reversed(records))  # PostgreSQL UPDATE RETURNING is unordered.
+            # PostgreSQL UPDATE RETURNING is unordered
+            return tuple(reversed(records))
         if statement.startswith("WITH expired"):
             now, limit, available_at, updated_at = parameters
             candidates = sorted(

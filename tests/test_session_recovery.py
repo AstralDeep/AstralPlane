@@ -1,4 +1,6 @@
-"""Recovery input/privacy and incomplete repository-result refusal boundaries."""
+"""Tests for src/astralplane/recovery.py: recovery input validation, driver-diagnostic
+privacy, and refusal on incomplete repository delete results.
+"""
 
 from types import SimpleNamespace
 

@@ -1,8 +1,6 @@
-"""Closed owner guidance metadata. These records convey no execution authority.
-
-Skill revisions retain immutable user-authored history. Explicit notes retain
-only their current opaque ciphertext, or a minimal deletion tombstone. Plane
-never encrypts, decrypts, expands, or treats guidance as verified evidence.
+"""Closed record types for skill revisions and explicit notes; skills keep immutable
+history, notes keep only current ciphertext or a deletion tombstone. Carries no
+execution authority; consumed by repositories/guidance.py and assignments.py.
 """
 
 from __future__ import annotations
@@ -260,8 +258,6 @@ def legacy_manifest(entries: tuple[LegacySkillEntry, ...]) -> str:
     aliases = [e.definition.alias for e in entries if e.definition.alias]
     if len(set(aliases)) != len(aliases):
         raise RepositoryValidationError("duplicate legacy skill alias")
-    # Proposed new UUIDs are deliberately absent: an exact captured-directory
-    # retry returns the original mappings, never newly generated identities.
     return sha(
         {
             "version": 1,

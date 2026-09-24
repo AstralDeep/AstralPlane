@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.generated_agent_publications: manifest digesting,
+begin-intent replay and fencing, claim/attempt lifecycle, and publication-path
+derivation, using agent/draft/work stub doubles.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -751,7 +756,7 @@ def test_state_specific_staged_and_validated_transitions_enforce_digests() -> No
     assert validated.state == "validated"
     assert validated.artifact_digest == ARTIFACT_DIGEST
     assert validated.manifest_digest == expected_manifest
-    assert drafts.transitioned is not None  # staged transition remains observable
+    assert drafts.transitioned is not None
     validation_sql = validation_transaction.fetch_sql()
     assert "persisted_result AS" in validation_sql
     assert "security_report = %s" in validation_sql

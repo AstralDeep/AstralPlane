@@ -1,4 +1,7 @@
-"""Owner-isolation and idempotency tests for the personalization graph."""
+"""Tests for astralplane.repositories.personalization_graph: bidirectional links stay
+owner-bound on both endpoints, and signal/sweep records are idempotent, owner-scoped,
+and bounded.
+"""
 
 from __future__ import annotations
 

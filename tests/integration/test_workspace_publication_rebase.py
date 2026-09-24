@@ -1,4 +1,7 @@
-"""Real-PostgreSQL proof for owner-scoped assistant publication rebases."""
+"""Real-PostgreSQL tests for astralplane.repositories.workspaces and history.py: an
+assistant-result publication rebase replays correctly, stays owner-scoped, and rolls
+back atomically with the outer transaction.
+"""
 
 from __future__ import annotations
 

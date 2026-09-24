@@ -1,8 +1,6 @@
-"""Configured, path-independent streaming blob storage mechanics.
-
-The application supplies one absolute durable root at composition time.  Consumers operate only
-on validated owner/key identities and never receive a path or a named file object that could be
-reopened outside this boundary.
+"""Configured, path-independent streaming blob storage: consumers get validated
+owner/key identities, never a reopenable path, and new bytes can only be staged
+through the materialization repository's DB-fenced session.
 """
 
 from __future__ import annotations
@@ -24,10 +22,10 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, BinaryIO, Final, Protocol, runtime_checkable
 
-if os.name == "nt":  # pragma: win32 cover - exercised on the supported Windows host
+if os.name == "nt":
     import ctypes.wintypes as wintypes
     import msvcrt
-else:  # pragma: posix cover - exercised in the Linux qualification container
+else:
     import fcntl
 
 from astralplane.errors import PlaneError, SQLContractError
@@ -52,7 +50,7 @@ _WINDOWS_RESERVED_COMPONENTS: Final = frozenset(
     | {f"lpt{number}" for number in range(1, 10)}
 )
 
-if os.name == "nt":  # pragma: win32 cover - constants mirror the Win32 API
+if os.name == "nt":
     _WIN_GENERIC_READ: Final = 0x80000000
     _WIN_GENERIC_WRITE: Final = 0x40000000
     _WIN_FILE_SHARE_READ: Final = 0x00000001
@@ -104,25 +102,19 @@ if os.name == "nt":  # pragma: win32 cover - constants mirror the Win32 API
 
 
 class BlobSizeLimitError(PlaneError):
-    """A bounded stream exceeded its declared maximum size."""
-
     default_code = "blob_size_limit_exceeded"
 
 
 class BlobIntegrityError(PlaneError):
-    """Blob bytes did not match a caller-supplied size or digest fence."""
-
     default_code = "blob_integrity_mismatch"
 
 
 class _OwnerExclusionBusyError(Exception):
-    """One immediate owner-lock attempt observed contention."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class BlobWriteResult:
-    """Detached evidence for one atomically published blob."""
-
     storage_key: str
     size_bytes: int
     sha256: str
@@ -132,8 +124,6 @@ _BLOB_PUBLISH_AUTHORITY_TOKEN: Final = object()
 
 
 class _BlobPublishAuthority:
-    """Private row-lock capability minted only by the materialization repository."""
-
     __slots__ = ("lease_id", "max_bytes", "owner_id", "storage_key")
 
     def __init__(
@@ -173,8 +163,6 @@ _BLOB_PURGE_AUTHORITY_TOKEN: Final = object()
 
 
 class _BlobPurgeAuthority:
-    """Private physical-deletion capability derived from one qualified tombstone."""
-
     __slots__ = ("owner_id", "storage_key", "target_scope")
 
     def __init__(
@@ -214,21 +202,12 @@ def _create_blob_purge_authority(
 
 @dataclass(frozen=True, slots=True)
 class BlobDeleteResult:
-    """Bounded deletion evidence without exposing the configured root."""
-
     deleted_files: int
     deleted_directories: int
     absent_verified: bool
 
 
 class BlobParserPath(os.PathLike[str]):
-    """Read-only path capability yielded only while a parser lease is active.
-
-    It implements only ``os.PathLike``: unlike ``pathlib.Path`` it exposes no convenience write,
-    rename, delete, traversal, or parent-discovery methods.  Consumers must not retain the value
-    beyond the lease context.
-    """
-
     __slots__ = ("__is_active", "__path")
 
     def __init__(self, path: Path, *, is_active: Callable[[], bool]) -> None:
@@ -272,8 +251,6 @@ class _OwnerLockToken:
 
 
 class _OwnerLockTable:
-    """Bounded per-owner exclusion for writes, parser leases, and destructive operations."""
-
     __slots__ = ("_entries", "_guard")
 
     def __init__(self) -> None:
@@ -289,8 +266,6 @@ class _OwnerLockTable:
         return _OwnerLockToken(self, owner)
 
     def try_acquire(self, owner: str) -> _OwnerLockToken | None:
-        """Attempt one local acquisition without ever waiting for another holder."""
-
         owner = owner.casefold()
         with self._guard:
             lock, references = self._entries.get(owner, (threading.Lock(), 0))
@@ -326,8 +301,6 @@ class _OwnerLockTable:
 
 
 class _CrossProcessOwnerLock:
-    """OS-backed owner exclusion anchored beneath the configured durable root."""
-
     __slots__ = ("_anchor", "_released", "_stream")
 
     def __init__(
@@ -373,7 +346,7 @@ class _CrossProcessOwnerLock:
                 os.fsync(stream.fileno())
                 store._fsync_anchor(anchor)
             stream.seek(0)
-            if os.name == "nt":  # pragma: win32 cover
+            if os.name == "nt":
                 while True:
                     try:
                         msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
@@ -383,7 +356,7 @@ class _CrossProcessOwnerLock:
                         time.sleep(0.01)
                         continue
                     break
-            else:  # pragma: posix cover
+            else:
                 operation = fcntl.LOCK_EX
                 if not blocking:
                     operation |= fcntl.LOCK_NB
@@ -409,10 +382,10 @@ class _CrossProcessOwnerLock:
         self._released = True
         error: BaseException | None = None
         try:
-            if os.name == "nt":  # pragma: win32 cover
+            if os.name == "nt":
                 self._stream.seek(0)
                 msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:  # pragma: posix cover
+            else:
                 fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
         except BaseException as exc:
             error = exc
@@ -429,8 +402,6 @@ class _CrossProcessOwnerLock:
 
 
 class BlobStagingReservation:
-    """No-bytes owner reservation that must be acquired before a staging transaction."""
-
     __slots__ = ("_owner", "_store", "_token")
 
     def __init__(
@@ -479,14 +450,6 @@ class BlobStagingReservation:
 
 @runtime_checkable
 class StreamingBlobStore(Protocol):
-    """Path-independent reads, staging reservations, and absence probes for one root.
-
-    Physical attachment creation is deliberately absent.  New bytes may be staged only through
-    ``MaterializationRepository.open_pending_materialization_staging`` so database owner and lease
-    fences are held while the hidden filesystem session is created.  Physical deletion and
-    terminal absence certification remain capability-bound to ``DurablePurgeExecutor``.
-    """
-
     def reserve_materialization_staging(
         self,
         *,
@@ -602,8 +565,6 @@ def _normalized_key(key: str, *, name: str = "key") -> str:
 
 
 def validate_blob_storage_key(value: str) -> str:
-    """Return one normalized owner-relative storage key or fail closed."""
-
     return _normalized_key(value)
 
 
@@ -654,8 +615,6 @@ async def _cancel_safe_to_thread(
     cleanup_on_cancel: Callable[[Any], None] | None = None,
     **kwargs: object,
 ) -> Any:
-    """Observe a worker after cancellation and dispose any resource it returned."""
-
     worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
     return await _observe_cancel_safe_worker(
         worker,
@@ -672,8 +631,6 @@ async def _cancel_safe_in_executor(
     cleanup_on_cancel: Callable[[Any], None] | None = None,
     **kwargs: object,
 ) -> Any:
-    """Run non-waiting descriptor work on one bounded, store-owned executor."""
-
     worker = asyncio.ensure_future(
         asyncio.get_running_loop().run_in_executor(
             executor,
@@ -693,16 +650,11 @@ async def _observe_cancel_safe_worker(
     cleanup_on_cancel: Callable[[Any], None] | None,
     cleanup_executor: Executor | None,
 ) -> Any:
-    """Join one shielded worker through repeated cancellation and surface cleanup errors."""
-
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError as first_cancellation:
         cancellation = first_cancellation
 
-    # Repeated Task.cancel() calls must not interrupt observation of a worker that can return an
-    # open descriptor, owner lock, or unpublished temporary.  Shield each wait and remember the
-    # most recent cancellation until both the worker and any required cleanup have completed.
     while not worker.done():
         try:
             await asyncio.shield(worker)
@@ -758,8 +710,6 @@ def _windows_handle_identity(handle: int) -> tuple[int, int]:
 
 
 def _windows_extended_path(path: Path) -> str:
-    """Return one validated local-drive Win32 path without the MAX_PATH limit."""
-
     supplied = os.fspath(path)
     drive, tail = os.path.splitdrive(supplied)
     if (
@@ -779,8 +729,6 @@ def _windows_open_directory(path: Path) -> int:
     handle = _WIN_CREATE_FILE(
         _windows_extended_path(path),
         _WIN_GENERIC_READ,
-        # Child creation and atomic rename require directory-write sharing.  Delete sharing stays
-        # denied, so the opened handle pins this exact directory identity against substitution.
         _WIN_FILE_SHARE_READ | _WIN_FILE_SHARE_WRITE,
         None,
         _WIN_OPEN_EXISTING,
@@ -824,13 +772,8 @@ def _windows_open_file_descriptor(
     )
     share = _WIN_FILE_SHARE_READ | _WIN_FILE_SHARE_WRITE
     if deny_write_sharing:
-        # Parser leases yield the validated Windows path.  Denying another
-        # writer here keeps that scoped capability bound to the bytes whose
-        # size and digest were checked on this exact descriptor.
         share = _WIN_FILE_SHARE_READ
     if temporary:
-        # Keep the exact temporary handle live across os.replace while denying
-        # another writer the ability to alter the digested bytes.
         share = _WIN_FILE_SHARE_READ | _WIN_FILE_SHARE_DELETE
     handle = _WIN_CREATE_FILE(
         _windows_extended_path(path),
@@ -861,15 +804,12 @@ def _windows_open_file_descriptor(
             )
         return descriptor
     except BaseException:
-        # open_osfhandle transfers ownership to the descriptor on success.
         if "descriptor" not in locals():
             _WIN_CLOSE_HANDLE(handle)
         raise
 
 
 class _DirectoryAnchor:
-    """An opened, exact-case, no-follow directory chain rooted at the store."""
-
     __slots__ = ("_closed", "_components", "_identities", "_resources", "_store", "path")
 
     def __init__(
@@ -1159,8 +1099,6 @@ class _DirectoryAnchor:
 
 
 class BlobReadStream:
-    """Context-managed bounded reader that intentionally has no path or ``name`` attribute."""
-
     __slots__ = (
         "_closed",
         "_expected_sha256",
@@ -1210,8 +1148,6 @@ class BlobReadStream:
         self.close()
 
     def read(self, size: int = -1) -> bytes:
-        """Read at most one configured I/O chunk, including for ``size=-1``."""
-
         if self._closed:
             raise PlaneError("blob reader is closed", code="blob_reader_closed")
         bounded = self._io_chunk_bytes if size == -1 else _positive_bound(
@@ -1269,16 +1205,6 @@ class BlobReadStream:
             raise verification_error
 
     def _abandon_unverified(self) -> None:
-        """Promptly release an asynchronously abandoned reader without a full-file drain.
-
-        Synchronous ``close()`` intentionally verifies an expected digest even when a caller did
-        not consume the whole stream.  An async iterator that is cancelled or explicitly closed
-        early has instead abandoned that verification request: draining a potentially huge file
-        on the store's bounded control lane would let a pair of abandoned reads starve unrelated
-        owners.  Closing the descriptor and owner exclusion is sufficient here, and this method
-        deliberately never marks the stream verified.
-        """
-
         if self._closed:
             return
         self._closed = True
@@ -1300,8 +1226,6 @@ class BlobReadStream:
 
 
 class BlobParserLease:
-    """Narrow read-only local-path capability for trusted path-only parser libraries."""
-
     __slots__ = (
         "_active",
         "_anchor",
@@ -1468,8 +1392,6 @@ class _AtomicWriteSession:
         self._total = proposed
 
     def prepare(self) -> BlobWriteResult:
-        """Durably stage and validate bytes without making the target visible."""
-
         if self._finalized:
             raise PlaneError("blob staging session is closed", code="blob_staging_closed")
         if self._prepared_result is not None:
@@ -1489,8 +1411,6 @@ class _AtomicWriteSession:
         return self._prepared_result
 
     def read_prefix(self, max_bytes: int) -> bytes:
-        """Read a bounded prefix from this exact staged descriptor after durable flush."""
-
         bound = _positive_bound(
             max_bytes,
             name="max_bytes",
@@ -1511,8 +1431,6 @@ class _AtomicWriteSession:
         descriptor_metadata = os.fstat(self._stream.fileno())
         published = False
         try:
-            # The compatibility check remains useful evidence, but the actual
-            # replace is relative to the already-open parent anchor.
             self._store._check_chain(self._target.parent)
             self._anchor.assert_current()
             self._assert_staging_marker_current()
@@ -1539,10 +1457,7 @@ class _AtomicWriteSession:
                 except FileNotFoundError:
                     pass
                 else:
-                    # Once replace reports success, an identity mismatch means
-                    # the path cannot be trusted.  Remove whatever occupies the
-                    # target name rather than leaving attacker-controlled bytes
-                    # published merely because they differ from our descriptor.
+                    # Removed on mismatch: never leave unverified bytes published
                     self._anchor.unlink(self._target_name)
                     self._store._fsync_anchor(self._anchor)
             raise
@@ -1595,10 +1510,7 @@ class _AtomicWriteSession:
                 prune = False
             else:
                 prune = True
-            # Close the directory capability before pruning, but retain the
-            # per-owner exclusion until pruning is complete.  Releasing the
-            # owner lock first would let another writer open the directories
-            # that this cleanup is about to remove.
+            # Anchor closes first; owner lock stays until pruning ends
             self._anchor.close()
             if prune:
                 self._store._prune_empty_parents(self._temporary.parent)
@@ -1649,8 +1561,6 @@ class _AtomicWriteSession:
 
 
 class BlobStagedWrite:
-    """Unpublished, fsync-backed bytes held until a DB-fenced publication step."""
-
     __slots__ = (
         "_evidence",
         "_owner_id",
@@ -1682,13 +1592,9 @@ class BlobStagedWrite:
         return self._evidence
 
     def read_prefix(self, *, max_bytes: int = 8192) -> bytes:
-        """Return a bounded prefix from the still-held staged descriptor for MIME sniffing."""
-
         return self._session.read_prefix(max_bytes)
 
     def abort(self) -> None:
-        """Remove unpublished bytes; safe after a successful publication."""
-
         self._session.abort()
 
     def __enter__(self) -> BlobStagedWrite:
@@ -1704,13 +1610,6 @@ class BlobStagedWrite:
 
 
 class BlobStagingSession:
-    """Single-use hidden-write capability opened under a pending-row database fence.
-
-    The capability owns the configured store's per-owner exclusion while bytes stream.  It never
-    exposes a path and can only produce a ``BlobStagedWrite`` for the owner, key, and durable lease
-    that were locked when the session was opened.
-    """
-
     __slots__ = ("_owner_id", "_session", "_staging_id", "_storage_key", "_store")
 
     def __init__(
@@ -1736,8 +1635,6 @@ class BlobStagingSession:
         return session
 
     def write_chunks(self, chunks: Iterable[bytes]) -> BlobStagedWrite:
-        """Stream sync chunks into the unpublished capability and return durable evidence."""
-
         if not isinstance(chunks, Iterable):
             raise SQLContractError("chunks must be an iterable of bytes")
         session = self._take()
@@ -1760,8 +1657,6 @@ class BlobStagingSession:
             raise
 
     async def awrite_chunks(self, chunks: AsyncIterable[bytes]) -> BlobStagedWrite:
-        """Stream async chunks off-loop; cancellation always aborts the hidden session."""
-
         if not isinstance(chunks, AsyncIterable):
             raise SQLContractError("chunks must be an async iterable of bytes")
         session = self._take()
@@ -1787,16 +1682,12 @@ class BlobStagingSession:
             raise
 
     def abort(self) -> None:
-        """Idempotently discard an unused staging capability."""
-
         session = self._session
         self._session = None
         if session is not None:
             session.abort()
 
     async def aabort(self) -> None:
-        """Idempotently discard an unused staging capability off-loop."""
-
         session = self._session
         self._session = None
         if session is not None:
@@ -1826,8 +1717,6 @@ class BlobStagingSession:
 
 
 class ExplicitRootStreamingBlobStore:
-    """Streaming blob store whose configured root is intentionally private."""
-
     def __init__(
         self,
         root: str | os.PathLike[str],
@@ -1927,8 +1816,6 @@ class ExplicitRootStreamingBlobStore:
         )
 
     def close(self) -> None:
-        """Release the bounded stage-I/O workers after all capabilities are closed."""
-
         with self._lifecycle_guard:
             if self._closed:
                 return
@@ -1997,8 +1884,6 @@ class ExplicitRootStreamingBlobStore:
         return local
 
     def _try_acquire_owner_exclusion(self, owner: str) -> _OwnerLockToken | None:
-        """Attempt local and OS-backed owner exclusion without blocking a worker."""
-
         self._begin_owner_acquisition()
         try:
             return self._try_acquire_owner_exclusion_unadmitted(owner)
@@ -2006,8 +1891,6 @@ class ExplicitRootStreamingBlobStore:
             self._finish_owner_acquisition()
 
     async def _acquire_owner_exclusion_async(self, owner: str) -> _OwnerLockToken:
-        """Poll immediate lock attempts without occupying the shared executor while waiting."""
-
         self._begin_owner_acquisition()
         try:
             while True:
@@ -2030,13 +1913,6 @@ class ExplicitRootStreamingBlobStore:
         *,
         owner_id: str,
     ) -> BlobStagingReservation:
-        """Acquire owner exclusion without creating bytes or consulting the database.
-
-        Callers acquire this capability before entering the short staging transaction, pass it to
-        ``MaterializationRepository.open_pending_materialization_staging``, and release it on every
-        pre-transaction failure.  Waiting here therefore never occurs while a DB row lock is held.
-        """
-
         owner = validate_blob_owner_id(owner_id)
         return BlobStagingReservation(
             self,
@@ -2049,8 +1925,6 @@ class ExplicitRootStreamingBlobStore:
         *,
         owner_id: str,
     ) -> BlobStagingReservation:
-        """Acquire without leaving a blocking lock waiter in the shared executor."""
-
         owner = validate_blob_owner_id(owner_id)
         return BlobStagingReservation(
             self,
@@ -2064,8 +1938,6 @@ class ExplicitRootStreamingBlobStore:
         authority: _BlobPublishAuthority,
         reservation: BlobStagingReservation,
     ) -> BlobStagingSession:
-        """Open hidden storage only while the artifact repository holds its DB fences."""
-
         if not isinstance(authority, _BlobPublishAuthority):
             raise SQLContractError("authority must be typed blob staging evidence")
         owner = validate_blob_owner_id(authority.owner_id)
@@ -2093,8 +1965,6 @@ class ExplicitRootStreamingBlobStore:
         *,
         authority: _BlobPublishAuthority,
     ) -> BlobWriteResult:
-        """Internal publication seam consumed only by the artifact repository."""
-
         if not isinstance(staged, BlobStagedWrite) or staged._store is not self:
             raise SQLContractError("staged write does not belong to this blob store")
         if not isinstance(authority, _BlobPublishAuthority):
@@ -2150,8 +2020,6 @@ class ExplicitRootStreamingBlobStore:
         expected_digest: str | None,
         owner_lock: _OwnerLockToken,
     ) -> BlobReadStream:
-        """Open one reader after the caller has acquired owner exclusion."""
-
         anchor: _DirectoryAnchor | None = None
         try:
             key_parts = tuple(storage_key.split("/"))
@@ -2225,13 +2093,6 @@ class ExplicitRootStreamingBlobStore:
         expected_size_bytes: int | None = None,
         expected_sha256: str | None = None,
     ) -> BlobParserLease:
-        """Open a scoped capability for a trusted path-only parser.
-
-        The yielded ``BlobParserPath`` must not be retained beyond the context.  This store holds
-        an owner exclusion token and an open read descriptor, and revalidates ancestry, identity,
-        regular-file type, and size both before the yield and during context exit.
-        """
-
         owner = validate_blob_owner_id(owner_id)
         bound = _positive_bound(max_bytes, name="max_bytes")
         expected_size = _optional_size(expected_size_bytes, maximum=bound)
@@ -2381,8 +2242,6 @@ class ExplicitRootStreamingBlobStore:
             await _cancel_safe_in_executor(self._control_io_executor, cleanup)
 
     def _delete_for_purge(self, authority: _BlobPurgeAuthority) -> BlobDeleteResult:
-        """Execute physical deletion only for an executor-derived typed capability."""
-
         if not isinstance(authority, _BlobPurgeAuthority):
             raise SQLContractError("physical blob deletion requires purge authority")
         owner_lock = self._acquire_owner_exclusion(authority.owner_id)
@@ -2458,8 +2317,6 @@ class ExplicitRootStreamingBlobStore:
         authority: _BlobPublishAuthority,
         owner_lock: _OwnerLockToken,
     ) -> _AtomicWriteSession:
-        """Construct hidden storage only from repository-minted row-lock evidence."""
-
         if not isinstance(authority, _BlobPublishAuthority):
             raise SQLContractError("authority must be typed blob staging evidence")
         owner = validate_blob_owner_id(authority.owner_id)
@@ -2550,9 +2407,6 @@ class ExplicitRootStreamingBlobStore:
                 closefd=True,
             )
             descriptor = None
-            # Construction is part of the guarded ownership transfer.  In particular, fstat of
-            # the sentinel can fail; no descriptor, sentinel, temporary, anchor, or owner lock may
-            # escape that failure path.
             session = _AtomicWriteSession(
                 self,
                 owner=owner,
@@ -2893,8 +2747,6 @@ class ExplicitRootStreamingBlobStore:
         *,
         depth: int,
     ) -> None:
-        """Validate an entire tree lazily before the first destructive operation."""
-
         if depth > _MAX_KEY_COMPONENTS + 1:
             raise PlaneError("blob tree exceeds its bounded depth", code="blob_path_unsafe")
         with anchor.scandir() as entries:
@@ -3000,8 +2852,6 @@ class ExplicitRootStreamingBlobStore:
 
     @classmethod
     def _provision_root(cls, path: Path) -> tuple[Path, ...]:
-        """Create a missing root suffix through a real ancestry and report owned entries."""
-
         missing: list[Path] = []
         current = path
         while True:

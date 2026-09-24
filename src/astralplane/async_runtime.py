@@ -1,10 +1,6 @@
-"""Bounded event-loop adapter for caller-owned AstralPlane transactions.
-
-AstralPlane's PostgreSQL driver and repositories are intentionally synchronous.
-This adapter moves one *complete* caller-owned transaction onto a worker thread;
-it does not expose an async raw-SQL facade and it never splits a transaction
-across threads.  Admission is bounded so event-loop callers cannot create an
-unbounded executor backlog.
+"""Bounded event-loop adapter moving one complete caller-owned Plane transaction from
+api.py's synchronous runtime onto a worker thread; admission is bounded so event-loop
+callers cannot create an unbounded executor backlog.
 """
 
 from __future__ import annotations
@@ -24,36 +20,21 @@ T = TypeVar("T")
 
 
 class AsyncPlaneCapacityError(PlaneError):
-    """The bounded async transaction lane could not admit work in time."""
-
     default_code = "async_plane_capacity_unavailable"
 
 
 class AsyncPlaneClosedError(PlaneError):
-    """The async adapter has stopped accepting new work."""
-
     default_code = "async_plane_closed"
 
 
 @dataclass(frozen=True, slots=True)
 class AsyncPlaneSnapshot:
-    """Non-sensitive admission state for observability and shutdown gates."""
-
     maximum_concurrency: int
     active: int
     closed: bool
 
 
 class AsyncPlaneRuntime:
-    """Run complete synchronous Plane transactions off an event loop.
-
-    Cancellation of an awaiting coroutine cannot cancel a Python thread that
-    has already entered PostgreSQL.  The adapter therefore retains the slot
-    until that transaction finishes and consumes its exception before admitting
-    replacement work.  Callbacks must use repository idempotency/CAS fences for
-    any externally retryable operation.
-    """
-
     def __init__(
         self,
         runtime: PlaneRuntime,
@@ -86,8 +67,6 @@ class AsyncPlaneRuntime:
 
     @property
     def repositories(self) -> object:
-        """Expose the exact catalog owned by the wrapped synchronous runtime."""
-
         return self._runtime.repositories
 
     def snapshot(self) -> AsyncPlaneSnapshot:
@@ -103,8 +82,6 @@ class AsyncPlaneRuntime:
         *,
         isolation: IsolationLevel | None = None,
     ) -> T:
-        """Run ``callback`` once inside one worker-thread transaction scope."""
-
         if not callable(callback):
             raise TypeError("callback must be callable")
         loop = asyncio.get_running_loop()
@@ -141,15 +118,12 @@ class AsyncPlaneRuntime:
             self._semaphore.release()
             if completed.cancelled():
                 return
-            # Retrieve failures when the awaiting caller was cancelled.
             completed.exception()
 
         worker.add_done_callback(release_slot)
         return await asyncio.shield(worker)
 
     def close(self) -> None:
-        """Reject new work without closing the composition-owned Plane runtime."""
-
         self._closed = True
 
     def _bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:

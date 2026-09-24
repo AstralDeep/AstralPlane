@@ -1,4 +1,7 @@
-"""Owner-attributed encrypted refresh-token revocation queue persistence."""
+"""Owner-attributed queue of encrypted refresh tokens pending revocation, with a
+cycle-bounded administrative drain page. Used by AstralDeep's native-logout flow and
+repositories/history.py's session rotation.
+"""
 
 from __future__ import annotations
 
@@ -39,8 +42,6 @@ def _page_integer(value: object, field: str, *, minimum: int = 0, maximum: int =
 
 @dataclass(frozen=True, slots=True)
 class RevocationQueueCursor:
-    """Exclusive administrative position ordered by enqueue time, then queue ID."""
-
     enqueued_at: int
     queue_id: int
 
@@ -51,13 +52,6 @@ class RevocationQueueCursor:
 
 @dataclass(frozen=True, slots=True)
 class RevocationQueuePage:
-    """One read-only cycle page; a null next cursor denotes cycle exhaustion.
-
-    The queue-ID ceiling is captured once per cycle. Retaining it excludes later
-    enqueues even when their timestamps are equal or backdated. It is traversal
-    metadata, not a claim, authorization proof, or stable database snapshot.
-    """
-
     records: tuple[RevocationQueueRecord, ...]
     next_cursor: RevocationQueueCursor | None
     ceiling: int | None
@@ -89,8 +83,6 @@ def _queue_id(value: object) -> int:
 
 
 class RevocationQueueRepository:
-    """Store ciphertext-only logout work with owner predicates on mutations."""
-
     _FIELDS = "id, user_id, refresh_token_enc, enqueued_at, attempts, client_id, issuing_issuer"
 
     def enqueue(
@@ -113,7 +105,6 @@ class RevocationQueueRepository:
         if issuing_issuer is not None:
             _, client = _issuing_pair(issuing_issuer, client_id)
         else:
-            # Preserve both historical queue forms without inferring their issuer.
             client = None if client_id is None else _required_id(client_id, "client id")
         result = transaction.execute(
             f"""
@@ -153,8 +144,6 @@ class RevocationQueueRepository:
         *,
         limit: int = 20,
     ) -> tuple[RevocationQueueRecord, ...]:
-        """Return bounded cross-owner work for the trusted revocation drainer."""
-
         bounded_limit = _bounded_limit(limit, maximum=200)
         rows = query.fetch_all(
             f"""
@@ -175,21 +164,6 @@ class RevocationQueueRepository:
         after: RevocationQueueCursor | None = None,
         ceiling: int | None = None,
     ) -> RevocationQueuePage:
-        """Read a finite administrative cycle without claiming or mutating work.
-
-        Args:
-            query: Caller-owned trusted administrative query context.
-            limit: Exact integer page size from 1 through 200.
-            after: Exclusive position returned by the preceding page.
-            ceiling: Captured queue-ID maximum; required with a continuation.
-                Omit both position and ceiling to start or restart a cycle.
-
-        Returns:
-            A bounded ordered page retaining its ceiling. A null next cursor
-            ends the cycle, including when remaining rows were deleted. An
-            initially empty queue also has a null ceiling. Repeat reads do not
-            alter attempts; mutations still require their ordinary owner fence.
-        """
         size = _page_integer(limit, "limit", minimum=1, maximum=200)
         if ceiling is not None:
             _page_integer(ceiling, "cycle ceiling", minimum=1)

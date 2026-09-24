@@ -1,4 +1,7 @@
-"""Real-PostgreSQL fresh baseline through the full current lineage."""
+"""Tests for astralplane.database.migrations and baseline.py: a fresh empty PostgreSQL
+database reaches the current schema revision idempotently, with index, constraint,
+and host/session contract checks along the way.
+"""
 
 from __future__ import annotations
 
@@ -179,8 +182,6 @@ def empty_postgres_schema() -> Iterator[_EmptySchema]:
 
 @pytest.fixture
 def empty_postgres_database() -> Iterator[_EmptyDatabase]:
-    """Create one exact TEMPLATE template0 database with PostgreSQL's default public schema."""
-
     database_url = os.environ.get(TEST_DATABASE_ENV)
     if database_url is None:
         pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
@@ -621,8 +622,6 @@ def test_voice_backend_constraint_accepts_only_exact_remote_and_local_rows(
 def test_fifty_two_starter_migration_trials_converge_once(
     empty_postgres_schema: _EmptySchema,
 ) -> None:
-    """Fifty live two-starter trials apply every owned schema step once."""
-
     fixture = empty_postgres_schema
     database_url = os.environ[TEST_DATABASE_ENV]
     expected_steps = (
@@ -744,7 +743,6 @@ def test_fifty_two_starter_migration_trials_converge_once(
 def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
     empty_postgres_schema: _EmptySchema,
 ) -> None:
-    """Carry forward the still-supported 031/055/063/066 catalog guarantees."""
     fixture = empty_postgres_schema
     migration = MigrationRunner(
         fixture.database,
@@ -830,7 +828,6 @@ def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
 def test_hot_message_queries_use_the_declared_composite_index(
     empty_postgres_schema: _EmptySchema,
 ) -> None:
-    """Prove the 066 composite index serves each retained hot predicate."""
     fixture = empty_postgres_schema
     migration = MigrationRunner(
         fixture.database,
@@ -2412,8 +2409,6 @@ def test_074_004_legacy_exact_manual_review_has_evidence_bound_operator_recovery
     fixture = empty_postgres_schema
     historical = _historical_074_003_runner(fixture.database)
     BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
-    # Both values were valid in 074.003 but are deliberately rejected by the hardened store.
-    # The operator path must deserialize and attest them without attempting physical I/O.
     owner_id = "legacy:owner-1"
     key = ".astralplane-legacy/CON?.bin"
     locator_digest = hashlib.sha256(f"{owner_id}\0{key}".encode()).hexdigest()
@@ -2671,7 +2666,6 @@ def test_074_004_schedules_every_legacy_deleted_attachment_for_typed_cleanup(
         registry=MIGRATION_REGISTRY,
     )
     current.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    # Current startup replay is a no-op and must not duplicate typed cleanup work.
     current.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     cursor = fixture.connection.cursor()
     try:
@@ -3040,7 +3034,7 @@ def test_user_agent_policy_reconciliation_is_concurrent_idempotent_and_rollback_
                 )
             with outcome_lock:
                 results.append((result.marker_changed, result.agents_marked_for_revalidation))
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # pragma: no cover
             with outcome_lock:
                 failures.append(exc)
 

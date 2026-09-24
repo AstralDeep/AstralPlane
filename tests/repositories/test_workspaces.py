@@ -1,4 +1,7 @@
-"""Focused contract tests for neutral workspace repositories."""
+"""Tests for src/astralplane/repositories/workspaces.py:
+canvas/layout/snapshot/publication contract tests covering owner scoping, revision
+fencing, and atomic rebase/commit at head.
+"""
 
 from __future__ import annotations
 

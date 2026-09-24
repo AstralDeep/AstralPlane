@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.scheduler and scheduler_models: scheduled-job CRUD
+and due ordering, occurrence claim/retry fencing, job-policy CAS, and
+episode-admission validation.
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -773,10 +778,6 @@ def test_scheduler_public_validation_and_impossible_results_fail_closed() -> Non
                 **{**settlement, **changes},
             )
 
-
-# ---------------------------------------------------------------------------
-# 088.007 optional job policy, episode admission and Stop (T039/T040 unit cases)
-# ---------------------------------------------------------------------------
 
 ASSIGNMENT_ID = "99999999-9999-4999-8999-999999999999"
 OTHER_ASSIGNMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

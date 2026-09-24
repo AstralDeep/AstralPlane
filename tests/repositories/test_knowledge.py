@@ -1,4 +1,7 @@
-"""Typed contracts for synthesis, quality, quarantine, and proposal state."""
+"""Tests for astralplane.repositories.knowledge: interaction synthesis marking,
+quality-sample CAS updates, quarantine hold/release, and proposal
+supersede-under-advisory-lock semantics.
+"""
 
 from __future__ import annotations
 

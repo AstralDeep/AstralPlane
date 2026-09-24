@@ -1,4 +1,6 @@
-"""Restart, sink-failure, and acknowledgement tests for audit delivery."""
+"""Tests for src/astralplane/audit_delivery.py: canonical payload shaping, transactional
+idempotent enqueue, sink retry/dead-letter handling, and fenced claim/ack lifecycle.
+"""
 
 from __future__ import annotations
 

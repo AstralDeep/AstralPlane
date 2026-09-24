@@ -1,4 +1,6 @@
-"""Fresh-install baseline compatibility and recovery semantics."""
+"""Tests for src/astralplane/database/baseline.py: fresh-install detection, structural
+recovery from partial or legacy state, and postcondition-checked baseline runs.
+"""
 
 from __future__ import annotations
 

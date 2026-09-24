@@ -1,4 +1,7 @@
-"""Issuing identity survives real refresh/replay and never adopts a replacement."""
+"""Real-PostgreSQL tests for astralplane.repositories.history and revocations: issuing
+identity survives refresh and exact replay, metadata can't be spoofed or relabeled,
+and deferred revocation keeps its exact identity through later reads.
+"""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -151,7 +154,6 @@ def test_bound_and_legacy_observations_are_current_but_metadata_spoof_is_refused
         )
         with pytest.raises(RepositoryConflictError):
             check(tx, observation=replace(observation, credential=tampered))
-        # A coherent hash of the forged pair is not the stored issuing identity.
         coherent = repo.execution_fence(
             replace(original, issuing_issuer=ISSUER + "/other", issuing_client_id=CLIENT)
         )
@@ -323,8 +325,6 @@ def test_bound_restored_session_retirement_preserves_queue_and_denies_old_observ
         assert queue.pending_for_administration(tx) == (item,)
         with pytest.raises(RepositoryConflictError):
             repo.assert_current_execution(tx, observation=observation)
-        # A synthetic restored snapshot includes its original pair and UUID;
-        # recovery must retire it again without trusting an earlier receipt.
         columns = tuple(snapshot)
         tx.execute(
             "INSERT INTO web_session ("

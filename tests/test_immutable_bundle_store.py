@@ -1,4 +1,7 @@
-"""Fault-injected tests for feature-060 immutable agent publication."""
+"""Fault-injected tests for src/astralplane/immutable_bundle_store.py: two-phase
+stage/promote/recover, journal-gap crash recovery, and cross-platform durable file
+replacement.
+"""
 
 from __future__ import annotations
 
@@ -207,8 +210,6 @@ def test_public_two_phase_and_recovery_symbols_are_direct_module_contract():
 
     assert expected <= set(publication.__all__)
     assert publication.StagedBundleReceipt is StagedBundleReceipt
-    # Plane's package-root exports are intentionally owned by the composition
-    # freeze.  Consumers use this stable submodule path until that export lands.
     assert publication.__name__ == "astralplane.immutable_bundle_store"
 
 
@@ -384,7 +385,6 @@ def test_two_phase_journal_gap_occurs_after_root_lock_release(
         revision_id,
     )
     assert not lock_held
-    # This is the composition-owned journal transaction gap.
     journal_evidence = (
         staged.publication_key,
         staged.bundle_sha256,
@@ -1481,9 +1481,7 @@ def test_publish_fsyncs_and_atomically_exposes_exact_revision(tmp_path, monkeypa
     assert not (store.root / "staging" / draft_uuid).joinpath(
         "7", publication_id
     ).exists()
-    # Every executable plus the manifest is flushed explicitly. POSIX also
-    # fsyncs directories; Windows makes the namespace transition durable via
-    # MoveFileExW(MOVEFILE_WRITE_THROUGH), which is not an ``os.fsync`` call.
+    # Windows durability comes from MoveFileExW(WRITE_THROUGH), not os.fsync
     if os.name == "nt":
         assert len(fsynced) >= len(_BUNDLE_FILENAMES) + 1
     else:

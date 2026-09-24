@@ -1,4 +1,7 @@
-"""Repeatability, concurrency, compatibility, and rollback migration tests."""
+"""Tests for src/astralplane/database/migrations.py and revision.py: repeatable,
+concurrency-safe, compatibility-checked schema upgrades across the declared migration
+registry.
+"""
 
 from __future__ import annotations
 
@@ -78,8 +81,6 @@ class FakeTransaction:
 
 
 class FakeDatabase:
-    """Transactional in-memory fixture with one cross-runner lock."""
-
     def __init__(
         self,
         *,
@@ -665,7 +666,6 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    # 088.008 (framework credentials) now follows this edge in the registry.
     assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
@@ -679,7 +679,6 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     assert "scheduled_job_policy_allowance" in ddl
     assert "REFERENCES persistent_assignment(id, owner_user_id) ON DELETE CASCADE" in ddl
     assert "IF NOT EXISTS" not in ddl
-    # The 088.006 predecessor is pinned by its exact registry digest and catalog digest.
     assert canonical.PLANE_SCHEMA_088_006_REGISTRY_DIGEST == (
         "4f5783e676a12a4009959da2056c2c769418f8c101d67f533223a608158ed73a"
     )
@@ -689,15 +688,12 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.006") == (
         canonical.PLANE_SCHEMA_088_006_REGISTRY_DIGEST
     )
-    # 088.007 is itself now a pinned predecessor of 088.008, not the current tip.
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('scheduled_job_policy')" in query_tables
     assert "('scheduled_occurrence_assignment')" in query_tables
-    # Verifying the 088.006 predecessor with a synthetic transaction that lacks
-    # the new tables must still accept the pinned 088.006 digest set.
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.005", "088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
@@ -727,7 +723,6 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert "ALTER TABLE user_offline_grant ADD COLUMN max_admissions INTEGER" in ddl
     assert "ALTER TABLE user_offline_grant ADD COLUMN consumed_admissions INTEGER" in ddl
     assert "IF NOT EXISTS" not in ddl
-    # The 088.007 predecessor is pinned by its exact registry digest and catalog digest.
     assert canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST == (
         "844d9f6629bc422013f84488b10ba6d2862f4805475c63b217639184146fca4d"
     )
@@ -743,8 +738,6 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('framework_credential')" in query_tables
-    # Verifying the 088.007 predecessor with a synthetic transaction that lacks
-    # the new table must still accept the pinned 088.007 digest set.
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
@@ -775,15 +768,11 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
         "CHECK(last_verification_outcome IN "
         "('unverified','valid','rejected','unavailable'))"
     ) in ddl
-    # Additive only: no existing table is altered and nothing is conditional.
     assert "ALTER TABLE" not in ddl
     assert "IF NOT EXISTS" not in ddl
-    # No system-wide counterpart may exist (FR-005).
     assert "system_typesafe" not in ddl
-    # No foreign key ties the credential to an LLM configuration (FR-004).
     assert "REFERENCES" not in ddl
 
-    # The 088.008 predecessor is pinned by its exact registry and catalog digests.
     assert canonical.PLANE_SCHEMA_088_008_REGISTRY_DIGEST == (
         "4cddbddbc3eed66232f35bc24452451f92aa2b3e90968eb6fd6754f9a64358d8"
     )

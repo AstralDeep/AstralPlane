@@ -1,4 +1,7 @@
-"""Request-only SQL caps release real PostgreSQL locks and pool borrows."""
+"""Real-PostgreSQL tests for astralplane.repositories.history: request-scoped
+statement-timeout caps reset at transaction end and release pool borrows and locks
+even when a blocked query is still pending.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 

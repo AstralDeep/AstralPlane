@@ -1,4 +1,8 @@
-"""Owner isolation, revocation and caller rollback for credential-state CAS."""
+"""Real-PostgreSQL tests for astralplane.repositories.offline_grants and history: opaque
+refresh replacement respects every durable fence, finite allowance charges exactly
+once, and session rotation/delete return the final credential.
+"""
+
 import uuid
 from dataclasses import replace
 
@@ -39,7 +43,7 @@ def test_opaque_refresh_replacement_respects_every_durable_fence(catalog_databas
         assert stored.encrypted_refresh_token == b"original"
         assert rotate(tx).encrypted_refresh_token == b"reference"
     with database.transaction() as tx:
-        assert rotate(tx) is None  # a stale concurrent consumer cannot overwrite rotation
+        assert rotate(tx) is None
         repo.revoke_grant(tx, owner_id="cas-owner", grant_id=gid, revoked_at=600)
     with database.transaction() as tx:
         assert rotate(tx, expected_encrypted_refresh_token=b"reference") is None
@@ -76,7 +80,6 @@ def test_finite_grant_allowance_charges_exactly_once_per_admission(catalog_datab
         RepositoryConflictError, match="offline grant allowance exhausted"
     ):
         repo.consume_admission(tx, owner_id="allowance-owner", grant_id=gid, as_of=400)
-    # An unlimited (legacy-shaped) grant never charges an allowance.
     unlimited_id = str(uuid.uuid4())
     with database.transaction() as tx:
         repo.create_grant(

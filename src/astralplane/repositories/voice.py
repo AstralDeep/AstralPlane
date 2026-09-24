@@ -1,4 +1,7 @@
-"""Durable voice session and turn metadata without real-time media behavior."""
+"""Durable metadata for voice sessions and turns, including guidance observations for
+legacy dual-lock-order writers; excludes real-time media handling. Backs AstralDeep's
+voice orchestration and voice_migration tests.
+"""
 
 from __future__ import annotations
 
@@ -333,8 +336,6 @@ class VoiceTurn:
 
 @dataclass(frozen=True, slots=True)
 class VoiceGuidanceObservation:
-    """Detached existing voice metadata; no transcript, media or read capability."""
-
     session: Record = field(repr=False)
     turn: Record = field(repr=False)
     observed_at: datetime
@@ -353,14 +354,6 @@ class VoiceRepository:
         expected_media_grant_revision: int,
         operation_id: str,
     ) -> VoiceGuidanceObservation:
-        """Observe exact live voice rows after operation/slot locks, without renewal.
-
-        The caller already guards original owner/session and operation authority.
-        Legacy voice writers use both session→turn and turn→session order, so
-        these two row locks are NOWAIT. A refusal rolls back this savepoint,
-        including its partial locks, and leaves the caller transaction usable.
-        No later voice writes or external calls belong in this read boundary.
-        """
         if type(owner_id) is not str or not owner_id.strip() or len(owner_id) > 512:
             raise RepositoryValidationError("voice guidance owner is invalid")
         for value in (session_id, turn_id, operation_id):
@@ -377,6 +370,7 @@ class VoiceRepository:
                 raise RepositoryValidationError("voice guidance generation is invalid")
         try:
             with transaction.savepoint("voice_guidance_current_read"):
+                # NOWAIT: legacy writers take these locks in both orders
                 session = transaction.fetch_one(
                     "SELECT * FROM voice_session WHERE user_id=%s AND session_id=%s "
                     "FOR UPDATE NOWAIT", (owner_id, session_id),
@@ -430,7 +424,6 @@ class VoiceRepository:
                     or isinstance(exc, (KeyError, TypeError, ValueError))):
                 raise RepositoryConflictError("voice guidance is unavailable") from None
             raise
-    """Persist supplied metadata; media workers and transport remain product-owned."""
 
     def lock_identity(
         self,
@@ -439,8 +432,6 @@ class VoiceRepository:
         namespace: str,
         parts: tuple[str, ...],
     ) -> None:
-        """Serialize one bounded product identity for the current transaction."""
-
         _required("namespace", namespace, 64)
         if not parts or any(not isinstance(part, str) or not part for part in parts):
             raise RepositoryValidationError("voice lock parts must be non-empty strings")

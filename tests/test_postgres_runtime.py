@@ -1,4 +1,6 @@
-"""Owned PostgreSQL driver-pool construction tests without a live driver."""
+"""Tests for src/astralplane/database/postgres.py: driver-pool construction, bounded
+checkout, and credential-free error redaction, without a live PostgreSQL driver.
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,8 @@
+"""Tests for src/astralplane/api.py: the public composition facade — repository
+factories, blob/materialization/purge wiring, health, initialize/reconcile lifecycle,
+and runtime construction.
+"""
+
 from __future__ import annotations
 
 import inspect

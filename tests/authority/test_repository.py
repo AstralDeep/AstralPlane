@@ -1,4 +1,6 @@
-"""Focused owner-isolation, fencing, and atomic authority repository tests."""
+"""Tests for astralplane.authority.repository: owner isolation, CAS fencing, and atomic
+binding/lifecycle/effect/claim behavior using a scripted transaction.
+"""
 
 from __future__ import annotations
 
@@ -924,9 +926,6 @@ def test_recoverable_effect_query_is_stale_owner_bounded_and_skip_locked() -> No
     assert "ORDER BY updated_at, operation_id" in statement
     assert "FOR UPDATE SKIP LOCKED" in statement
     assert parameters == ("owner-1", cutoff, 3)
-    assert "same caller-owned transaction" in (
-        AuthorityRepository.list_recoverable_protected_effects.__doc__ or ""
-    )
 
 
 def test_recoverable_effect_query_rejects_invalid_or_out_of_scope_results() -> None:

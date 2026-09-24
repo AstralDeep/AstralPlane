@@ -1,4 +1,7 @@
-"""An exact 088.002 upgrade adds unknown issuing metadata without adopting identity."""
+"""Tests for astralplane.database.migrations: the session-issuer schema upgrade adds
+issuing metadata without adopting identity, preserving incarnations and issued
+liabilities across the edge.
+"""
 
 import json
 from collections.abc import Mapping
@@ -156,7 +159,7 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
             del row["issuing_issuer"], row["issuing_client_id"]
         for row in after["auth_revocation_queue"]:
             assert row.pop("issuing_issuer") is None
-        # 088.008 adds two additive nullable columns to user_offline_grant.
+        # Later migration adds nullable cols here; excluded from diff
         for row in after["user_offline_grant"]:
             assert row.pop("max_admissions") is None
             assert row.pop("consumed_admissions") is None

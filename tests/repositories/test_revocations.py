@@ -1,4 +1,7 @@
-"""Encrypted token-revocation queue repository tests."""
+"""Tests for astralplane.repositories.revocations: owner-attributed enqueue with
+ciphertext redaction, owner- and administrative-scoped pending queues, and CAS-fenced
+attempt increments.
+"""
 
 from __future__ import annotations
 

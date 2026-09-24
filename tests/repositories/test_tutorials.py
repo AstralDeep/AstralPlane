@@ -1,3 +1,8 @@
+"""Tests for astralplane.repositories.tutorials: step creation and revisioning,
+idempotent seeding, CAS-fenced update/archive/restore, and fail-closed handling of
+corrupt persisted steps.
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta

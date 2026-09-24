@@ -1,7 +1,5 @@
-"""Host-neutral durable authority-binding values.
-
-AstralPlane persists these fences but does not decide which agents are governed
-or which lifecycle transition is permitted. Those decisions remain with the
+"""Host-neutral durable authority-binding values; AstralPlane persists these fences but
+leaves which agents are governed and which lifecycle transitions are permitted to the
 composition host.
 """
 
@@ -24,15 +22,11 @@ PendingAuthorityField = Literal["warden", "lease", "lineage", "subject"]
 
 
 class AuthorityPopulation(StrEnum):
-    """Governed populations in the v1 Astral/LETS contract."""
-
     SERVER_DYNAMIC = "server_dynamic"
     BYO_USER = "byo_user"
 
 
 class AuthorityBindingState(StrEnum):
-    """Durable lifecycle states; terminal states never reopen in place."""
-
     PROVISIONING = "provisioning"
     ACTIVE = "active"
     QUIESCENT = "quiescent"
@@ -87,8 +81,6 @@ def pending_authority_identity(
     *,
     field: PendingAuthorityField,
 ) -> str:
-    """Return the reserved deterministic identity for an unissued root binding."""
-
     canonical_binding_id = require_identifier(binding_id, field="binding id")
     if not isinstance(field, str) or field not in (
         "warden",
@@ -105,8 +97,6 @@ def pending_authority_identity(
 
 @dataclass(frozen=True, slots=True)
 class AgentAuthorityBinding:
-    """Owner- and runtime-generation-fenced external authority binding."""
-
     binding_id: str
     owner_id: str
     agent_id: str
@@ -148,8 +138,6 @@ class AgentAuthorityBinding:
         capabilities: tuple[str, ...],
         created_at: datetime,
     ) -> Self:
-        """Create a durable local intent before an external root exists."""
-
         return cls(
             binding_id=binding_id,
             owner_id=owner_id,
@@ -258,14 +246,10 @@ class AgentAuthorityBinding:
 
     @property
     def owner_agent_key(self) -> tuple[str, str, AuthorityPopulation]:
-        """Logical uniqueness key for one governed rollout population."""
-
         return (self.owner_id, self.agent_id, self.population)
 
     @property
     def runtime_generation_key(self) -> tuple[str, str, str, int]:
-        """Fence one concrete runtime generation within its owner."""
-
         return (
             self.owner_id,
             self.agent_id,

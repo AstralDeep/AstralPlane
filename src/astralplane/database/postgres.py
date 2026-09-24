@@ -1,4 +1,6 @@
-"""Owned psycopg2 driver-pool construction for embedded Plane runtimes."""
+"""Constructs the bounded psycopg2 driver pool behind database/pool.py's ConnectionPool
+for embedded Plane runtimes, without exposing driver mechanics to callers.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +18,6 @@ _EXTRAS_MODULE: Final = "psycopg2.extras"
 
 
 class _BoundedDriverPool:
-    """Wait for a bounded checkout instead of surfacing eager pool exhaustion."""
-
     def __init__(self, pool: Any, *, maximum_connections: int, timeout_seconds: float) -> None:
         self._pool = pool
         self._semaphore = threading.BoundedSemaphore(maximum_connections)
@@ -61,7 +61,6 @@ def _retaining_pool_type(pool_module: ModuleType) -> type[Any]:
     threaded_pool = pool_module.ThreadedConnectionPool
 
     class RetainingThreadedConnectionPool(threaded_pool):  # type: ignore[misc, valid-type]
-        """Retain burst-opened connections up to maxconn for reuse."""
 
         def _putconn(self, connection: Any, key: object = None, close: bool = False) -> Any:
             real_minimum = self.minconn
@@ -83,8 +82,6 @@ def create_postgres_driver_pool(
     connect_timeout_seconds: int = 10,
     application_name: str = "astralplane",
 ) -> DriverPool:
-    """Construct a bounded psycopg2 pool without exposing driver mechanics."""
-
     if not isinstance(database_url, str) or not database_url.strip():
         raise InitializationError("database_url must be a non-empty PostgreSQL DSN")
     if (
@@ -134,8 +131,6 @@ def create_postgres_driver_pool(
             cursor_factory=extras_module.RealDictCursor,
         )
     except Exception:
-        # Driver errors can include host configuration. Preserve a typed,
-        # credential-free public failure and let operators inspect PostgreSQL.
         raise InitializationError(
             "PostgreSQL connection pool construction failed",
             code="postgres_pool_construction_failed",

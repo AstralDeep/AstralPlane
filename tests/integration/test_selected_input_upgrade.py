@@ -1,4 +1,7 @@
-"""Populated 088.005 upgrade retains history, opaque notes and unsettled work."""
+"""Tests for astralplane.database.migrations: the selected-input schema upgrade retains
+history and unsettled work without inferring a selection envelope, and refuses a
+wrong predecessor before mutation.
+"""
 
 from dataclasses import replace
 from uuid import uuid4
@@ -24,7 +27,6 @@ from tests.integration.test_session_issuer_upgrade import load_liabilities, reta
 
 
 def prior_runner(database):
-    # Exact aca6595 verifier identities, recorded before the 006 mutation.
     registry = m.MigrationRegistry(
         tuple(e for e in m.MIGRATION_REGISTRY.migrations if e.target_revision <= "088.005"),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "088.005"),
@@ -55,14 +57,6 @@ def current_runner(database):
     )
 
 
-# Head-relative on purpose (mirrors test_scheduler_policy_upgrade.py): this
-# module only pins the 088.005 -> 088.006 selected-input edge, not the
-# data-plane's overall tip. A later feature (e.g. 088.007 scheduler policy,
-# 088.008 framework credentials) legitimately stacks its own edge on top,
-# which moves CURRENT_DATA_PLANE_REVISION past "088.006". Hard-coding
-# "088.006" as the run() target would then fail immediately on
-# MigrationRunner's own "composition expected a different data-plane
-# revision" guard, before any of this module's structural assertions run.
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
 
 
@@ -100,8 +94,6 @@ def populated(tx):
             b"exact-pre-upgrade-opaque-ciphertext",
         ),
     )
-    # Materialize valid historical 005 header/reference rows directly. The new
-    # 006 repository is intentionally not represented as a 005 writer.
     refs = sorted([("skill", skill.head.skill_id, 1), ("note", note.note_id, 1)])
     for index, assignment in enumerate(assignments):
         selected = refs if index == 0 else []
@@ -116,8 +108,6 @@ def populated(tx):
                 "instruction_revision,kind,resource_id,revision) VALUES(%s,%s,1,%s,%s,%s)",
                 (assignment["owner_user_id"], str(assignment["id"]), kind, identity, revision),
             )
-    # Exact explicit-kind predecessor shape, without calling the new writer
-    # whose additional locks require the new reverse index.
     revision_id = str(uuid4())
     definition, definition_digest = definition_snapshot({"version": 1, "purpose": "Existing"})
     tx.execute(
@@ -163,7 +153,7 @@ def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(empty
         after = retained_rows(tx, tables)
         for row in after["assignment_guidance_selection"]:
             assert row.pop("selected_input") is None
-        # 088.008 adds two additive nullable columns to user_offline_grant.
+        # Later migration adds nullable cols here; excluded from diff
         for row in after["user_offline_grant"]:
             assert row.pop("max_admissions") is None
             assert row.pop("consumed_admissions") is None

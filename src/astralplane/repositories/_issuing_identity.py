@@ -1,4 +1,7 @@
-"""Exact structural issuer/client metadata shared by sessions and deferred revocation."""
+"""Validates the issuer/client identity pair shared by session records and the
+revocation queue; host owns issuer/client trust. Used by repositories/history.py and
+repositories/revocations.py.
+"""
 
 import unicodedata
 
@@ -6,7 +9,6 @@ from astralplane.repositories import RepositoryValidationError
 
 
 def _issuing_pair(issuer: object, client_id: object) -> tuple[str | None, str | None]:
-    """Validate exact neutral metadata; the host owns issuer/client trust and IAM."""
     if issuer is None and client_id is None:
         return None, None
     for value, maximum in ((issuer, 2048), (client_id, 256)):

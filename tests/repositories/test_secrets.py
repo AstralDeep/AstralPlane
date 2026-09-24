@@ -1,4 +1,7 @@
-"""Opaque encrypted-provider configuration repository tests."""
+"""Tests for astralplane.repositories.secrets: owner-scoped ciphertext reads with
+redaction, locked selection matching, upsert via native parameters, and scope-fixed
+system-namespace deletes.
+"""
 
 from __future__ import annotations
 

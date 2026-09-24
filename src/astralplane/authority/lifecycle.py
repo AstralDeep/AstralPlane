@@ -1,4 +1,6 @@
-"""Durable, idempotent authority-lifecycle operation values."""
+"""Durable, idempotent authority-lifecycle operation values recording one owner-scoped
+remote mutation and its retry/reconciliation fences.
+"""
 
 from __future__ import annotations
 
@@ -64,8 +66,6 @@ def _optional_time(value: object, *, field: str) -> datetime | None:
 
 @dataclass(frozen=True, slots=True)
 class AuthorityLifecycleOperation:
-    """One owner-scoped remote mutation and its retry/reconciliation fences."""
-
     operation_id: str
     owner_id: str
     binding_id: str

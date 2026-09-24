@@ -1,4 +1,6 @@
-"""Durable authority lifecycle operation tests."""
+"""Tests for astralplane.authority.lifecycle: pending/uncertain/reconciled operation
+shapes, idempotency-key stability, and terminal-status exactness.
+"""
 
 from __future__ import annotations
 

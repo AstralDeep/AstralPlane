@@ -1,4 +1,7 @@
-"""Private input disposition and both execution fences in real PostgreSQL."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments and work_admission:
+transient input never persists private payload fields, and result/retirement
+disposition share one owner lock and settle exactly once.
+"""
 
 import hashlib
 import hmac

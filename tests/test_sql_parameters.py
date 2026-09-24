@@ -1,4 +1,7 @@
-"""Regression coverage for exact native psycopg parameter handling."""
+"""Tests for src/astralplane/database/sql.py: native psycopg parameter handling
+preserves statement text exactly and rejects malformed inputs before driver
+execution.
+"""
 
 from __future__ import annotations
 

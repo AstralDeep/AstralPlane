@@ -1,12 +1,6 @@
-"""An independently-issued framework credential is not a delegation chain link.
-
-A framework credential's owner-lifetime expiry, allowance and scope set are
-fixed at mint time from the OWNER's own authority — never derived from, or
-bounded by, another already-issued authority. A parent-bound delegation
-(here: Plane's own runtime-lease `AgentAuthorityBinding`) is the opposite
-shape: every capability it carries traces back through a `lineage_id` to a
-runtime generation, and its lease is what can be renewed, quiesced or
-attenuated. The two record types must never be structurally confusable.
+"""Tests for astralplane.authority.models and repositories/history.py: a framework
+credential's independent owner-lifetime never gets structurally confused with Plane's
+lineage-bound AgentAuthorityBinding delegation.
 """
 
 from __future__ import annotations
@@ -69,8 +63,6 @@ def _credential(**overrides: object) -> FrameworkCredentialFence:
 def test_a_framework_credential_carries_no_parent_lineage_or_runtime_binding():
     credential_fields = {field.name for field in fields(FrameworkCredentialFence)}
     binding_fields = {field.name for field in fields(AgentAuthorityBinding)}
-    # No field name for "who authorized this" beyond the owner ever overlaps:
-    # a credential is bound to nothing but the owner who minted it.
     lineage_only_fields = {
         "runtime_id",
         "runtime_generation",
@@ -85,22 +77,15 @@ def test_a_framework_credential_carries_no_parent_lineage_or_runtime_binding():
     }
     assert lineage_only_fields <= binding_fields
     assert lineage_only_fields.isdisjoint(credential_fields)
-    # The only field names they share name the SAME concepts (the issuing
-    # owner, a creation timestamp) — never a shared parent/child authority
-    # relationship such as a lineage, lease, or runtime generation.
     assert credential_fields & binding_fields == {"owner_id", "created_at"}
 
 
 def test_a_framework_credential_expiry_is_independent_of_any_lease():
     binding = _binding()
     credential = _credential()
-    # A fresh binding starts with NO lease at all (lease_sequence 0, lease
-    # expiry 0 — it is not yet attenuated to a runtime generation's grant).
     assert binding.lease_sequence == 0
     assert binding.lease_expires_at_ns == 0
     assert binding.state is AuthorityBindingState.PROVISIONING
-    # A credential, by contrast, is born with its OWN owner-lifetime expiry
-    # and allowance — never zero, never waiting on an external lease grant.
     assert credential.expires_at > credential.created_at
     assert credential.max_admissions >= 1
     assert not hasattr(credential, "lease_id")
@@ -120,19 +105,13 @@ def test_attenuating_a_binding_advances_its_own_lineage_never_a_credentials():
         state=AuthorityBindingState.ACTIVE,
         version=first.version + 1,
     )
-    # A binding's own fixed identity (which agent, which runtime generation
-    # it belongs to) never moves under renewal — only its issued remote
-    # identity and lease generation do. This is the attenuation shape: the
-    # SAME lineage is re-granted a new lease, never replaced by a new one.
     assert renewed.binding_id == first.binding_id
     assert renewed.runtime_id == first.runtime_id
     assert renewed.runtime_generation == first.runtime_generation
     assert renewed.lease_sequence != first.lease_sequence
-    assert renewed.lineage_id != first.lineage_id  # pending placeholder -> real lineage
+    assert renewed.lineage_id != first.lineage_id
 
     credential = _credential()
-    # A credential minted for the SAME owner as this binding's owner_id is
-    # never derived from, or attenuated by, this (or any) binding's lineage.
     assert credential.owner_id == first.owner_id
     foreign_identities = {renewed.lineage_id, renewed.runtime_id, renewed.lease_id}
     assert not any(
@@ -143,12 +122,9 @@ def test_attenuating_a_binding_advances_its_own_lineage_never_a_credentials():
 
 
 def test_two_credentials_for_the_same_owner_never_share_a_parent_reference():
-    """Independent issuance: two credentials the SAME owner mints are siblings, not a chain."""
     first = _credential(credential_id="cred-1")
     second = _credential(credential_id="cred-2")
     assert first.owner_id == second.owner_id
     assert first.credential_id != second.credential_id
-    # Neither carries any reference to the other — there is no parent field
-    # to compare, unlike a delegation chain's depth/parent-token linkage.
     assert not hasattr(first, "parent_credential_id")
     assert not hasattr(first, "depth")

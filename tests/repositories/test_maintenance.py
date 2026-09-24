@@ -1,4 +1,7 @@
-"""Maintenance membership, lease, owner, and CAS contract tests."""
+"""Tests for astralplane.repositories.maintenance: unit/input membership creation and
+replay, skip-locked claim recovery, lease bind/renew/complete CAS, and owner-scoped
+reads.
+"""
 
 from __future__ import annotations
 

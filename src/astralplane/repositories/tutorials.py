@@ -1,4 +1,6 @@
-"""Typed persistence for global tutorial content and immutable edit revisions."""
+"""Typed persistence for global tutorial steps and their immutable edit-revision
+history, seeded by stable slug. Used by AstralDeep's onboarding/repository.py.
+"""
 
 from __future__ import annotations
 
@@ -80,8 +82,6 @@ class TutorialSeedResult:
 
 
 class TutorialRepository:
-    """Global tutorial content; authorization remains with the product caller."""
-
     def get(self, query: QueryExecutor, *, step_id: int) -> TutorialStepRecord | None:
         row = query.fetch_one(
             f"SELECT {_STEP_FIELDS} FROM tutorial_step WHERE id = %s",
@@ -189,8 +189,6 @@ class TutorialRepository:
         editor_id: str,
         observed_at: datetime,
     ) -> TutorialSeedResult:
-        """Create one default by stable slug without overwriting an edited row."""
-
         values = _validated_values(
             slug=slug,
             audience=audience,

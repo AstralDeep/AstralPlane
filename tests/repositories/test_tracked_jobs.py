@@ -1,4 +1,7 @@
-"""Owner and poll-fence tests for external tracked-job state."""
+"""Tests for astralplane.repositories.tracked_jobs: owner-scoped create/replay
+idempotency, poll updates CAS-fenced by owner/fail-count/timestamp, and count-checked
+account-retirement deletes.
+"""
 
 from __future__ import annotations
 

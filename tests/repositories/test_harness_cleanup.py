@@ -1,4 +1,7 @@
-"""Fixed-manifest synthetic harness cleanup contract tests."""
+"""Tests for astralplane.repositories.harness_cleanup: verification and security cleanup
+stay within their exact manifest boundary and never touch audit rows, rejecting
+malformed run IDs or profiles.
+"""
 
 from __future__ import annotations
 

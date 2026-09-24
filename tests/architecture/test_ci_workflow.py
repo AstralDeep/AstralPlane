@@ -1,4 +1,7 @@
-"""Structural contract for AstralPlane's repository-owned CI workflow."""
+"""Tests for AstralPlane's GitHub Actions CI workflow: pinned action SHAs, forbidden
+unapproved actions, and that the quality, PostgreSQL, and packaging jobs gate the
+aggregate owner job.
+"""
 
 from __future__ import annotations
 

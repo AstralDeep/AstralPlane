@@ -1,3 +1,8 @@
+"""Tests for src/astralplane/repositories/voice.py: session/turn creation and idempotent
+replay, mixed-backend metadata rejection, owner-scoped reads, and generation-fenced
+transitions with attribution.
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta

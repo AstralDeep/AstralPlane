@@ -1,4 +1,7 @@
-"""Voice guidance read fences over real rows; external admission remains host-owned."""
+"""Tests for src/astralplane/repositories/voice.py: guidance-clock reads fenced over
+real PostgreSQL rows, exact-reference selection, nowait lock release, and
+DB-clock-based expiry; external admission stays host-owned.
+"""
 
 import time
 import uuid
@@ -245,8 +248,6 @@ def test_nowait_refusal_releases_partial_locks_for_reverse_writer(database, work
             with pytest.raises(RepositoryConflictError, match="voice guidance is unavailable"):
                 repo.assert_current_guidance_turn(reader, **args)
             assert reader.fetch_one("SELECT 1 AS usable")["usable"] == 1
-            # A turn-first legacy writer can now obtain the earlier session lock:
-            # the refused reader must have released it via its own savepoint.
             writer.execute("SET LOCAL lock_timeout='500ms'")
             repo.get_session_record(
                 writer, owner_id=args["owner_id"], session_id=args["session_id"], for_update=True

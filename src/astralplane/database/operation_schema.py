@@ -1,4 +1,6 @@
-"""Additive one-shot profile and durable original-key receipts for registry 088.001."""
+"""Additive one-shot profile and durable original-key receipt columns, executed only by
+database/migrations.py's guarded registry.
+"""
 
 OPERATION_SCHEMA_STATEMENTS = (
     "ALTER TABLE persistent_assignment ADD COLUMN execution_profile TEXT NOT NULL "

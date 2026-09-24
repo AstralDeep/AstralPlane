@@ -1,4 +1,7 @@
-"""Exact session authority, lock waits and authentic stale consumption on PostgreSQL."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments, history, and
+offline_grants: the execution guard locks the exact session first, refuses on
+authority loss, and holds it until commit before logout or rotation.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -186,7 +189,6 @@ def test_caught_final_authority_refusal_rolls_back_only_the_guarded_operation(
 
     guarded = RefuseFinalObservation()
     with database.transaction() as tx:
-        # Deliberately commit independent work after catching a real authority error.
         values[0].mark_resumed(
             tx,
             owner_id="owner",
@@ -315,7 +317,6 @@ def test_deleted_and_recreated_same_sid_refuses_previous_generation(tx, field, o
     replacement = replace(
         record, **{field: value + "-replacement" if isinstance(value, str) else value + 1}
     )
-    # Keep the replacement lifetime internally valid while testing anchor/created ABA.
     if field in {"created_at", "interactive_anchor"}:
         replacement = replace(
             replacement,
@@ -396,7 +397,6 @@ def test_new_observation_after_same_sid_replacement_requires_host_incarnation_bi
     new_observation = SessionExecutionObservation(
         current.credential, current.observed_at, current.observed_at + timedelta(seconds=15)
     )
-    # Even a genuinely current observation cannot replace the operation's original incarnation.
     with pytest.raises(RepositoryConflictError):
         guard(tx, repo, values, new_observation)
 
@@ -688,7 +688,6 @@ def test_action_lock_wait_expiry_rolls_back_guarded_writes_even_when_caught(data
             waiting.set()
             with pytest.raises(RepositoryConflictError):
                 getattr(repo, method + "_action_for_execution")(tx, **arguments)
-            # The outer transaction succeeds: failed guard writes must be absent.
             assert stored_rows(tx, values[3].assignment_id) == before
             values[0].mark_resumed(
                 tx,

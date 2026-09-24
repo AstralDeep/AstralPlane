@@ -1,8 +1,7 @@
-"""Neutral durable state used by AstralDeep's tool policy.
-
-This module deliberately does not decide whether a scope or tool is allowed.
-It persists explicit user decisions, including legacy rows, so the composing
-orchestrator can apply its policy and authorization ordering.
+"""Neutral persistence for tool-scope grants, per-tool overrides, and legacy
+permissions; does not itself decide what's allowed. Used by
+orchestrator/tool_permissions.py, which applies policy and authorization ordering on
+top.
 """
 
 from __future__ import annotations
@@ -60,8 +59,6 @@ class ScopedAgentOwnerRecord:
 
 @dataclass(frozen=True, slots=True)
 class FixedReaderPolicySnapshot:
-    """Detached facts for the closed fixed-reader admission boundary."""
-
     owner_id: str
     scopes: tuple[ScopeState, ...]
     overrides: tuple[ToolOverrideState, ...]
@@ -74,22 +71,9 @@ class FixedReaderPolicySnapshot:
 
 
 class ToolPolicyStateRepository:
-    """Store explicit grants, overrides, selections, and agent opt-outs."""
-
     def lock_fixed_reader_policy_snapshot(
         self, transaction: Transaction, *, owner_id: str
     ) -> FixedReaderPolicySnapshot:
-        """Fence fixed-reader facts through the caller's short atomic commit.
-
-        Acquire LAST, after all potentially waiting record/configuration locks.
-        The caller must do no subsequent policy-row lock/write or external I/O.
-        SHARE NOWAIT covers ordinary writers, including absent-row insertions,
-        without waiting in the reverse writer lock order. Any contention aborts
-        the enclosing transaction; callers must never reuse an earlier decision.
-        This deliberately coarse, opt-in fence can refuse unrelated-owner writes.
-        READ COMMITTED is mandatory so earlier reads cannot freeze stale policy.
-        No product permission decision is made here, and no schema is added.
-        """
         owner_id = _required_id(owner_id, "owner_id")
         try:
             isolation = transaction.fetch_one(
@@ -140,8 +124,7 @@ class ToolPolicyStateRepository:
                 draft_status=None if draft is None else str(draft["status"]),
             )
         except Exception:
-            # Driver messages and persisted preference contents are not diagnostics.
-            # The caller must leave the transaction, even for an isolation refusal.
+            # Detail hidden on purpose; caller must still abort the txn
             raise RepositoryConflictError("fixed reader policy unavailable") from None
 
     def list_scopes(
@@ -177,8 +160,6 @@ class ToolPolicyStateRepository:
         agent_id_suffix: str = "-1",
         limit: int = 5000,
     ) -> tuple[ScopedAgentOwnerRecord, ...]:
-        """Inventory scoped runtime identities for authorized orphan cleanup."""
-
         suffix = _bounded_text(agent_id_suffix, "agent_id_suffix", maximum=128)
         maximum = _bounded_limit(limit, maximum=5000)
         rows = transaction.fetch_all(
@@ -239,7 +220,7 @@ class ToolPolicyStateRepository:
                 """,
                 (owner_id, agent_id, scope_name, enabled, updated_at),
             )
-            if row is None:  # pragma: no cover - PostgreSQL RETURNING invariant
+            if row is None:  # pragma: no cover
                 raise RepositoryDataError("scope upsert returned no row")
             result.append(_scope(row))
         return tuple(result)
@@ -303,8 +284,6 @@ class ToolPolicyStateRepository:
         enabled: bool,
         updated_at: int,
     ) -> bool:
-        """Backfill one legacy decision without overwriting a concurrent choice."""
-
         owner_id, agent_id = _owner_agent(owner_id, agent_id)
         tool_name = _bounded_text(tool_name, "tool_name", maximum=512)
         if permission_kind is not None:
@@ -366,8 +345,6 @@ class ToolPolicyStateRepository:
         return tuple(_legacy_permission(row) for row in rows)
 
     def remove_agent_state(self, transaction: Transaction, *, owner_id: str, agent_id: str) -> int:
-        """Remove all three historical permission representations atomically."""
-
         owner_id, agent_id = _owner_agent(owner_id, agent_id)
         removed = 0
         for table in ("agent_scopes", "tool_overrides", "tool_permissions"):
@@ -393,8 +370,6 @@ class ToolPolicyStateRepository:
         agent_id: str,
         live_tool_names: Iterable[str],
     ) -> int:
-        """Prune removed-tool rows across owners; caller authorizes this global sweep."""
-
         agent_id = _required_id(agent_id, "agent_id", maximum=512)
         live = tuple(
             sorted({_bounded_text(name, "tool_name", maximum=512) for name in live_tool_names})
@@ -597,7 +572,7 @@ def _lock_preferences(transaction: Transaction, owner_id: str, updated_at: int) 
         "SELECT preferences FROM user_preferences WHERE user_id = %s FOR UPDATE",
         (owner_id,),
     )
-    if row is None:  # pragma: no cover - insert/select invariant
+    if row is None:  # pragma: no cover
         raise RepositoryDataError("user preference lock returned no row")
     return _decode_preferences(row.get("preferences"))
 

@@ -1,4 +1,7 @@
-"""Factual settlement and qualified continuation use one original session boundary."""
+"""Real-PostgreSQL tests for astralplane.repositories.assignments, audit, and history:
+reconciliation settles liabilities using only the original session's authority, with
+sorted action locks that avoid deadlocking a concurrent result reader.
+"""
 
 import hmac
 from concurrent.futures import ThreadPoolExecutor
@@ -587,8 +590,6 @@ def test_sorted_action_locks_do_not_deadlock_with_an_existing_result_reader(data
             future = pool.submit(run)
             assert ready.wait(3)
             _wait_for_lock(tx, state["pid"], pid)
-            # A target-first implementation would hold this higher row while
-            # waiting for our lower row, timing out or deadlocking this reader.
             assert (
                 repo.get_action(
                     tx,

@@ -1,4 +1,6 @@
-"""Data-plane revision metadata validation tests."""
+"""Tests for src/astralplane/database/revision.py: schema lineage and lock-identity
+binding, and repeat-safe canonical migration execution.
+"""
 
 from __future__ import annotations
 

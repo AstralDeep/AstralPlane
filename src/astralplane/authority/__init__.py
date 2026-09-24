@@ -1,4 +1,7 @@
-"""Neutral durable-authority records owned by AstralPlane."""
+"""Neutral durable-authority records owned by AstralPlane; create_authority_repository()
+composes claims.py, effects.py, lifecycle.py, and models.py into repository.py's
+AuthorityRepository for AstralDeep's agent-lifecycle code.
+"""
 
 from astralplane.authority.claims import (
     EXECUTOR_ANCHOR_FORMAT,
@@ -33,8 +36,6 @@ from astralplane.authority.repository import (
 
 
 def create_authority_repository() -> AuthorityRepository:
-    """Create the stateless neutral authority persistence boundary."""
-
     return AuthorityRepository()
 
 
