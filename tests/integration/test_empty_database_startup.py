@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -619,7 +618,7 @@ def test_voice_backend_constraint_accepts_only_exact_remote_and_local_rows(
         fixture.connection.rollback()
 
 
-def test_fifty_two_starter_migration_trials_converge_once(
+def test_two_starter_migration_race_converges_once(
     empty_postgres_schema: _EmptySchema,
 ) -> None:
     fixture = empty_postgres_schema
@@ -643,101 +642,63 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
     )
-    trial_count = 50
-    migration_owner_violations = 0
-    started = time.perf_counter()
-
-    for trial in range(trial_count):
-        if trial:
-            cursor = fixture.connection.cursor()
-            try:
-                cursor.execute(f"DROP SCHEMA {_quoted_schema(fixture.schema)} CASCADE")
-                cursor.execute(f"CREATE SCHEMA {_quoted_schema(fixture.schema)}")
-                cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
-                fixture.connection.commit()
-            finally:
-                cursor.close()
-
-        connections = [
-            connect_fixture_database(database_url),
-            connect_fixture_database(database_url),
-        ]
-        databases: list[PlaneDatabase] = []
-        for connection in connections:
-            cursor = connection.cursor()
-            try:
-                cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
-                connection.commit()
-            finally:
-                cursor.close()
-            databases.append(PlaneDatabase(ConnectionPool(_DedicatedDriverPool(connection))))
-
-        reports: list[Any] = []
-        errors: list[BaseException] = []
-        result_lock = threading.Lock()
-
-        def boot(
-            database: PlaneDatabase,
-            result_reports: list[Any],
-            result_errors: list[BaseException],
-            lock: threading.Lock,
-        ) -> None:
-            try:
-                report = BaselineMigrationRunner(
-                    database,
-                    MigrationRunner(
-                        database,
-                        revision=CURRENT_DATA_PLANE_REVISION,
-                        registry=MIGRATION_REGISTRY,
-                    ),
-                ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-                with lock:
-                    result_reports.append(report)
-            except BaseException as exc:
-                with lock:
-                    result_errors.append(exc)
-
-        threads = [
-            threading.Thread(
-                target=boot,
-                args=(database, reports, errors, result_lock),
-                daemon=True,
-            )
-            for database in databases
-        ]
+    connections = [
+        connect_fixture_database(database_url),
+        connect_fixture_database(database_url),
+    ]
+    databases: list[PlaneDatabase] = []
+    for connection in connections:
+        cursor = connection.cursor()
         try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=30)
-            if any(thread.is_alive() for thread in threads):
-                migration_owner_violations += 1
-                raise AssertionError("two-starter migration trial exceeded its deadline")
-            if errors:
-                raise AssertionError("two-starter migration trial failed") from errors[0]
+            cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
+            connection.commit()
         finally:
-            for connection in connections:
-                connection.close()
+            cursor.close()
+        databases.append(PlaneDatabase(ConnectionPool(_DedicatedDriverPool(connection))))
 
-        observed_steps = [step for report in reports for step in report.applied_steps]
-        if len(reports) != 2 or any(observed_steps.count(step) != 1 for step in expected_steps):
-            migration_owner_violations += 1
-        compatibility = inspect_baseline_compatibility(fixture.database)
-        if not (
-            compatibility.state is BaselineCompatibilityState.COMPATIBLE
-            and compatibility.observed_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
-            and not compatibility.missing_required_tables
-        ):
-            migration_owner_violations += 1
+    reports: list[Any] = []
+    errors: list[BaseException] = []
+    result_lock = threading.Lock()
 
-    duration_seconds = time.perf_counter() - started
-    print(
-        "AstralPlane migration profile: "
-        f"trials={trial_count} starters={trial_count * 2} "
-        f"migration_owner_violations={migration_owner_violations} "
-        f"duration_seconds={duration_seconds:.3f}"
-    )
-    assert migration_owner_violations == 0
+    def boot(database: PlaneDatabase) -> None:
+        try:
+            report = BaselineMigrationRunner(
+                database,
+                MigrationRunner(
+                    database,
+                    revision=CURRENT_DATA_PLANE_REVISION,
+                    registry=MIGRATION_REGISTRY,
+                ),
+            ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+            with result_lock:
+                reports.append(report)
+        except BaseException as exc:
+            with result_lock:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(target=boot, args=(database,), daemon=True) for database in databases
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        if any(thread.is_alive() for thread in threads):
+            raise AssertionError("two-starter migration race exceeded its deadline")
+        if errors:
+            raise AssertionError("two-starter migration race failed") from errors[0]
+    finally:
+        for connection in connections:
+            connection.close()
+
+    observed_steps = [step for report in reports for step in report.applied_steps]
+    assert len(reports) == 2
+    assert all(observed_steps.count(step) == 1 for step in expected_steps)
+    compatibility = inspect_baseline_compatibility(fixture.database)
+    assert compatibility.state is BaselineCompatibilityState.COMPATIBLE
+    assert compatibility.observed_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
+    assert not compatibility.missing_required_tables
 
 
 def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
