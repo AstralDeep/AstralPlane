@@ -14,7 +14,12 @@ from threading import Event
 
 import pytest
 from test_assignments_postgres import database as database
-from test_assignments_postgres import independent_database, session_observation, uid
+from test_assignments_postgres import (
+    independent_database,
+    session_observation,
+    standalone_database,
+    uid,
+)
 
 from astralplane.repositories import (
     RepositoryConflictError,
@@ -115,7 +120,7 @@ def wait_for_lock(transaction, waiting_pid, blocking_pid):
 
 
 def test_public_framework_credential_contract_behaviors():
-    fixture = database.__wrapped__()
+    fixture = standalone_database()
     db = next(fixture)
     try:
         with db.transaction() as tx:

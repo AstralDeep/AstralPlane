@@ -12,9 +12,7 @@ from astralplane.api import create_repository_catalog
 from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 
 
 def old_runner(database):
@@ -50,9 +48,25 @@ def current_runner(database):
     )
 
 
-def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, old_runner(db)).run(expected_revision="088.001")
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, old_runner(database)).run(
+            expected_revision="088.001"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
+
+
+def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         for index in range(4):
             tx.execute(
@@ -151,21 +165,17 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(empty_
         "ALTER TABLE web_session DROP CONSTRAINT web_session_incarnation_uuid4",
     ],
 )
-def test_current_verifier_refuses_weakened_identity_catalog(empty_postgres_schema, corruption):
-    db = empty_postgres_schema.database
+def test_current_verifier_refuses_weakened_identity_catalog(migrated_clone, corruption):
+    db = migrated_clone.database
     runner = current_runner(db)
-    BaselineMigrationRunner(db, runner).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
         runner.run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
 
 
-def test_predecessor_extra_identity_column_is_refused_without_adoption(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, old_runner(db)).run(expected_revision="088.001")
+def test_predecessor_extra_identity_column_is_refused_without_adoption(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute("ALTER TABLE web_session ADD COLUMN incarnation_id UUID")
     with pytest.raises(SchemaRevisionError):
@@ -174,9 +184,8 @@ def test_predecessor_extra_identity_column_is_refused_without_adoption(empty_pos
         assert tx.fetch_one("SELECT count(*) AS n FROM web_session")["n"] == 0
 
 
-def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, old_runner(db)).run(expected_revision="088.001")
+def test_failed_identity_edge_rolls_back_issuance_and_can_retry(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(
             "INSERT INTO web_session(sid,user_id,access_token_enc,refresh_token_enc,"
@@ -219,7 +228,7 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(empty_postgres_s
     )
 
 
-def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty_postgres_schema):
+def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(predecessor):
     import json
     from collections.abc import Mapping
     from pathlib import Path
@@ -264,8 +273,7 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(empty
                 assert row.pop("consumed_admissions", None) is None
         return sorted(values, key=lambda row: json.dumps(row, sort_keys=True))
 
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, old_runner(db)).run(expected_revision="088.001")
+    db = predecessor.database
     with db.transaction() as tx:
         for table in tables:
             for row in fixture["tables"][table]:

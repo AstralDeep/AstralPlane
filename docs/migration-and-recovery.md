@@ -392,8 +392,10 @@ database. The integration suite creates only schemas matching
 `astralplane_fixture_<32 lowercase hex characters>`, disposable databases and roles whose names end
 in 32 lowercase hex characters, and temporary blob roots supplied by pytest. Tests that need only an
 already-migrated catalog run against a `CREATE DATABASE ... TEMPLATE` copy of a database that the
-real migration runner builds once per session (`tests/conftest.py`); every from-empty, pre-split,
-and upgrade case still replays its own migration path. It verifies predecessor damage rejection
+real migration runner builds once per session (`tests/conftest.py`). Upgrade suites that start many
+tests from one predecessor revision copy a predecessor database that the historical runner builds
+once per module and still run the real upgrade edges in every test; every from-empty and pre-split
+case replays from its own empty or loaded starting state. It verifies predecessor damage rejection
 before any repair, direct upgrade, repeat-upgrade no-op behavior, whole-transaction rollback on an
 injected second-edge failure, staged blob failure, forward retry, and the joint restore procedure
 below. An unset URL skips this suite and is not qualification evidence.

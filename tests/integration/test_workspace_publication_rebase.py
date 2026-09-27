@@ -5,22 +5,11 @@ back atomically with the outer transaction.
 
 from __future__ import annotations
 
-import os
 import uuid
-from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
 
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
-from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.workspaces import (
@@ -30,84 +19,9 @@ from astralplane.repositories.workspaces import (
     PublicationRebaseLayout,
     WorkspaceRepository,
 )
-from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
-    FixtureLoadError,
-    connect_fixture_database,
-    drop_postgres_fixture,
-)
+from tests.fixtures.migrated_template import MigratedDatabase
 
 NOW = datetime(2026, 8, 14, 20, 0, tzinfo=UTC)
-
-
-class _DedicatedDriverPool:
-    def __init__(self, connection: Any) -> None:
-        self.connection = connection
-        self.borrowed = False
-
-    def getconn(self) -> Any:
-        if self.borrowed:
-            raise RuntimeError("integration connection is already borrowed")
-        self.borrowed = True
-        return self.connection
-
-    def putconn(self, connection: Any, *, close: bool = False) -> None:
-        if connection is not self.connection or not self.borrowed or close:
-            raise RuntimeError("integration connection was returned in an invalid state")
-        self.borrowed = False
-
-    def closeall(self) -> None:
-        return None
-
-
-@dataclass(slots=True)
-class _WorkspaceSchema:
-    connection: Any
-    schema: str
-    database: PlaneDatabase
-
-
-def _quoted_schema(schema: str) -> str:
-    assert schema.startswith("astralplane_fixture_")
-    assert schema.removeprefix("astralplane_fixture_").isalnum()
-    return f'"{schema}"'
-
-
-@pytest.fixture
-def workspace_postgres_schema() -> Iterator[_WorkspaceSchema]:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"CREATE SCHEMA {_quoted_schema(schema)}")
-        cursor.execute(f"SET search_path TO {_quoted_schema(schema)}, pg_catalog")
-        connection.commit()
-    finally:
-        cursor.close()
-    database = PlaneDatabase(ConnectionPool(_DedicatedDriverPool(connection)))
-    BaselineMigrationRunner(
-        database,
-        MigrationRunner(
-            database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    try:
-        yield _WorkspaceSchema(
-            connection=connection,
-            schema=schema,
-            database=database,
-        )
-    finally:
-        drop_postgres_fixture(connection, schema=schema)
-        connection.close()
 
 
 def _identifier() -> str:
@@ -225,9 +139,9 @@ def _stage_assistant_result(
 
 
 def test_assistant_rebase_replay_owner_scope_and_outer_rollback(
-    workspace_postgres_schema: _WorkspaceSchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    database = workspace_postgres_schema.database
+    database = migrated_clone.database
     history = HistoryRepository()
     workspaces = WorkspaceRepository()
     owner_id = "workspace-owner"

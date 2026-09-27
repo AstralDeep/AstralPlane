@@ -110,13 +110,8 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
         prior_runner(db).run(expected_revision="088.007")
 
 
-def test_after_088_008_a_fresh_owner_session_can_issue_and_execute_a_credential(
-    empty_postgres_schema,
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+def test_after_088_008_a_fresh_owner_session_can_issue_and_execute_a_credential(migrated_clone):
+    db = migrated_clone.database
     incarnation = str(uuid.uuid4())
     sid = uuid.uuid4().hex
     with db.transaction() as tx:

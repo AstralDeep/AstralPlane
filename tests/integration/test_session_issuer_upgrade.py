@@ -13,9 +13,7 @@ import pytest
 from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 
 
 def prior_runner(database):
@@ -49,6 +47,23 @@ def current_runner(database):
     return m.MigrationRunner(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
     )
+
+
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
+            expected_revision="088.002"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
 
 
 def normalize(value):
@@ -123,11 +138,8 @@ def load_liabilities(tx):
     return (*tables, "auth_revocation_queue")
 
 
-def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
-    empty_postgres_schema,
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.002")
+def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = load_liabilities(tx)
         before = retained_rows(tx, tables)
@@ -183,11 +195,8 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(
         "ALTER TABLE web_session DROP CONSTRAINT web_session_incarnation_uuid4",
     ],
 )
-def test_wrong_predecessor_catalog_is_refused_before_any_new_edge(
-    empty_postgres_schema, corruption
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.002")
+def test_wrong_predecessor_catalog_is_refused_before_any_new_edge(predecessor, corruption):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
@@ -209,21 +218,17 @@ def test_wrong_predecessor_catalog_is_refused_before_any_new_edge(
         "SET DEFAULT 'guessed-issuer'",
     ],
 )
-def test_current_issuing_catalog_drift_is_refused(empty_postgres_schema, corruption):
-    db = empty_postgres_schema.database
+def test_current_issuing_catalog_drift_is_refused(migrated_clone, corruption):
+    db = migrated_clone.database
     runner = current_runner(db)
-    BaselineMigrationRunner(db, runner).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
         runner.run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
 
 
-def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.002")
+def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = load_liabilities(tx)
         before = retained_rows(tx, tables)

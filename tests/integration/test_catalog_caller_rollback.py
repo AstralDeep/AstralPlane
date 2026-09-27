@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -24,12 +23,6 @@ from astralplane.authority import (
     AuthorityPopulation,
 )
 from astralplane.contracts import OutboxEntry, Transaction
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
@@ -65,12 +58,7 @@ from astralplane.repositories.work_admission import (
     OwnerScope,
 )
 from astralplane.repositories.workspaces import CanvasComponentRecord
-from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
-    FixtureLoadError,
-    connect_fixture_database,
-    drop_postgres_fixture,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 
 _NOW = datetime(2026, 8, 14, 18, tzinfo=UTC)
 _OWNER = "rollback-owner"
@@ -117,41 +105,15 @@ class _CatalogDatabase:
     catalog: api.RepositoryCatalog
 
 
-def _quoted_schema(schema: str) -> str:
-    assert schema.startswith("astralplane_fixture_")
-    assert schema.removeprefix("astralplane_fixture_").isalnum()
-    return f'"{schema}"'
-
-
 @pytest.fixture(scope="module")
-def catalog_database() -> Iterator[_CatalogDatabase]:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"CREATE SCHEMA {_quoted_schema(schema)}")
-        cursor.execute(f"SET search_path TO {_quoted_schema(schema)}, pg_catalog")
-        connection.commit()
-    finally:
-        cursor.close()
+def catalog_database(migrated_template: DatabaseTemplate) -> Iterator[_CatalogDatabase]:
+    with bound_clone(migrated_template) as clone:
+        catalog = api.create_repository_catalog()
+        _seed_support_rows(clone.database, catalog)
+        yield _CatalogDatabase(clone.connection, clone.schema, clone.pool, clone.database, catalog)
 
-    pool = ConnectionPool(_DedicatedDriverPool(connection))
-    database = PlaneDatabase(pool)
-    migration = MigrationRunner(
-        database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(database, migration).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
-    catalog = api.create_repository_catalog()
+
+def _seed_support_rows(database: PlaneDatabase, catalog: api.RepositoryCatalog) -> None:
     with database.transaction() as transaction:
         catalog.identity.upsert_identity(
             transaction,
@@ -177,13 +139,6 @@ def catalog_database() -> Iterator[_CatalogDatabase]:
             agent_id=_SUPPORT_AGENT,
             created_at=1,
         )
-
-    try:
-        yield _CatalogDatabase(connection, schema, pool, database, catalog)
-    finally:
-        pool.close()
-        drop_postgres_fixture(connection, schema=schema)
-        connection.close()
 
 
 Write = Callable[[api.RepositoryCatalog, Transaction], None]
