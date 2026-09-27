@@ -12,12 +12,6 @@ import pytest
 from test_assignment_execution_guard_postgres import _wait_for_lock
 from test_assignments_postgres import independent_database, parallel_transactions
 
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
@@ -25,23 +19,11 @@ from astralplane.repositories import (
     RepositoryValidationError,
 )
 from astralplane.repositories.agents import AgentRepository, DeclarativeAgentCommand
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
 
 
 @pytest.fixture
-def declaration_db(empty_postgres_schema):
-    database = empty_postgres_schema.database
-    BaselineMigrationRunner(
-        database,
-        MigrationRunner(
-            database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    return database
+def declaration_db(migrated_clone):
+    return migrated_clone.database
 
 
 def test_declarative_create_is_an_immutable_private_draft(declaration_db):

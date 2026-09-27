@@ -19,10 +19,8 @@ from astralplane.repositories.guidance_models import (
     SkillCommand,
     SkillDefinition,
 )
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 from tests.integration.test_declarative_agents_upgrade import seed_existing_agents
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 
@@ -55,6 +53,23 @@ def current_runner(database):
     return m.MigrationRunner(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
     )
+
+
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
+            expected_revision="088.005"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
 
 
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -141,9 +156,8 @@ def populated(tx):
     )
 
 
-def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.005")
+def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)
@@ -173,9 +187,8 @@ def test_populated005_upgrade_keeps_exact_rows_and_does_not_infer_envelope(empty
         prior_runner(db).run(expected_revision="088.005")
 
 
-def test_006_interruption_rolls_back_populated005_and_recovery_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.005")
+def test_006_interruption_rolls_back_populated005_and_recovery_repeats(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)
@@ -198,9 +211,8 @@ def test_006_interruption_rolls_back_populated005_and_recovery_repeats(empty_pos
         "assignment_guidance_selection_pkey CASCADE",
     ],
 )
-def test_wrong005_predecessor_refuses_before_mutation(empty_postgres_schema, corrupt):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.005")
+def test_wrong005_predecessor_refuses_before_mutation(predecessor, corrupt):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):
@@ -222,11 +234,8 @@ def test_wrong005_predecessor_refuses_before_mutation(empty_postgres_schema, cor
         "ALTER TABLE assignment_selected_agent ADD COLUMN private_expansion TEXT",
     ],
 )
-def test_current_selected_catalog_refuses_removed_guards_or_new_text(
-    empty_postgres_schema, corrupt
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision=HEAD_REVISION)
+def test_current_selected_catalog_refuses_removed_guards_or_new_text(migrated_clone, corrupt):
+    db = migrated_clone.database
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):

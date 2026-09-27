@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 import uuid
 from dataclasses import dataclass, replace
@@ -16,12 +15,6 @@ from typing import Any
 
 import pytest
 
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
@@ -51,12 +44,8 @@ from astralplane.repositories.work_admission import (
     OwnerScope,
     WorkAdmissionRepository,
 )
-from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
-    FixtureLoadError,
-    connect_fixture_database,
-    drop_postgres_fixture,
-)
+from tests.fixtures.migrated_template import MigratedDatabase
+from tests.fixtures.pre_split.loader import connect_fixture_database
 
 OWNER = "owner-generated-publication-integration"
 AGENT_ID = "generated-publication-agent"
@@ -147,56 +136,27 @@ def _configure_search_path(connection: Any, schema: str) -> None:
 
 
 @pytest.fixture
-def publication_postgres() -> _PublicationFixture:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"CREATE SCHEMA {_quoted_schema(schema)}")
-        connection.commit()
-    finally:
-        cursor.close()
-    _configure_search_path(connection, schema)
-    pool = ConnectionPool(_DedicatedDriverPool(connection))
-    database = PlaneDatabase(pool)
-    try:
-        BaselineMigrationRunner(
-            database,
-            MigrationRunner(
-                database,
-                revision=CURRENT_DATA_PLANE_REVISION,
-                registry=MIGRATION_REGISTRY,
-            ),
-        ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-        agents = AgentRepository()
-        drafts = DraftAgentRepository()
-        work = WorkAdmissionRepository()
-        with database.transaction() as transaction:
-            work.bind_configs(work.load_existing_configs(transaction))
-        publications = GeneratedAgentPublicationRepository(
-            agents=agents,
-            drafts=drafts,
-            work_admission=work,
-        )
-        yield _PublicationFixture(
-            database_url=database_url,
-            connection=connection,
-            schema=schema,
-            database=database,
-            agents=agents,
-            drafts=drafts,
-            work=work,
-            publications=publications,
-        )
-    finally:
-        drop_postgres_fixture(connection, schema=schema)
-        connection.close()
+def publication_postgres(migrated_clone: MigratedDatabase) -> _PublicationFixture:
+    agents = AgentRepository()
+    drafts = DraftAgentRepository()
+    work = WorkAdmissionRepository()
+    with migrated_clone.database.transaction() as transaction:
+        work.bind_configs(work.load_existing_configs(transaction))
+    publications = GeneratedAgentPublicationRepository(
+        agents=agents,
+        drafts=drafts,
+        work_admission=work,
+    )
+    return _PublicationFixture(
+        database_url=migrated_clone.dsn,
+        connection=migrated_clone.connection,
+        schema=migrated_clone.schema,
+        database=migrated_clone.database,
+        agents=agents,
+        drafts=drafts,
+        work=work,
+        publications=publications,
+    )
 
 
 def _bundle(revision_id: str, *, content_suffix: str = "") -> FinalizedBundle:

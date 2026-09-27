@@ -14,9 +14,7 @@ from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.agents import AgentRepository
 from astralplane.repositories.drafts import DraftAgentRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 
@@ -51,6 +49,23 @@ def current_runner(database):
     return m.MigrationRunner(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
     )
+
+
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
+            expected_revision="088.003"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
 
 
 def seed_existing_agents(tx):
@@ -178,11 +193,8 @@ def seed_existing_agents(tx):
     )
 
 
-def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilities(
-    empty_postgres_schema,
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.003")
+def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilities(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = (*seed_existing_agents(tx), *load_liabilities(tx))
         before = retained_rows(tx, tables)
@@ -241,9 +253,8 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "CREATE TABLE user_agent_command_receipt (owner_user_id TEXT)",
     ],
 )
-def test_predecessor_corruption_refuses_without_partial_upgrade(empty_postgres_schema, corruption):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.003")
+def test_predecessor_corruption_refuses_without_partial_upgrade(predecessor, corruption):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(corruption)
         before = retained_rows(tx, ("schema_meta",))
@@ -260,9 +271,8 @@ def test_predecessor_corruption_refuses_without_partial_upgrade(empty_postgres_s
         )
 
 
-def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.003")
+def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(predecessor):
+    db = predecessor.database
 
     class AbortMigrationError(Exception):
         pass
@@ -298,11 +308,8 @@ def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(empty_post
         "user_agent_command_receipt_command_id_check",
     ],
 )
-def test_current_catalog_refuses_missing_declarative_guard(empty_postgres_schema, corruption):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+def test_current_catalog_refuses_missing_declarative_guard(migrated_clone, corruption):
+    db = migrated_clone.database
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):

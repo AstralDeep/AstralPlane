@@ -16,9 +16,7 @@ from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.scheduler import ScheduledJob, SchedulerRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 OWNER = "scheduler-upgrade-owner"
@@ -54,6 +52,23 @@ def current_runner(database):
     return m.MigrationRunner(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
     )
+
+
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
+            expected_revision="088.006"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
 
 
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -143,9 +158,8 @@ def populated(tx):
     return tuple(dict.fromkeys((*tables, *SCHEDULER_TABLES)))
 
 
-def test_populated006_upgrade_keeps_exact_rows_and_imposes_no_policy(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.006")
+def test_populated006_upgrade_keeps_exact_rows_and_imposes_no_policy(predecessor):
+    db = predecessor.database
     repository = SchedulerRepository()
     with db.transaction() as tx:
         tables = populated(tx)
@@ -203,9 +217,8 @@ def test_populated006_upgrade_keeps_exact_rows_and_imposes_no_policy(empty_postg
         prior_runner(db).run(expected_revision="088.006")
 
 
-def test_007_interruption_rolls_back_populated006_and_recovery_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.006")
+def test_007_interruption_rolls_back_populated006_and_recovery_repeats(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)
@@ -240,9 +253,8 @@ def test_007_interruption_rolls_back_populated006_and_recovery_repeats(empty_pos
         "ALTER TABLE scheduled_job ADD COLUMN max_runs INTEGER",
     ],
 )
-def test_wrong006_predecessor_refuses_before_mutation(empty_postgres_schema, corrupt):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.006")
+def test_wrong006_predecessor_refuses_before_mutation(predecessor, corrupt):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):
@@ -269,9 +281,8 @@ def test_wrong006_predecessor_refuses_before_mutation(empty_postgres_schema, cor
         "ALTER TABLE scheduled_job_policy ADD COLUMN instruction_text TEXT",
     ],
 )
-def test_current_policy_catalog_refuses_removed_guards_or_new_text(empty_postgres_schema, corrupt):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision=HEAD_REVISION)
+def test_current_policy_catalog_refuses_removed_guards_or_new_text(migrated_clone, corrupt):
+    db = migrated_clone.database
     with db.transaction() as tx:
         tx.execute(corrupt)
     with pytest.raises(SchemaRevisionError):

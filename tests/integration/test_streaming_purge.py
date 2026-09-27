@@ -6,7 +6,6 @@ purge prefix without forking.
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 import time
 import uuid
@@ -29,22 +28,12 @@ from astralplane.blob_store import (
     ExplicitRootStreamingBlobStore,
     StreamingBlobStore,
 )
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import PlaneError
 from astralplane.purge import PurgeAttemptState
-from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
-    FixtureLoadError,
-    connect_fixture_database,
-    drop_postgres_fixture,
-)
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.pre_split.loader import connect_fixture_database
 
 _NOW = datetime(2026, 8, 14, 22, tzinfo=UTC)
 
@@ -90,37 +79,9 @@ def _database_for(connection: Any) -> tuple[ConnectionPool, PlaneDatabase]:
 
 
 @pytest.fixture(scope="module")
-def purge_database() -> Iterator[_PurgeFixture]:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"CREATE SCHEMA {_quoted_schema(schema)}")
-        cursor.execute(f"SET search_path TO {_quoted_schema(schema)}, pg_catalog")
-        connection.commit()
-    finally:
-        cursor.close()
-    pool, database = _database_for(connection)
-    migration = MigrationRunner(
-        database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(database, migration).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
-    try:
-        yield _PurgeFixture(database_url, connection, schema, pool, database)
-    finally:
-        pool.close()
-        drop_postgres_fixture(connection, schema=schema)
-        connection.close()
+def purge_database(migrated_template: DatabaseTemplate) -> Iterator[_PurgeFixture]:
+    with bound_clone(migrated_template) as clone:
+        yield _PurgeFixture(clone.dsn, clone.connection, clone.schema, clone.pool, clone.database)
 
 
 def _materialize_attachment(

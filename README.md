@@ -181,8 +181,9 @@ actionlint .github/workflows/ci.yml
 ```
 
 PostgreSQL integration checks use an isolated test database and the synthetic non-PHI fixture under
-`tests/fixtures/pre_split`. Set `ASTRALPLANE_TEST_POSTGRES_DSN` to that isolated database and run
-both `tests/integration/test_pre_split_upgrade.py` and
+`tests/fixtures/pre_split`. Set `ASTRALPLANE_TEST_POSTGRES_DSN` to that isolated database, whose
+role must be able to create and drop databases because migrated templates are cloned per test, and
+run both `tests/integration/test_pre_split_upgrade.py` and
 `tests/integration/test_empty_database_startup.py`. An unset URL reports the checks as skipped, not
 passed. Runtime databases, blobs, uploads, logs, credentials, generated content, and local
 environments must never be committed or placed beneath the package/submodule tree.

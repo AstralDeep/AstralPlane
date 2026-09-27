@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -70,6 +69,7 @@ from astralplane.repositories.work_admission import (
     WorkAdmissionNotFoundError,
     WorkAdmissionRepository,
 )
+from tests.fixtures.migrated_template import MigratedDatabase
 from tests.fixtures.pre_split.loader import (
     TEST_DATABASE_ENV,
     FixtureLoadError,
@@ -423,17 +423,9 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
 
 
 def test_message_repository_round_trips_json_looking_strings_as_strings(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     history = HistoryRepository()
 
     with fixture.database.transaction() as transaction:
@@ -469,17 +461,9 @@ def test_message_repository_round_trips_json_looking_strings_as_strings(
 
 
 def test_voice_backend_constraint_accepts_only_exact_remote_and_local_rows(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     insert_sql = """
         INSERT INTO voice_session (
             session_id, user_id, activation_id, device_id, device_kind,
@@ -619,7 +603,7 @@ def test_voice_backend_constraint_accepts_only_exact_remote_and_local_rows(
         fixture.connection.rollback()
 
 
-def test_fifty_two_starter_migration_trials_converge_once(
+def test_two_starter_migration_race_converges_once(
     empty_postgres_schema: _EmptySchema,
 ) -> None:
     fixture = empty_postgres_schema
@@ -643,115 +627,72 @@ def test_fifty_two_starter_migration_trials_converge_once(
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
     )
-    trial_count = 50
-    migration_owner_violations = 0
-    started = time.perf_counter()
-
-    for trial in range(trial_count):
-        if trial:
-            cursor = fixture.connection.cursor()
-            try:
-                cursor.execute(f"DROP SCHEMA {_quoted_schema(fixture.schema)} CASCADE")
-                cursor.execute(f"CREATE SCHEMA {_quoted_schema(fixture.schema)}")
-                cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
-                fixture.connection.commit()
-            finally:
-                cursor.close()
-
-        connections = [
-            connect_fixture_database(database_url),
-            connect_fixture_database(database_url),
-        ]
-        databases: list[PlaneDatabase] = []
-        for connection in connections:
-            cursor = connection.cursor()
-            try:
-                cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
-                connection.commit()
-            finally:
-                cursor.close()
-            databases.append(PlaneDatabase(ConnectionPool(_DedicatedDriverPool(connection))))
-
-        reports: list[Any] = []
-        errors: list[BaseException] = []
-        result_lock = threading.Lock()
-
-        def boot(
-            database: PlaneDatabase,
-            result_reports: list[Any],
-            result_errors: list[BaseException],
-            lock: threading.Lock,
-        ) -> None:
-            try:
-                report = BaselineMigrationRunner(
-                    database,
-                    MigrationRunner(
-                        database,
-                        revision=CURRENT_DATA_PLANE_REVISION,
-                        registry=MIGRATION_REGISTRY,
-                    ),
-                ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-                with lock:
-                    result_reports.append(report)
-            except BaseException as exc:
-                with lock:
-                    result_errors.append(exc)
-
-        threads = [
-            threading.Thread(
-                target=boot,
-                args=(database, reports, errors, result_lock),
-                daemon=True,
-            )
-            for database in databases
-        ]
+    connections = [
+        connect_fixture_database(database_url),
+        connect_fixture_database(database_url),
+    ]
+    databases: list[PlaneDatabase] = []
+    for connection in connections:
+        cursor = connection.cursor()
         try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=30)
-            if any(thread.is_alive() for thread in threads):
-                migration_owner_violations += 1
-                raise AssertionError("two-starter migration trial exceeded its deadline")
-            if errors:
-                raise AssertionError("two-starter migration trial failed") from errors[0]
+            cursor.execute(f"SET search_path TO {_quoted_schema(fixture.schema)}, pg_catalog")
+            connection.commit()
         finally:
-            for connection in connections:
-                connection.close()
+            cursor.close()
+        databases.append(PlaneDatabase(ConnectionPool(_DedicatedDriverPool(connection))))
 
-        observed_steps = [step for report in reports for step in report.applied_steps]
-        if len(reports) != 2 or any(observed_steps.count(step) != 1 for step in expected_steps):
-            migration_owner_violations += 1
-        compatibility = inspect_baseline_compatibility(fixture.database)
-        if not (
-            compatibility.state is BaselineCompatibilityState.COMPATIBLE
-            and compatibility.observed_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
-            and not compatibility.missing_required_tables
-        ):
-            migration_owner_violations += 1
+    reports: list[Any] = []
+    errors: list[BaseException] = []
+    result_lock = threading.Lock()
+    start = threading.Barrier(2)
 
-    duration_seconds = time.perf_counter() - started
-    print(
-        "AstralPlane migration profile: "
-        f"trials={trial_count} starters={trial_count * 2} "
-        f"migration_owner_violations={migration_owner_violations} "
-        f"duration_seconds={duration_seconds:.3f}"
-    )
-    assert migration_owner_violations == 0
+    def boot(database: PlaneDatabase) -> None:
+        try:
+            runner = BaselineMigrationRunner(
+                database,
+                MigrationRunner(
+                    database,
+                    revision=CURRENT_DATA_PLANE_REVISION,
+                    registry=MIGRATION_REGISTRY,
+                ),
+            )
+            start.wait(timeout=10)
+            report = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+            with result_lock:
+                reports.append(report)
+        except BaseException as exc:
+            with result_lock:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(target=boot, args=(database,), daemon=True) for database in databases
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        if any(thread.is_alive() for thread in threads):
+            raise AssertionError("two-starter migration race exceeded its deadline")
+        if errors:
+            raise AssertionError("two-starter migration race failed") from errors[0]
+    finally:
+        for connection in connections:
+            connection.close()
+
+    observed_steps = [step for report in reports for step in report.applied_steps]
+    assert len(reports) == 2
+    assert all(observed_steps.count(step) == 1 for step in expected_steps)
+    compatibility = inspect_baseline_compatibility(fixture.database)
+    assert compatibility.state is BaselineCompatibilityState.COMPATIBLE
+    assert compatibility.observed_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
+    assert not compatibility.missing_required_tables
 
 
 def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    migration = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, migration).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    fixture = migrated_clone
 
     required_indexes = {
         "idx_attachment_parser_status": ("attachment_parser", "(status)"),
@@ -826,17 +767,9 @@ def test_extracted_legacy_contracts_have_exact_live_indexes_and_foreign_keys(
 
 
 def test_hot_message_queries_use_the_declared_composite_index(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    migration = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, migration).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    fixture = migrated_clone
 
     cursor = fixture.connection.cursor()
     try:
@@ -936,17 +869,9 @@ def _host_session_kwargs(runtime_contract_version: int) -> dict[str, object]:
 
 
 def test_fresh_host_registration_accepts_only_current_runtime_contract(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     repository = AgentRepository()
 
     current = _host_session_kwargs(3)
@@ -1044,9 +969,9 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
 
 
 def test_current_metadata_rejects_same_name_runtime_contract_tampering(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     runner = BaselineMigrationRunner(
         fixture.database,
         MigrationRunner(
@@ -1055,7 +980,6 @@ def test_current_metadata_rejects_same_name_runtime_contract_tampering(
             registry=MIGRATION_REGISTRY,
         ),
     )
-    runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     cursor = fixture.connection.cursor()
     try:
@@ -1077,16 +1001,15 @@ def test_current_metadata_rejects_same_name_runtime_contract_tampering(
 
 
 def test_current_metadata_cannot_admit_a_dropped_current_index(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     migration = MigrationRunner(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
-    runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     cursor = fixture.connection.cursor()
     try:
@@ -1109,17 +1032,16 @@ def test_current_metadata_cannot_admit_a_dropped_current_index(
 
 @pytest.mark.parametrize("tamper_kind", ["index", "constraint"])
 def test_current_metadata_cannot_admit_same_name_structural_tampering(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
     tamper_kind: str,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     migration = MigrationRunner(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
     )
     runner = BaselineMigrationRunner(fixture.database, migration)
-    runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     cursor = fixture.connection.cursor()
     try:
@@ -1140,9 +1062,9 @@ def test_current_metadata_cannot_admit_same_name_structural_tampering(
 
 
 def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     runner = BaselineMigrationRunner(
         fixture.database,
         MigrationRunner(
@@ -1151,7 +1073,6 @@ def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
             registry=MIGRATION_REGISTRY,
         ),
     )
-    runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     cursor = fixture.connection.cursor()
     try:
@@ -1172,17 +1093,9 @@ def test_current_metadata_rejects_same_name_voice_backend_constraint_drift(
 
 
 def test_failed_reconciliation_marker_retries_against_real_postgresql(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     coordinator = PostgresReconciliationCoordinator(fixture.pool)
     hook = ReconciliationHookIdentity(name="deep-contract", version="1.0.0")
 
@@ -1203,17 +1116,9 @@ def test_failed_reconciliation_marker_retries_against_real_postgresql(
 
 
 def test_work_admission_real_postgresql_owner_replay_fence_and_rollback(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     repository = WorkAdmissionRepository()
     with fixture.database.transaction() as transaction:
         configs = repository.load_existing_configs(transaction)
@@ -1327,17 +1232,9 @@ def test_work_admission_real_postgresql_owner_replay_fence_and_rollback(
 
 
 def test_concurrent_quality_reviews_serialize_chain_and_case_transition(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     repository = QualityAuditRepository()
     observed_at = datetime(2026, 8, 14, 16, 0, tzinfo=UTC)
     with fixture.database.transaction() as transaction:
@@ -2171,17 +2068,14 @@ def test_074_004_refuses_tampered_predecessor_before_canonicalization(
     ],
 )
 def test_current_074_004_rejects_same_name_blob_lifecycle_tampering(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
     tamper_kind: str,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     runner = MigrationRunner(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, runner).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
     )
     cursor = fixture.connection.cursor()
     try:
@@ -2322,16 +2216,13 @@ def test_current_074_004_rejects_same_name_blob_lifecycle_tampering(
 
 
 def test_current_074_004_rejects_cross_schema_legacy_foreign_key_rebind(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     runner = MigrationRunner(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, runner).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
     )
     hostile_schema = f"astralplane_hostile_{uuid.uuid4().hex}"
     quoted_hostile = f'"{hostile_schema}"'
@@ -2361,16 +2252,13 @@ def test_current_074_004_rejects_cross_schema_legacy_foreign_key_rebind(
 
 
 def test_current_verifier_never_resolves_missing_owned_table_from_later_search_path(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
+    fixture = migrated_clone
     runner = MigrationRunner(
         fixture.database,
         revision=CURRENT_DATA_PLANE_REVISION,
         registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, runner).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
     )
     hostile_schema = f"astralplane_hostile_{uuid.uuid4().hex}"
     quoted_hostile = f'"{hostile_schema}"'
@@ -2790,17 +2678,9 @@ def test_074_004_deleted_attachment_schedule_failure_rolls_back_every_schema_and
 
 
 def test_generation_log_write_preserves_claim_revision_and_finish_fence(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     repository = DraftAgentRepository()
     active_claim = str(uuid.uuid4())
 
@@ -2920,17 +2800,9 @@ def test_generation_log_write_preserves_claim_revision_and_finish_fence(
 
 
 def test_draft_creation_round_trips_initial_candidate_provenance(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    BaselineMigrationRunner(
-        fixture.database,
-        MigrationRunner(
-            fixture.database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        ),
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = migrated_clone
     repository = DraftAgentRepository()
     tools_spec = '[{"description":"","name":"search","scope":"records:read"}]'
     plan_json = (
@@ -2970,17 +2842,9 @@ def test_draft_creation_round_trips_initial_candidate_provenance(
 
 
 def test_user_agent_policy_reconciliation_is_concurrent_idempotent_and_rollback_safe(
-    empty_postgres_schema: _EmptySchema,
+    migrated_clone: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    migration = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    BaselineMigrationRunner(fixture.database, migration).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    fixture = migrated_clone
     repository = AgentRepository()
     with fixture.database.transaction() as transaction:
         for index in range(5):

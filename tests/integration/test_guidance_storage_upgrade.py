@@ -17,10 +17,8 @@ from astralplane.repositories.assignments import canonical
 from astralplane.repositories.guidance import SkillsRepository
 from astralplane.repositories.guidance_models import SkillCommand, SkillDefinition
 from astralplane.repositories.preferences import MemoryRecord, PreferencesRepository
+from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 from tests.integration.test_declarative_agents_upgrade import seed_existing_agents
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 
@@ -55,6 +53,23 @@ def current_runner(database):
     return m.MigrationRunner(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
     )
+
+
+@pytest.fixture(scope="module")
+def predecessor_template(postgres_administrator_dsn):
+    with DatabaseTemplate.build(
+        postgres_administrator_dsn,
+        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
+            expected_revision="088.004"
+        ),
+    ) as template:
+        yield template
+
+
+@pytest.fixture
+def predecessor(predecessor_template):
+    with bound_clone(predecessor_template) as clone:
+        yield clone
 
 
 HEAD_REVISION = m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -149,11 +164,8 @@ def seed_populated(tx):
     )
 
 
-def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabilities(
-    empty_postgres_schema,
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.004")
+def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabilities(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
@@ -217,11 +229,8 @@ def test_populated_upgrade_preserves_real_history_runtime_notes_and_issued_liabi
         "ALTER TABLE user_agent_revision DROP CONSTRAINT user_agent_revision_artifact_check",
     ],
 )
-def test_wrong_predecessor_refuses_without_partial_guidance_schema(
-    empty_postgres_schema, corruption
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.004")
+def test_wrong_predecessor_refuses_without_partial_guidance_schema(predecessor, corruption):
+    db = predecessor.database
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
@@ -233,9 +242,8 @@ def test_wrong_predecessor_refuses_without_partial_guidance_schema(
         assert tx.fetch_one("SELECT to_regclass('explicit_note_current') AS t")["t"] is None
 
 
-def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.004")
+def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
@@ -259,11 +267,8 @@ def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(empty_
         "ALTER TABLE explicit_note_current ADD COLUMN prior_ciphertext BYTEA",
     ],
 )
-def test_current_schema_refuses_missing_guards_or_extra_note_history(
-    empty_postgres_schema, corruption
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current_runner(db)).run(expected_revision=HEAD_REVISION)
+def test_current_schema_refuses_missing_guards_or_extra_note_history(migrated_clone, corruption):
+    db = migrated_clone.database
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):

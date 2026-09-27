@@ -49,6 +49,7 @@ from astralplane.repositories.assignments import (
     digest,
     plain,
 )
+from tests.fixtures.migrated_template import bound_clone
 
 
 def uid():
@@ -69,8 +70,7 @@ class Pool:
         pass
 
 
-@pytest.fixture(scope="module")
-def database():
+def standalone_database():
     dsn = os.environ.get("ASTRALPLANE_TEST_POSTGRES_DSN")
     if not dsn:
         pytest.skip("isolated PostgreSQL DSN required")
@@ -102,6 +102,16 @@ def database():
             cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
         connection.commit()
         connection.close()
+
+
+@pytest.fixture(scope="module")
+def database(migrated_template):
+    with bound_clone(migrated_template) as clone:
+        pool = ConnectionPool(Pool(clone.connection))
+        try:
+            yield PlaneDatabase(pool)
+        finally:
+            pool.close()
 
 
 @pytest.fixture
@@ -2675,7 +2685,7 @@ def test_completed_episode_generation_is_nonsecret_restart_evidence(tx, repo):
 
 
 def test_public_assignment_contract_behaviors():
-    fixture = database.__wrapped__()
+    fixture = standalone_database()
     db = next(fixture)
     try:
         repository = AssignmentRepository()

@@ -6,7 +6,6 @@ history, and the policy-absent legacy-recurrence regression.
 from __future__ import annotations
 
 import itertools
-import os
 import threading
 import time
 import uuid
@@ -15,14 +14,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import CURRENT_DATA_PLANE_REVISION, MIGRATION_REGISTRY
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
-from astralplane.errors import PlaneError, SchemaRevisionError
+from astralplane.errors import PlaneError
 from astralplane.repositories.assignments import AssignmentRepository
 from astralplane.repositories.scheduler import OccurrenceState, ScheduledJob, SchedulerRepository
 from astralplane.repositories.scheduler_models import ScheduledJobPolicy
+from tests.fixtures.migrated_template import bound_clone
 from tests.repositories.test_assignments_postgres import Pool, control, create
 
 OWNER = "owner"
@@ -30,44 +28,13 @@ OTHER_OWNER = "other-owner"
 
 
 @pytest.fixture(scope="module")
-def plane():
-    dsn = os.environ.get("ASTRALPLANE_TEST_POSTGRES_DSN")
-    if not dsn:
-        pytest.skip("isolated PostgreSQL DSN required")
-    import psycopg2
-
-    connection = psycopg2.connect(dsn)
-    schema = "scheduler_policy_" + uuid.uuid4().hex
-    with connection.cursor() as cursor:
-        cursor.execute(f'CREATE SCHEMA "{schema}"')
-        cursor.execute(f'SET search_path TO "{schema}",pg_catalog')
-    connection.commit()
-    pool = ConnectionPool(Pool(connection))
-    database = PlaneDatabase(pool)
-    try:
-        runner = m_runner(database)
+def plane(migrated_template):
+    with bound_clone(migrated_template) as clone:
+        pool = ConnectionPool(Pool(clone.connection))
         try:
-            BaselineMigrationRunner(database, runner).run(
-                expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-            )
-        except SchemaRevisionError as error:
-            pytest.fail(f"isolated schema qualification failed: {error.metadata}")
-        yield database, schema, dsn
-    finally:
-        pool.close()
-        connection.rollback()
-        with connection.cursor() as cursor:
-            cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.commit()
-        connection.close()
-
-
-def m_runner(database):
-    from astralplane.database.migrations import MigrationRunner
-
-    return MigrationRunner(
-        database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
-    )
+            yield PlaneDatabase(pool), clone.schema, clone.dsn
+        finally:
+            pool.close()
 
 
 @pytest.fixture
