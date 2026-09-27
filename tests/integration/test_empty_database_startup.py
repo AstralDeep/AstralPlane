@@ -644,17 +644,20 @@ def test_two_starter_migration_race_converges_once(
     reports: list[Any] = []
     errors: list[BaseException] = []
     result_lock = threading.Lock()
+    start = threading.Barrier(2)
 
     def boot(database: PlaneDatabase) -> None:
         try:
-            report = BaselineMigrationRunner(
+            runner = BaselineMigrationRunner(
                 database,
                 MigrationRunner(
                     database,
                     revision=CURRENT_DATA_PLANE_REVISION,
                     registry=MIGRATION_REGISTRY,
                 ),
-            ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+            )
+            start.wait(timeout=10)
+            report = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
             with result_lock:
                 reports.append(report)
         except BaseException as exc:
