@@ -1,10 +1,10 @@
 # Current authority observations
 
-These additive read guards use existing schema 088.005. They neither renew a
-lease nor select an execution, exchange a credential, or grant permission.
-Callers retain the original authority snapshot and compare the returned record
-to that snapshot; a new record is not permission to adopt replacement authority.
-No host wall-clock argument is accepted.
+These additive read guards added no schema change when they were introduced on
+schema `088.005`. They neither renew a lease nor select an execution, exchange a
+credential, or grant permission. Callers retain the original authority snapshot
+and compare the returned record to that snapshot; a new record is not permission
+to adopt replacement authority. No host wall-clock argument is accepted.
 
 `work_admission.assert_current_execution_lease(transaction, fence)` returns the
 current `OperationRecord`. The exact copied `ExecutionFence` must still name a

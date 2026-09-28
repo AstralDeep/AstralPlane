@@ -10,8 +10,9 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `079.001`, with guarded upgrade entry points at `066.001`, `067.001`,
-  `074.001`, `074.002`, `074.003`, `074.004`, and `075.001`
+- Current schema: `089.001`, read-compatible from `066.001`, with guarded upgrade entry points
+  at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
+  `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, and `088.008`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
@@ -19,21 +20,17 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001` in one registry
-transaction. A pre-split
-`066.001` database has only its legacy revision marker; a `067.001`
-database is accepted only when
-it carries the pinned historical `067.001` migration-registry digest. A `074.001` predecessor must
-carry its pinned historical full-path digest. A `074.002` predecessor must carry its pinned
-historical digest, and a `074.004` predecessor must carry its pinned historical digest. Every
-supported predecessor is structurally attested before the first migration write. A current
-`079.001` database must carry the exact current registry digest and pass canonical
-catalog-structure verification over all Plane-owned tables, sequences, functions, indexes,
-constraints, triggers, rules, policies, inheritance, and owned-schema privileges. A same-name or
-unexpected object with changed behavior is rejected. A non-empty partial or unrecognized schema is
-rejected rather than labeled current. The extracted baseline contains only neutral schema and
-deterministic database mechanics; catalog cleanup, UI seed content, filesystem discovery, and
-product policy remain explicit host reconciliation.
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001`
+in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
+Every later predecessor, from `067.001` through `088.008`, is accepted only when it carries its own
+pinned historical migration-registry digest. Every supported predecessor is structurally attested
+before the first migration write. A current `089.001` database must carry the exact current
+registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
+sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
+owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
+non-empty partial or unrecognized schema is rejected rather than labeled current. The extracted
+baseline contains only neutral schema and deterministic database mechanics; catalog cleanup, UI
+seed content, filesystem discovery, and product policy remain explicit host reconciliation.
 
 A fresh `TEMPLATE template0` database's exact PostgreSQL default `public` schema
 (`pg_database_owner`, PUBLIC `USAGE`) is a qualified predecessor variant. Revision `074.004`
@@ -49,6 +46,17 @@ records. See [persistent assignment contracts](docs/persistent-assignment-contra
 The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, API, UI, agent,
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
+
+`create_repository_catalog()` returns the stable repository catalog. Its 40 members, in
+`RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
+`artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
+`chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
+`generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`,
+`framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`,
+`offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`, `quality_audit`,
+`remote`, `remote_operation_proposals`, `revocations`, `saved_components`, `scheduler`,
+`share_grants`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`, `work_admission`, and
+`workspaces`.
 
 The stable repository catalog includes four explicit stores for the first identity/agent
 cutover slice:
@@ -153,6 +161,30 @@ Revision `075.001` adds the immutable `voice_session.speech_backend` discriminat
 sessions backfill to `llm_factory`; new `client_local` rows carry no remote room, participant,
 worker, or media-grant metadata. Voice-turn persistence remains unchanged, and Plane adds no audio,
 transcript, local-engine, proof, or client-capability storage.
+
+The revisions after `079.001`:
+
+- `088.001` adds one-shot operation admission for persistent assignments, with an execution-profile
+  discriminator and original-key operation receipts; see
+  [persistent assignment contracts](docs/persistent-assignment-contracts.md).
+- `088.002` adds a database-issued `web_session` incarnation identity, and `088.003` adds nullable
+  issuing issuer/client metadata to sessions and an issuing issuer to deferred revocations; see
+  `docs/identity-agent-state.md`.
+- `088.004` stores declarative agent definitions as immutable revisions with metadata-only
+  receipts.
+- `088.005` adds owner guidance storage; see
+  [owner guidance contracts](docs/owner-guidance-contracts.md).
+- `088.006` adds immutable selected-input envelopes; see
+  [selected input contracts](docs/selected-input-contracts.md).
+- `088.007` adds optional scheduled-job policy and occurrence-assignment bindings; see
+  `docs/knowledge-scheduler-and-async-contracts.md`.
+- `088.008` adds hash-only framework credentials and finite offline-grant allowances; see
+  `docs/credentials-and-grants.md`.
+- `089.001` adds owner-keyed TypeSafe credential ciphertext and third-party data-sharing
+  acknowledgments.
+
+Upgrade and recovery procedures for every revision are in
+[migration and recovery](docs/migration-and-recovery.md).
 
 ## Local verification
 

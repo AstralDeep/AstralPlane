@@ -251,6 +251,25 @@ key resolution, the routing adapter's behavior, or the enforcement of
 acknowledgment before a credential save. Those are product concerns verified
 outside this repository.
 
+### `088.008` framework credentials and recovery
+
+This additive edge requires the exact `088.007` registry and catalog. It creates the owner-keyed
+`framework_credential` table, which stores only a SHA-256 digest and a short display prefix of each
+bearer token, and adds nullable `max_admissions` and `consumed_admissions` columns with an
+allowance constraint to `user_offline_grant`. Existing offline grants keep null allowances and
+therefore their unlimited-admission semantics; no framework credential is inferred for an existing
+owner or session.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and rollback checks
+described above. Failed DDL rolls back with registry metadata. After a committed upgrade, keep the
+table, the columns, and the exact `088.008` revision/digest intact; an older composition refuses
+the upgraded schema rather than reading it. Prefer a guarded forward repair. Otherwise, under closed
+admission, restore the verified pre-upgrade PostgreSQL backup and paired durable roots together
+with the matching prior application, then retire restored sessions through the governed recovery
+procedure before reopening. Never drop the table or columns, rewrite revision markers, or execute
+ad-hoc downgrade SQL. Schema qualification does not establish the host's issuance, scope, or
+execution-authority policy; see `credentials-and-grants.md`.
+
 ### `088.007` scheduler policy and recovery
 
 This additive edge requires the exact `088.006` registry and catalog. It adds
@@ -340,18 +359,15 @@ all other states forbid the reserved prefix and require positive lease expiry. C
 attempt preserves its lifecycle evidence while releasing the nonterminal uniqueness slot.
 
 An empty database is an approved source only for Plane's guarded baseline initializer. Structural
-inspection accepts either no application tables or a metadata-table-only shell with no metadata;
-any other non-empty database must carry a known revision and every required baseline table. A
-partial or unknown schema fails closed without being overwritten. A `067.001` predecessor must
-carry the pinned historical registry digest, and a `074.001` predecessor must carry its pinned
-full-path digest, and a `074.002` predecessor must carry its pinned historical digest. A current
-`074.004` or `075.001` predecessor must carry its pinned historical digest. A current `079.001` marker and
-digest are still insufficient on their own. The verifier binds the owned
-schema owner/ACL and the behavior, durability, authorization, namespace, dependency, and lifecycle
-shape of all Plane-owned tables, columns, sequences, constraints, indexes, functions, triggers,
-policies, rules, and inheritance edges after a transition and on every already-current startup. A
-legacy `066.001` marker has no Plane digest and is accepted only through its explicitly attested
-registry edge.
+inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
+other non-empty database must carry a known revision and every required baseline table. A partial or
+unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
+`088.008` must carry its own pinned historical registry digest. A current `089.001` marker and
+digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
+behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
+tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
+inheritance edges after a transition and on every already-current startup. A legacy `066.001` marker
+has no Plane digest and is accepted only through its explicitly attested registry edge.
 
 Database-level ACLs and connection-level database/search-path selection are host composition policy
 outside Plane's owned-schema digest. The host must connect with the intended database and put the
@@ -446,11 +462,12 @@ maintenance window has been verified:
 3. Restore the verified PostgreSQL backup into the selected recovery database and restore every
    paired blob/workspace root into new explicit destinations without following links.
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
-   selecting a composition. A restored `066.001` state has no Plane digest; restored `067.001`,
-   `074.001`, `074.002`, `074.003`, `074.004`, and `075.001` states must have their exact declared digests and
-   pinned predecessor catalog shape; `079.001` must match its pinned predecessor catalog
-   and `088.001` and `088.002` must match their pinned predecessor catalogs. `088.003` must
-   pass the current structural verifier.
+   selecting a composition. A restored `066.001` state has no Plane digest and must match its
+   pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
+   `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
+   `088.007`, and `088.008` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.001` state must carry the exact current
+   registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the

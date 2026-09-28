@@ -244,11 +244,10 @@ present, so old persisted amounts decode unchanged.
 ## Rollback and compatibility
 
 The `066.001`-era slice above uses columns already present in the extracted baseline, so its own
-rollback is a code composition rollback only. `088.008` (`framework_credential`, and the two
-additive `user_offline_grant` columns) is a forward-only additive migration: re-pinning to `088.007`
-requires no data migration since no `088.007`-era row shape changed, but any already-minted
-framework credential rows would become unreachable code (the table itself would need dropping by an
-operator before a real downgrade, which this migration does not automate). Re-pin the prior
-Plane/Deep composition while leaving PostgreSQL rows untouched. Existing nullable user-credential
-timestamps and nullable offline-grant bookkeeping timestamps remain readable. No ciphertext,
-snapshot, or framework-credential hash should be copied into diagnostic evidence.
+rollback is a code composition rollback only. `088.008` (`framework_credential` and the two additive
+`user_offline_grant` columns) is a forward-only additive migration. A composition that predates
+`088.008` refuses the upgraded schema rather than reading it, so recovery is a guarded forward
+repair or the joint database/durable-root restore in the `088.008` section of
+`migration-and-recovery.md`; never drop the table or columns by hand. Existing nullable
+user-credential timestamps and nullable offline-grant bookkeeping timestamps remain readable. No
+ciphertext, snapshot, or framework-credential hash should be copied into diagnostic evidence.

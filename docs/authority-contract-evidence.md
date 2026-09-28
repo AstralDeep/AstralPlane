@@ -1,7 +1,9 @@
 # LETS authority contract evidence
 
-The feature-074 authority test family exercises the public repository and the current `074.004`
-schema on an isolated PostgreSQL database. The exact T140 requirements map to these live nodes:
+The feature-074 authority test family exercises the public repository on an isolated PostgreSQL
+schema that holds the `067.001` outbox table and the authority DDL of the `074.001` edge. No later
+edge alters the authority tables, so the tested shape is unchanged in the current `089.001` schema,
+whose verifier attests it on every startup. The exact T140 requirements map to these live nodes:
 
 - migration repeatability: `test_074_001_authority_ddl_is_repeat_safe_on_real_postgresql`;
 - active-binding uniqueness and owner isolation:
