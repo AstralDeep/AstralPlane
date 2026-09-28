@@ -11,6 +11,7 @@ dist/
 .coverage
 .coverage.*
 coverage.xml
+changed-coverage.json
 htmlcov/
 .pytest_cache/
 .ruff_cache/

@@ -161,7 +161,13 @@ and repository behavior, and standalone package compatibility. Pull requests and
 the repository-owned `.github/workflows/ci.yml` jobs `quality`, `postgresql`, and
 `package-compatibility`; the `gates` aggregate fails closed unless every owner job succeeds. The
 PostgreSQL lane runs the complete Python 3.11 suite against PostgreSQL 17 with a measured-baseline
-combined branch-coverage floor of 88.75% and a changed-line coverage threshold of 90%. Package
+combined branch-coverage floor of 88.75% and a changed-line coverage threshold of 90%.
+`scripts/check_changed_coverage.py` decides changed-line coverage from diff-cover's JSON report for
+the committed range `BASE_SHA..HEAD`, where `BASE_SHA` is the pull request's base commit or, on a
+push to `main`, the commit before the push. It fails below 90%; a change with no measurable
+executable lines is recorded in the step summary as not applicable, naming the base and candidate
+SHAs and every changed path considered. A missing, malformed, or all-zero `BASE_SHA`, a base equal
+to the candidate, or a report that does not describe that range fails closed. Package
 compatibility builds and installs a clean wheel on Python 3.11 and 3.14; it does not replace the
 PostgreSQL production lane.
 
@@ -173,8 +179,15 @@ uv run --frozen --group ci python tests/architecture/test_dependency_direction.p
 ASTRALDEEP_SOURCE_REPO=/path/to/AstralDeep \
 ASTRALPLANE_TEST_POSTGRES_DSN=postgresql://user:password@127.0.0.1:5432/isolated_database \
   uv run --frozen --group ci pytest -q -p no:cacheprovider \
-  --cov=astralplane --cov-branch --cov-report=xml --cov-fail-under=88.75
-uv run --frozen --group ci diff-cover coverage.xml --compare-branch origin/main --fail-under=90
+  --cov=astralplane --cov=scripts.check_changed_coverage \
+  --cov=scripts.import_staging_fixture --cov=scripts.migrate_qualification_database \
+  --cov-branch --cov-report=xml --cov-fail-under=88.75
+BASE_SHA="$(git merge-base origin/main HEAD)"
+uv run --frozen --group ci diff-cover coverage.xml --compare-branch "$BASE_SHA" \
+  --diff-range-notation '..' --ignore-staged --ignore-unstaged \
+  --format json:changed-coverage.json
+uv run --frozen --group ci python scripts/check_changed_coverage.py \
+  --report changed-coverage.json --base-sha "$BASE_SHA" --fail-under 90
 uv lock --check
 uv build --build-constraints tooling/python-ci/build-requirements.lock.txt --require-hashes
 actionlint .github/workflows/ci.yml

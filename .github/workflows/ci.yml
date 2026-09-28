@@ -63,10 +63,24 @@ jobs:
       - name: Run the complete Python suite against PostgreSQL
         run: |
           uv run --frozen --group ci pytest -q -p no:cacheprovider \
-            --cov=astralplane --cov=scripts.import_staging_fixture \
+            --cov=astralplane --cov=scripts.check_changed_coverage \
+            --cov=scripts.import_staging_fixture \
             --cov=scripts.migrate_qualification_database \
             --cov-branch --cov-report=xml --cov-fail-under=88.75
-      - run: uv run --frozen --group ci diff-cover coverage.xml --compare-branch origin/main --fail-under=90
+      - name: Decide changed-line coverage for BASE_SHA..HEAD
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
+            echo "::error::Changed-line coverage needs a non-zero 40-hex BASE_SHA from the event."
+            exit 1
+          fi
+          uv run --frozen --group ci diff-cover coverage.xml \
+            --compare-branch "$BASE_SHA" --diff-range-notation '..' \
+            --ignore-staged --ignore-unstaged --format json:changed-coverage.json
+          uv run --frozen --group ci python scripts/check_changed_coverage.py \
+            --report changed-coverage.json --base-sha "$BASE_SHA" --fail-under 90
 
   package-compatibility:
     runs-on: ubuntu-24.04

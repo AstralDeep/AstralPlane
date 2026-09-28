@@ -1,6 +1,7 @@
 """Tests for AstralPlane's GitHub Actions CI workflow: pinned action SHAs, forbidden
 unapproved actions, and that the quality, PostgreSQL, and packaging jobs gate the
-aggregate owner job.
+aggregate owner job. The PostgreSQL job must gate the event's BASE_SHA..HEAD range through
+scripts/check_changed_coverage.py, which records an unmeasurable change as not applicable.
 """
 
 from __future__ import annotations
@@ -30,6 +31,22 @@ POSTGRES_IMAGE = (
     "sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4"
 )
 DEEP_COMMIT = "fc113c4f99121b2053bb71523835c5c4743f1f56"
+BASE_SHA_ENVIRONMENT = "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}"
+BASE_SHA_GUARD = (
+    'if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || '
+    '"$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then '
+    'echo "::error::Changed-line coverage needs a non-zero 40-hex BASE_SHA from the event." '
+    "exit 1 fi"
+)
+MEASURE_CHANGED_LINES = (
+    'uv run --frozen --group ci diff-cover coverage.xml --compare-branch "$BASE_SHA" '
+    "--diff-range-notation '..' --ignore-staged --ignore-unstaged "
+    "--format json:changed-coverage.json"
+)
+DECIDE_CHANGED_LINES = (
+    "uv run --frozen --group ci python scripts/check_changed_coverage.py "
+    '--report changed-coverage.json --base-sha "$BASE_SHA" --fail-under 90'
+)
 OWNER_JOBS = ("quality", "postgresql", "package-compatibility")
 SETUPTOOLS_REQUIREMENT = "setuptools==83.0.0"
 SETUPTOOLS_HASH = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3"
@@ -302,16 +319,74 @@ def test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage(
     pytest_command = pytest_commands[0]
     assert "pytest -q -p no:cacheprovider" in pytest_command
     assert "--cov=astralplane" in pytest_command
+    assert "--cov=scripts.check_changed_coverage" in pytest_command
     assert "--cov-branch" in pytest_command
     assert "--cov-report=xml" in pytest_command
     assert "--cov-fail-under=88.75" in pytest_command
     assert "tests/" not in pytest_command
     assert not re.search(r"--ignore(?:=|\s)", pytest_command)
+
+    assert "fetch-depth: 0" in job
+    assert BASE_SHA_ENVIRONMENT in job
+    decisions = [command for command in commands if "diff-cover" in command]
+    assert len(decisions) == 1
+    assert commands.index(pytest_command) < commands.index(decisions[0])
+    decision = " ".join(decisions[0].replace("\\\n", " ").split())
+    assert decision.startswith("set -euo pipefail ")
+    assert BASE_SHA_GUARD in decision
+    assert MEASURE_CHANGED_LINES in decision
+    assert DECIDE_CHANGED_LINES in decision
     assert (
-        "uv run --frozen --group ci diff-cover coverage.xml "
-        "--compare-branch origin/main --fail-under=90"
-        in commands
+        decision.index(BASE_SHA_GUARD)
+        < decision.index(MEASURE_CHANGED_LINES)
+        < decision.index(DECIDE_CHANGED_LINES)
     )
+    assert decision.count("diff-cover ") == 1
+    assert "--fail-under=" not in decision
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    (
+        ("--fail-under 90", "--fail-under 80"),
+        ("--diff-range-notation '..' ", ""),
+        ("--ignore-staged --ignore-unstaged ", ""),
+        ("--cov=scripts.check_changed_coverage ", ""),
+        ("github.event.before", "github.sha"),
+        ("github.event.pull_request.base.sha || ", ""),
+        ('|| "$BASE_SHA" == 0000000000000000000000000000000000000000 ', ""),
+        ("            exit 1\n", ""),
+        ("fetch-depth: 0", "fetch-depth: 1"),
+        ("--format json:changed-coverage.json", "--fail-under=90"),
+    ),
+    ids=(
+        "lowered-threshold",
+        "three-dot-range",
+        "working-tree-diff",
+        "unmeasured-decision-script",
+        "self-comparison-on-push",
+        "no-pull-request-base",
+        "zero-base-accepted",
+        "guard-does-not-stop",
+        "shallow-history",
+        "diff-cover-decides",
+    ),
+)
+def test_postgresql_job_rejects_a_weakened_changed_line_decision(
+    original: str,
+    replacement: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = _workflow_text()
+    mutated = text.replace(original, replacement)
+    assert mutated != text
+    mutated_path = tmp_path / "ci.yml"
+    mutated_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setitem(globals(), "WORKFLOW_PATH", mutated_path)
+
+    with pytest.raises(AssertionError):
+        test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage()
 
 
 def test_package_compatibility_builds_and_smokes_a_clean_wheel() -> None:
