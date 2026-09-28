@@ -41,3 +41,6 @@ logs/
 Thumbs.db
 *.swp
 *.tmp
+
+# Coding-agent local state; Spec Kit Claude skills are installed per machine
+.claude/
