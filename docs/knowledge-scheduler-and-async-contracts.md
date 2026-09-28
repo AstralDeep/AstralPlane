@@ -131,8 +131,9 @@ CAS identities. `close()` rejects new admissions but does not close the composit
 Focused contract verification covers successful writes, replay, owner mismatch, stale fences,
 missing rows, corrupt persisted shapes, bounded inputs, async cancellation, and capacity refusal.
 The changed repository units retain focused branch-aware coverage above the feature's 90% floor.
-Serial live-PostgreSQL migration and admission conformance is recorded separately in
-`provenance/checks.json` when an isolated test DSN is available.
+The complete suite runs on real PostgreSQL in CI; the digest-only migration evidence in
+`provenance/checks.json` is the historical `074.004` record, not current evidence (see
+`provenance/README.md`).
 
 Rollback is code-only: restore the prior Plane/Deep composition. Do not delete or rewrite
 interaction, quality, quarantine, proposal, memory, scheduler, maintenance, or tracked-job rows.

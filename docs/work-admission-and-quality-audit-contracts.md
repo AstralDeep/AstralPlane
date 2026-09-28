@@ -44,12 +44,14 @@ the current-schema verifier also matches canonical PostgreSQL catalog structure.
 
 ## Verification and recovery
 
-The focused unit/schema matrix currently passes 136 tests. The serial isolated-PostgreSQL
-fresh/upgrade matrix passes 12 tests, including exact-repeat upgrade, injected transactional
-failure and recovery, same-name structural tampering, concurrent qualification reviews, real
-work-admission replay/owner denial/claim/terminalization, and caller-owned rollback.
+Focused unit/schema tests and the serial isolated-PostgreSQL fresh/upgrade suites cover
+exact-repeat upgrade, injected transactional failure and recovery, same-name structural tampering,
+concurrent qualification reviews, real work-admission replay/owner denial/claim/terminalization,
+and caller-owned rollback.
 
-The current migration registry digest is
-`1bb948074ec378d2a74e2b74eff29e72a6f9a6be03d3ae24ec6439fcf70f1e02`. Digest-only evidence is
-recorded in `provenance/checks.json`. Recovery is forward-only under closed admission as described
-in `migration-and-recovery.md`; never down-migrate or rewrite audit hashes by inference.
+Revision `074.002` introduced the qualification-audit tables. Its registry digest
+`1bb948074ec378d2a74e2b74eff29e72a6f9a6be03d3ae24ec6439fcf70f1e02` stays pinned as the accepted
+digest of a `074.002` predecessor; the current schema is `089.001`. The digest-only migration
+evidence in `provenance/checks.json` is the historical `074.004` record, not current evidence (see
+`provenance/README.md`). Recovery is forward-only under closed admission as described in
+`migration-and-recovery.md`; never down-migrate or rewrite audit hashes by inference.

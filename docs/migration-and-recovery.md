@@ -384,23 +384,24 @@ python -m pytest -q tests/integration/test_empty_database_startup.py
 python scripts/record_migration_evidence.py
 ```
 
-On POSIX, use the shell's normal `export` form. The evidence recorder runs eight cases
-sequentially with one worker and writes only input/output digests and bounded status metadata to
+On POSIX, use the shell's normal `export` form. The evidence recorder runs eight cases sequentially
+with one worker and writes only input/output digests and bounded status metadata to
 `provenance/checks.json`; it never stores the database URL or raw test output. The committed
-scaffold remains `not_run` until that recorder completes successfully against a configured test
-database. The integration suite creates only schemas named `astralplane_fixture_<hex>` or
-`astralplane_hostile_<hex>`, databases named `plane_tpl_<hex>`, `plane_clone_<hex>`,
-`astralplane_db_<hex>` or `astralplane_qualification_<hex>`, roles named `astralplane_role_<hex>`
-(each `<hex>` is 32 lowercase hex characters), and temporary blob roots supplied by pytest. Tests
-that need only an already-migrated catalog run against a `CREATE DATABASE ... TEMPLATE` copy of a
-database that the real migration runner builds once per session (`tests/conftest.py`). Upgrade
-suites that start many tests from one predecessor revision copy a predecessor database that the
-historical runner builds once per module and still run the real upgrade edges in every test; every
-from-empty and pre-split case replays from its own empty or loaded starting state. It verifies
-predecessor damage rejection before any repair, direct upgrade, repeat-upgrade no-op behavior,
-whole-transaction rollback on an injected second-edge failure, staged blob failure, forward retry,
-and the joint restore procedure below. An unset URL skips this suite and is not qualification
-evidence.
+`provenance/checks.json` is the historical record of that matrix at `074.004` (2026-08-21); its
+recorded input digests no longer match current bytes, so it is not evidence for the current schema
+(see `provenance/README.md`). The integration suite creates only schemas named
+`astralplane_fixture_<hex>` or `astralplane_hostile_<hex>`, databases named `plane_tpl_<hex>`,
+`plane_clone_<hex>`, `astralplane_db_<hex>` or `astralplane_qualification_<hex>`, roles named
+`astralplane_role_<hex>` (each `<hex>` is 32 lowercase hex characters), and temporary blob roots
+supplied by pytest. Tests that need only an already-migrated catalog run against a
+`CREATE DATABASE ... TEMPLATE` copy of a database that the real migration runner builds once per session
+(`tests/conftest.py`). Upgrade suites that start many tests from one predecessor revision copy a
+predecessor database that the historical runner builds once per module and still run the real
+upgrade edges in every test; every from-empty and pre-split case replays from its own empty or
+loaded starting state. It verifies predecessor damage rejection before any repair, direct upgrade,
+repeat-upgrade no-op behavior, whole-transaction rollback on an injected second-edge failure, staged
+blob failure, forward retry, and the joint restore procedure below. An unset URL skips this suite
+and is not qualification evidence.
 
 ## Acceptance
 
