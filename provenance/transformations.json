@@ -11,7 +11,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/audit_delivery.py",
-          "sha256": "c9f39c4d48ebfc78598542e953c39a825c0de46c13da3c4eb2f8b4d1beef1184"
+          "sha256": "78490369a998cf296bf01ae5ffc0826e9bb04640aec8765a261f818e18c2ca80"
         },
         {
           "path": "src/astralplane/outbox.py",
@@ -117,11 +117,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/audit_delivery.py",
-          "sha256": "c9f39c4d48ebfc78598542e953c39a825c0de46c13da3c4eb2f8b4d1beef1184"
+          "sha256": "78490369a998cf296bf01ae5ffc0826e9bb04640aec8765a261f818e18c2ca80"
         },
         {
           "path": "tests/test_audit_delivery.py",
-          "sha256": "f3fd0c2975c84f96bf75ae97bf8df04e91ecf31add99e3117b381ca7a97774a2"
+          "sha256": "1d4c044eb2a2db3552d43d40bf15e887031982dd11a94fd464bbbb28bfb7acea"
         }
       ],
       "task": "T090/T091",

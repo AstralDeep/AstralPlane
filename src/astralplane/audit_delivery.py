@@ -294,7 +294,18 @@ class AuditOutboxDelivery:
             )
 
         exponent = min(claim.attempt - 1, 30)
-        retry_delay = min(self._base_retry_delay * (2**exponent), self._max_retry_delay)
+        multiplier = 2**exponent
+        retry_delay = (
+            self._max_retry_delay
+            if self._base_retry_delay > self._max_retry_delay // multiplier
+            else self._base_retry_delay * multiplier
+        )
+        if retry_delay > datetime.max.replace(tzinfo=UTC) - now:
+            raise PlaneError(
+                "audit retry time exceeds the supported datetime range",
+                code="audit_retry_out_of_range",
+                metadata={"entry_id": claim.entry.entry_id},
+            )
         retry_available_at = now + retry_delay
         with self._database.transaction() as transaction:
             result = self._outbox.retry(

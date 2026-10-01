@@ -233,4 +233,19 @@ run both `tests/integration/test_pre_split_upgrade.py` and
 passed. Runtime databases, blobs, uploads, logs, credentials, generated content, and local
 environments must never be committed or placed beneath the package/submodule tree.
 
+## Audit delivery retries
+
+`AuditOutboxDelivery` retries a failed sink with exponential delays, saturating at
+`max_retry_delay` before multiplying a `timedelta`. The exponent remains capped at 30;
+defaults remain eight attempts, a five-second base delay, and a one-hour maximum delay.
+Microsecond precision is preserved, including when the cap is not an exact multiple of
+the base delay.
+
+If the capped delay would place the next retry after UTC `datetime.max`, delivery raises
+`PlaneError` with code `audit_retry_out_of_range` and the entry ID. It does not change the
+claimed outbox row or report a successful settlement; the existing lease can be reclaimed
+after expiry. A retry exactly at `datetime.max` is representable and remains valid.
+An exhausted attempt dead-letters without calculating another retry time. Retry and
+dead-letter outcomes are reported only after their fenced state transition commits.
+
 See `docs/migration-and-recovery.md` before changing schema or durable roots.
