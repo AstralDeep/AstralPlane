@@ -8,7 +8,7 @@ import copy
 import hashlib
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -369,6 +369,124 @@ def test_unavailable_sink_schedules_retry_and_a_new_instance_finishes_it() -> No
     )
     assert delivered.state is AuditDeliveryState.DELIVERED
     assert database.rows["audit:event-1"]["status"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "base_delay, max_delay, attempt, expected_delay",
+    [
+        (timedelta(days=2), timedelta(days=2), 31, timedelta(days=2)),
+        (timedelta(days=2), timedelta(days=2), 39, timedelta(days=2)),
+        (timedelta(seconds=5), timedelta(hours=1), 1, timedelta(seconds=5)),
+        (timedelta(seconds=5), timedelta(hours=1), 2, timedelta(seconds=10)),
+        (timedelta(seconds=5), timedelta(hours=1), 7, timedelta(seconds=320)),
+        (timedelta(seconds=5), timedelta(hours=1), 11, timedelta(hours=1)),
+        (timedelta(microseconds=1), timedelta(microseconds=5), 3, timedelta(microseconds=4)),
+        (timedelta(microseconds=2), timedelta(microseconds=5), 3, timedelta(microseconds=5)),
+        (timedelta(microseconds=1), timedelta.max, 39, timedelta(microseconds=2**30)),
+    ],
+)
+def test_retry_delay_saturates_without_overflow_or_rounding(
+    base_delay: timedelta, max_delay: timedelta, attempt: int, expected_delay: timedelta
+) -> None:
+    database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
+    delivery = service(
+        database, outbox, sink, max_attempts=40,
+        base_retry_delay=base_delay, max_retry_delay=max_delay,
+    )
+    queue_event(delivery, database)
+    database.rows["audit:event-1"]["attempt"] = attempt - 1
+
+    result = delivery.deliver_one(
+        worker_id="worker-1", now=NOW, lease_duration=timedelta(seconds=30)
+    )
+
+    assert result.state is AuditDeliveryState.RETRY_SCHEDULED
+    assert result.attempt == attempt
+    assert result.retry_available_at == NOW + expected_delay
+    row = database.rows["audit:event-1"]
+    assert row["status"] == "retry"
+    assert row["entry"].available_at == result.retry_available_at
+    assert row["version"] == 2
+    assert len(sink.deliveries) == 1
+
+
+@pytest.mark.parametrize("remaining_microseconds", [5_000_000, 4_999_999])
+def test_retry_timestamp_limit_is_exact_and_failure_preserves_the_claim(
+    remaining_microseconds: int,
+) -> None:
+    database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
+    delivery = service(database, outbox, sink)
+    queue_event(delivery, database)
+    latest = datetime.max.replace(tzinfo=UTC)
+    now = latest - timedelta(microseconds=remaining_microseconds)
+    claim = delivery.claim(
+        worker_id="worker-1", now=now, lease_duration=timedelta(microseconds=1), limit=1
+    )[0]
+    claimed_rows = copy.deepcopy(database.rows)
+
+    if remaining_microseconds == 5_000_000:
+        result = delivery.deliver(claim, now=now)
+        assert result.state is AuditDeliveryState.RETRY_SCHEDULED
+        assert result.retry_available_at == latest
+        assert database.rows["audit:event-1"]["entry"].available_at == latest
+    else:
+        with pytest.raises(PlaneError) as raised:
+            delivery.deliver(claim, now=now)
+        assert raised.value.code == "audit_retry_out_of_range"
+        assert dict(raised.value.metadata) == {"entry_id": "audit:event-1"}
+        assert database.rows == claimed_rows
+    assert len(sink.deliveries) == 1
+
+
+@pytest.mark.parametrize("attempt", [31, 40])
+@pytest.mark.parametrize("failure", ["commit", "fence"])
+def test_failure_settlement_requires_its_fence_and_commit(attempt: int, failure: str) -> None:
+    database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
+    delivery = service(
+        database, outbox, sink, max_attempts=40,
+        base_retry_delay=timedelta(days=2), max_retry_delay=timedelta(days=2),
+    )
+    queue_event(delivery, database)
+    database.rows["audit:event-1"]["attempt"] = attempt - 1
+    claim = delivery.claim(
+        worker_id="worker-1", now=NOW, lease_duration=timedelta(seconds=30), limit=1
+    )[0]
+    claimed_rows = copy.deepcopy(database.rows)
+
+    if failure == "commit":
+        database.fail_next_commit = True
+        with pytest.raises(RuntimeError, match="simulated commit failure"):
+            delivery.deliver(claim, now=NOW)
+    else:
+        with pytest.raises(PlaneError) as raised:
+            delivery.deliver(replace(claim, expected_version=claim.expected_version + 1), now=NOW)
+        assert raised.value.code == "audit_delivery_fence_conflict"
+        assert dict(raised.value.metadata)["operation"] == (
+            "retry" if attempt == 31 else "dead-letter"
+        )
+    assert database.rows == claimed_rows
+    assert len(sink.deliveries) == 1
+
+
+def test_default_terminal_attempt_needs_no_representable_retry_time() -> None:
+    database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
+    delivery = service(
+        database, outbox, sink,
+        base_retry_delay=timedelta.max, max_retry_delay=timedelta.max,
+    )
+    queue_event(delivery, database)
+    database.rows["audit:event-1"]["attempt"] = 7
+    now = datetime.max.replace(tzinfo=UTC) - timedelta(microseconds=1)
+
+    result = delivery.deliver_one(
+        worker_id="worker-1", now=now, lease_duration=timedelta(microseconds=1)
+    )
+
+    assert result.state is AuditDeliveryState.DEAD_LETTERED
+    assert result.attempt == 8
+    assert result.retry_available_at is None
+    assert database.rows["audit:event-1"]["status"] == "dead_letter"
+    assert database.rows["audit:event-1"]["version"] == 2
 
 
 def test_sink_success_is_not_reported_delivered_before_ack_commit() -> None:
