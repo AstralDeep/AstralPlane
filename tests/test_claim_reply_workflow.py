@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "claim-reply.yml"
 ACTION = (
-    "AstralDeep/astraldeep.github.io/actions/claim-reply@e649eaa2288ef7d75f01857f067bd82f13de2033"
+    "AstralDeep/astraldeep.github.io/actions/claim-reply@87501ca5d93dc3b0592fe4dbbb7d39f50109084b"
 )
 
 
@@ -51,7 +51,7 @@ class ClaimReplyWorkflowTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         mutations = [
             ("issues: write", "contents: write"),
-            (ACTION, ACTION.replace("e649eaa2288ef7d75f01857f067bd82f13de2033", "main")),
+            (ACTION, ACTION.rsplit("@", 1)[0] + "@main"),
             ("refs/heads/main", "refs/heads/candidate"),
             ("timeout-minutes: 5", "timeout-minutes: 31"),
             ("permissions: {}", "permissions: write-all"),
