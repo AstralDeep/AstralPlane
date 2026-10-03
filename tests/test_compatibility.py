@@ -78,3 +78,21 @@ def test_multiple_mismatches_are_reported_in_deterministic_order() -> None:
         "schema_revision_incompatible",
         "consumer_version_too_old",
     )
+
+
+def test_json_ready_rejects_non_string_keys() -> None:
+    from astralplane.repositories import json_ready
+    
+    # Test 1: Flat non-string keys
+    with pytest.raises(TypeError):
+        json_ready({1: 'a', '1': 'b'})
+    
+    # Test 2: Nested non-string keys
+    with pytest.raises(TypeError):
+        json_ready({'nested': {2: 'value'}})
+    
+    # Test 3: Valid string keys
+    assert json_ready({'valid': 'string_key'}) == {'valid': 'string_key'}
+    
+    # Test 4: Empty dictionary
+    assert json_ready({}) == {}
