@@ -16,7 +16,6 @@ from astralplane.compatibility import (
     inspect_compatibility,
 )
 
-
 def test_current_and_predecessor_schema_are_compatible() -> None:
     for revision in (
         "066.001",
@@ -39,6 +38,33 @@ def test_current_and_predecessor_schema_are_compatible() -> None:
         assert payload["blob_layout_version"] == BLOB_LAYOUT_VERSION
         assert payload["recovery_contract_version"] == RECOVERY_CONTRACT_VERSION
         assert payload["compatible"] is True
+
+
+def test_json_ready_rejects_non_string_keys() -> None:
+    """Tests that json_ready rejects non-string keys.
+    
+    This function tests the json_ready function from astralplane.repositories
+    module to ensure it raises a TypeError when given a dictionary with non-string keys.
+    
+    Args:
+        None
+    Returns:
+        None
+    
+    Raises:
+        TypeError: If the input dictionary contains non-string keys.
+    """
+    from astralplane.repositories import json_ready
+    # Test 1: Flat non-string keys
+    with pytest.raises(TypeError):
+        json_ready({1: 'a', '1': 'b'})
+    # Test 2: Nested non-string keys
+    with pytest.raises(TypeError):
+        json_ready({'nested': {2: 'value'}})
+    # Test 3: Valid string keys
+    assert json_ready({'valid': 'string_key'}) == {'valid': 'string_key'}
+    # Test 4: Empty dictionary
+    assert json_ready({}) == {}
 
 
 @pytest.mark.parametrize(
@@ -78,21 +104,3 @@ def test_multiple_mismatches_are_reported_in_deterministic_order() -> None:
         "schema_revision_incompatible",
         "consumer_version_too_old",
     )
-
-
-def test_json_ready_rejects_non_string_keys() -> None:
-    from astralplane.repositories import json_ready
-    
-    # Test 1: Flat non-string keys
-    with pytest.raises(TypeError):
-        json_ready({1: 'a', '1': 'b'})
-    
-    # Test 2: Nested non-string keys
-    with pytest.raises(TypeError):
-        json_ready({'nested': {2: 'value'}})
-    
-    # Test 3: Valid string keys
-    assert json_ready({'valid': 'string_key'}) == {'valid': 'string_key'}
-    
-    # Test 4: Empty dictionary
-    assert json_ready({}) == {}
