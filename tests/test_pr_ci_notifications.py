@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-ci-notifications.yml"
-ACTION = "AstralDeep/astraldeep.github.io/actions/pr-ci@f1930907e1f702e341fe03f73e102e156ec3e36e"
+ACTION = "AstralDeep/astraldeep.github.io/actions/pr-ci@460a3ed56c3c1512e489607417d071f6aa174e82"
 NAMES = ["AstralPlane CI"]
 
 def assert_contract(text):
