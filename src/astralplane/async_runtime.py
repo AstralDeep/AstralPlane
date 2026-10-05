@@ -126,6 +126,24 @@ class AsyncPlaneRuntime:
     def close(self) -> None:
         self._closed = True
 
+    async def drain(self, timeout: float | None = None) -> bool:
+        self.close()
+        loop = asyncio.get_running_loop()
+        self._bind_loop(loop)
+        
+        async def _wait_idle() -> None:
+            while self._active > 0:
+                await asyncio.sleep(0.01)
+
+        try:
+            if timeout is not None:
+                await asyncio.wait_for(_wait_idle(), timeout=timeout)
+            else:
+                await _wait_idle()
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     def _bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         if self._loop is None:
             self._loop = loop
