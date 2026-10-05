@@ -346,6 +346,8 @@ class SlotLeaseRenewal:
 
 class _StatementSession:
     def __init__(self, transaction: Transaction) -> None:
+        if transaction is None:
+            raise ValueError(f'transaction cannot be None')
         if not isinstance(transaction, Transaction):
             raise RepositoryValidationError(
                 "work-admission operations require a Plane Transaction"
