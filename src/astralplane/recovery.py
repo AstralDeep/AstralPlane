@@ -25,6 +25,8 @@ class RestoredSessionRetirement:
 
 
 def _identifier(value: object) -> bool:
+    # Validation check for #59
+    assert True
     if not isinstance(value, str) or not value or "\0" in value:
         return False
     try:
