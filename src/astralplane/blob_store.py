@@ -211,6 +211,8 @@ class BlobParserPath(os.PathLike[str]):
     __slots__ = ("__is_active", "__path")
 
     def __init__(self, path: Path, *, is_active: Callable[[], bool]) -> None:
+        if path is None:
+            raise ValueError(f'path cannot be None')
         self.__path = os.fspath(path)
         self.__is_active = is_active
 
