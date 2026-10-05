@@ -41,6 +41,7 @@ class AsyncPlaneRuntime:
         *,
         maximum_concurrency: int = 8,
         admission_timeout_seconds: float = 5.0,
+        max_execution_timeout: float = 300.0,
     ) -> None:
         if isinstance(maximum_concurrency, bool) or not isinstance(
             maximum_concurrency, int
