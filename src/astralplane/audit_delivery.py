@@ -79,22 +79,33 @@ class AuditDeliveryResult:
     error_code: str | None = None
 
 
-def _safe_json_value(value: object, *, path: str = "$") -> object:
-    if isinstance(value, Mapping):
-        sanitized: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise SQLContractError("audit payload keys must be non-empty strings")
-            normalized_key = key.casefold().replace("-", "_")
-            if normalized_key in _SENSITIVE_KEYS or normalized_key.endswith(_SENSITIVE_SUFFIXES):
-                raise SQLContractError(
-                    "audit payload contains a credential-bearing field",
-                    metadata={"path": f"{path}.{key}"},
-                )
-            sanitized[key] = _safe_json_value(item, path=f"{path}.{key}")
-        return sanitized
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
-        return [_safe_json_value(item, path=f"{path}[]") for item in value]
+def _safe_json_value(value: object, *, path: str = "$", depth: int = 0, visited: set[int] | None = None, max_depth: int = 64) -> object:
+    if depth > max_depth:
+        raise SQLContractError("audit payload exceeds maximum allowed JSON nesting depth", metadata={"path": path})
+    if visited is None:
+        visited = set()
+    if isinstance(value, (Mapping, Sequence)) and not isinstance(value, (str, bytes, bytearray, memoryview)):
+        val_id = id(value)
+        if val_id in visited:
+            raise SQLContractError("audit payload contains cyclic references", metadata={"path": path})
+        visited.add(val_id)
+        try:
+            if isinstance(value, Mapping):
+                sanitized: dict[str, object] = {}
+                for key, item in value.items():
+                    if not isinstance(key, str) or not key:
+                        raise SQLContractError("audit payload keys must be non-empty strings")
+                    normalized_key = key.casefold().replace("-", "_")
+                    if normalized_key in _SENSITIVE_KEYS or normalized_key.endswith(_SENSITIVE_SUFFIXES):
+                        raise SQLContractError(
+                            "audit payload contains a credential-bearing field",
+                            metadata={"path": f"{path}.{key}"},
+                        )
+                    sanitized[key] = _safe_json_value(item, path=f"{path}.{key}", depth=depth + 1, visited=visited, max_depth=max_depth)
+                return sanitized
+            return [_safe_json_value(item, path=f"{path}[]", depth=depth + 1, visited=visited, max_depth=max_depth) for item in value]
+        finally:
+            visited.remove(val_id)
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float) and math.isfinite(value):

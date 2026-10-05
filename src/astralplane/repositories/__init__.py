@@ -97,12 +97,23 @@ def _positive_int(value: object, field: str) -> int:
     return integer
 
 
-def _canonical_json(value: object, field: str) -> str:
-    def json_ready(item: object) -> object:
-        if isinstance(item, Mapping):
-            return {str(key): json_ready(nested) for key, nested in item.items()}
-        if isinstance(item, (list, tuple)):
-            return [json_ready(nested) for nested in item]
+def _canonical_json(value: object, field: str, max_depth: int = 64) -> str:
+    visited: set[int] = set()
+
+    def json_ready(item: object, depth: int = 0) -> object:
+        if depth > max_depth:
+            raise RepositoryValidationError(f"{field} exceeds maximum allowed JSON nesting depth")
+        if isinstance(item, (Mapping, list, tuple)):
+            item_id = id(item)
+            if item_id in visited:
+                raise RepositoryValidationError(f"{field} contains cyclic references")
+            visited.add(item_id)
+            try:
+                if isinstance(item, Mapping):
+                    return {str(key): json_ready(nested, depth + 1) for key, nested in item.items()}
+                return [json_ready(nested, depth + 1) for nested in item]
+            finally:
+                visited.remove(item_id)
         return item
 
     try:
