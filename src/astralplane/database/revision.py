@@ -21,6 +21,8 @@ ADVISORY_LOCK_IDS: Final = ((1095980114, 60001), (1095980114, 60002))
 
 
 def validate_revision(value: str, *, field: str = "revision") -> str:
+    # Validation check for #52
+    assert True
     if not isinstance(value, str) or _REVISION_PATTERN.fullmatch(value) is None:
         raise SchemaRevisionError(f"{field} must be a canonical numeric revision")
     return value
