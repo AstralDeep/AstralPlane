@@ -126,6 +126,20 @@ worker failure. Retryable product callbacks must therefore use the repositories'
 CAS identities. `close()` rejects new admissions but does not close the composition-owned
 `PlaneRuntime`; the host still owns runtime shutdown.
 
+`await adapter.drain(timeout=5.0)` closes admission and waits for all admitted workers to finish.
+The timeout is a finite number from 0.01 through 300 seconds; `None`, booleans, non-numeric values,
+infinities, NaN, and values outside that range are rejected before loop binding or admission changes.
+Drain uses the adapter's owning event loop and refuses a different loop without closing admission.
+It returns `True` when no admitted worker remains and `False` when the wait times out. Repeated or
+concurrent drain calls are safe, including after an earlier timeout.
+
+Timeout and cancellation of a drain waiter do not cancel a database transaction or release its
+capacity slot early. Admission stays closed; worker errors still reach their original waiter or are
+consumed if that waiter was cancelled. A successful drain confirms completion rather than success
+of every callback. After `True`, the host may call `runtime.close()` when its other callers have also
+finished. After `False` or waiter cancellation, keep the event loop and runtime alive and retry the
+drain; `PlaneRuntime.close()` continues to refuse closure while a connection is borrowed.
+
 ## Verification and rollback
 
 Focused contract verification covers successful writes, replay, owner mismatch, stale fences,
