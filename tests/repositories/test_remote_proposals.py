@@ -209,6 +209,24 @@ def test_record_validation_is_bounded(value: RemoteOperationProposalRecord) -> N
         RemoteOperationProposalRepository().create(ScriptedTransaction(), value)
 
 
+@pytest.mark.parametrize(
+    "key", [1, None, True, object()], ids=["int", "none", "bool", "custom"]
+)
+@pytest.mark.parametrize("nested", ["mapping", "list", "tuple"])
+def test_create_rejects_non_string_argument_keys_before_sql(key: object, nested: str) -> None:
+    invalid = {key: "rejected", str(key): "retained"}
+    arguments = (
+        invalid
+        if nested == "mapping"
+        else {"nested": [invalid] if nested == "list" else (invalid,)}
+    )
+    transaction = ScriptedTransaction()
+    with pytest.raises(RepositoryValidationError) as failure:
+        RemoteOperationProposalRepository().create(transaction, record(arguments=arguments))
+    assert failure.value.code == "repository_validation"
+    assert transaction.calls == []
+
+
 def test_corrupt_persisted_arguments_and_status_fail_closed() -> None:
     repository = RemoteOperationProposalRepository()
     with pytest.raises(RepositoryDataError):

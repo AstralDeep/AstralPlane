@@ -100,7 +100,12 @@ def _positive_int(value: object, field: str) -> int:
 def _canonical_json(value: object, field: str) -> str:
     def json_ready(item: object) -> object:
         if isinstance(item, Mapping):
-            return {str(key): json_ready(nested) for key, nested in item.items()}
+            result = {}
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"Dictionary keys must be strings, got {type(key).__name__}")
+                result[key] = json_ready(nested)
+            return result
         if isinstance(item, (list, tuple)):
             return [json_ready(nested) for nested in item]
         return item

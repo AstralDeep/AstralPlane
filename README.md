@@ -157,6 +157,12 @@ silently rewritten. Tutorial content/revisions, remote-operation proposals, feed
 deduplication, personalization mutation, external-identity linking, and the other extended-state
 facades are likewise available only through named typed catalog members.
 
+Repository writes using the shared canonical JSON encoder require string keys in every mapping,
+including mappings nested inside lists and tuples. Non-string keys raise `RepositoryValidationError` before SQL rather
+than being converted to strings and colliding with existing string keys. Callers that supplied
+non-string keys must update their inputs. Valid canonical JSON bytes remain unchanged; this
+validation does not rewrite existing stored payloads, digests, or schema metadata.
+
 Revision `075.001` adds the immutable `voice_session.speech_backend` discriminator. Historical
 sessions backfill to `llm_factory`; new `client_local` rows carry no remote room, participant,
 worker, or media-grant metadata. Voice-turn persistence remains unchanged, and Plane adds no audio,
