@@ -175,6 +175,12 @@ def _artifacts(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> 
     )
 
 
+def _atlas(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.atlas.get_revision(
+        transaction, owner_id=_OWNER, page_id=_UUID4, revision=1
+    )
+
+
 def _attachment_parsers(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.attachment_parsers.get_owner_claim_by_gap(
         transaction,
@@ -413,6 +419,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         "user_id = %s",
         ("FOR UPDATE", "ON CONFLICT"),
         ("ON CONFLICT (attachment_id) DO NOTHING",),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError"),
+    ),
+    RepositoryContract(
+        "atlas",
+        api.create_atlas_repository,
+        "src/astralplane/repositories/atlas.py",
+        _atlas,
+        _OWNER,
+        "owner_id=%s",
+        ("FOR UPDATE", "expected_head"),
+        ("ON CONFLICT (owner_id,request_id) DO NOTHING", "was reused"),
         None,
         ("RepositoryConflictError", "RepositoryDataError"),
     ),
@@ -892,6 +910,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_artifacts:test_pending_materialization_begins_and_replays_hidden_identity",
         "tests.repositories.test_artifacts:test_pending_lease_renews_by_db_clock_and_exact_version",
         "tests.repositories.test_artifacts:test_pending_materialization_conflicts_are_not_reported_as_success",
+    ),
+    BehavioralEvidence(
+        "atlas",
+        "tests.repositories.test_atlas:test_atlas_public_contract_behaviors",
+        "tests.repositories.test_atlas:test_atlas_public_contract_behaviors",
+        "tests.repositories.test_atlas:test_atlas_public_contract_behaviors",
+        "tests.repositories.test_atlas:test_atlas_public_contract_behaviors",
     ),
     BehavioralEvidence(
         "attachment_parsers",

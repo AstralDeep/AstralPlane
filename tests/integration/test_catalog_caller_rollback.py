@@ -253,6 +253,18 @@ def _write_artifacts(catalog: api.RepositoryCatalog, transaction: Transaction) -
     )
 
 
+def _write_atlas(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.atlas.create_page(
+        transaction,
+        owner_id=_OWNER,
+        page_id="74000000-0000-4000-8000-000000000031",
+        slug="rollback-atlas-page",
+        title="Rollback atlas page",
+        ciphertext=b"rollback-atlas-body",
+        request_id="74000000-0000-4000-8000-000000000032",
+    )
+
+
 def _write_attachment_parsers(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.attachment_parsers.claim_pending(
         transaction,
@@ -1058,6 +1070,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "atlas",
+        _write_atlas,
+        _count("atlas_page", "page_id", "74000000-0000-4000-8000-000000000031"),
+        1,
+        0,
+    ),
+    RollbackCase(
         "attachment_parsers",
         _write_attachment_parsers,
         _count("attachment_parser", "gap_fingerprint", "rollback-parser-gap"),
@@ -1296,7 +1315,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 39
+    assert len(applicable_keys) == len(set(applicable_keys)) == 40
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

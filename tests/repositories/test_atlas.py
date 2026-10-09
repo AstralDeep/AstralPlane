@@ -950,3 +950,63 @@ def test_catalog_factory_exposes_the_atlas_repository() -> None:
     assert isinstance(catalog.atlas, AtlasRepository)
     assert catalog.as_mapping()["atlas"] is catalog.atlas
     assert isinstance(create_atlas_repository(), AtlasRepository)
+
+
+def test_atlas_public_contract_behaviors() -> None:
+    """Zero-arg scope/replay/concurrency/failure proof for the contract matrix."""
+
+    repository = AtlasRepository()
+    # Scope: a foreign owner observes nothing and mutates nothing.
+    tx = FakeAtlasTransaction()
+    created = _create(repository, tx, owner="owner-a")
+    page = created.head.page_id
+    with pytest.raises(RepositoryNotFoundError):
+        repository.get_page(tx, owner_id="owner-b", page_id=page)
+    with pytest.raises(RepositoryNotFoundError):
+        repository.get_revision(tx, owner_id="owner-b", page_id=page, revision=1)
+    # Replay: an exact envelope replay returns the stored result without a write.
+    tx = FakeAtlasTransaction()
+    request = uid4()
+    first = _create(repository, tx, owner="owner-a", request=request)
+    writes = len([call for call in tx.calls if call.startswith("INSERT")])
+    second = _create(
+        repository,
+        tx,
+        owner="owner-a",
+        page=first.head.page_id,
+        request=request,
+    )
+    assert second.replayed is True
+    assert second.head.head_revision == first.head.head_revision == 1
+    assert second.revision == first.revision
+    assert len([call for call in tx.calls if call.startswith("INSERT")]) == writes
+    # Concurrency: a stale expected head is a typed conflict, not a lost update.
+    tx = FakeAtlasTransaction()
+    created = _create(repository, tx, owner="owner-a")
+    repository.append_revision(
+        tx,
+        owner_id="owner-a",
+        page_id=created.head.page_id,
+        expected_head=1,
+        title="Second",
+        ciphertext=b"ciphertext-2",
+        request_id=uid4(),
+    )
+    with pytest.raises(RepositoryConflictError):
+        repository.append_revision(
+            tx,
+            owner_id="owner-a",
+            page_id=created.head.page_id,
+            expected_head=1,
+            title="Stale",
+            ciphertext=b"ciphertext-stale",
+            request_id=uid4(),
+        )
+    # Failure: persisted corruption fails closed with a typed data error.
+    from tests.repositories._support import ScriptedTransaction
+
+    scripted = ScriptedTransaction(
+        one=[{"owner_id": "owner-a", "page_id": page, "head_revision": "two"}]
+    )
+    with pytest.raises(RepositoryDataError):
+        repository.get_page(scripted, owner_id="owner-a", page_id=page)

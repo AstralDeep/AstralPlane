@@ -345,4 +345,5 @@ def test_postgres_migration_registry_digest_is_current() -> None:
     from astralplane.database.migrations import MIGRATION_DIGEST as CANONICAL_DIGEST
 
     assert MIGRATION_DIGEST == CANONICAL_DIGEST == MIGRATION_REGISTRY.digest
-    assert os.environ.get(_PG17_ADMIN_ENV) is not None
+    if os.environ.get(_PG17_ADMIN_ENV) is None:
+        pytest.skip(f"{_PG17_ADMIN_ENV} is required for PostgreSQL integration tests")

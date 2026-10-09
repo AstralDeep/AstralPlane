@@ -18,6 +18,7 @@ import astralplane
 import astralplane.api as public_api
 from astralplane.api import (
     AsyncPlaneRuntime,
+    AtlasRepository,
     AuthorityRepository,
     PlaneHealth,
     PlaneRuntime,
@@ -25,6 +26,7 @@ from astralplane.api import (
     create_agent_management_repository,
     create_agent_repository,
     create_artifact_repository,
+    create_atlas_repository,
     create_attachment_materialization_coordinator,
     create_attachment_parser_repository,
     create_audit_repository,
@@ -224,6 +226,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_history_repository, HistoryRepository),
         (create_workspace_repository, WorkspaceRepository),
         (create_artifact_repository, ArtifactRepository),
+        (create_atlas_repository, AtlasRepository),
         (create_attachment_parser_repository, AttachmentParserRepository),
         (create_preferences_repository, PreferencesRepository),
         (create_knowledge_repository, KnowledgeRepository),
@@ -269,6 +272,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "agent_management",
         "agents",
         "artifacts",
+        "atlas",
         "attachment_parsers",
         "audit",
         "audit_retention",
