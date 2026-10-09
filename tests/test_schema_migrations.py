@@ -734,7 +734,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
     assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "afcf1e38b37d6d365c72c25663163ddee6572c50e883ad38fb7f4b4104837d7c"
+        "d164ab04a9e2a77e927996f27c55968895f9d8a66d8a4f5c403ec07f94803a3b"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('framework_credential')" in query_tables

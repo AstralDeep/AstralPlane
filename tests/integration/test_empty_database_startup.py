@@ -406,6 +406,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane_receipt_watermark_require_advance",
         "audit_events_assign_chain_sequence",
         "audit_events_protect",
+        "reject_atlas_revision_update",
     }
     assert all(
         configuration == expected_search_path for configuration in function_configurations.values()

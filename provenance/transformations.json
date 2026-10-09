@@ -627,7 +627,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "42cd3864beaa048a1a88afa2da933289ac4a1e43300508cced02c3a5cad2d254"
+          "sha256": "4f5c2712f011e772f1cac5e683e31a041488333150cf1603b1ebfcf3e366f830"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -771,7 +771,7 @@
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "adbd046ba507fd51f3d6648ad35a617ce43edfd822822cc326b3275705139b1c"
+          "sha256": "9d097689145c3fe9b2f033931e813585cdcef7f0e2979cf5220f1eb9212e1840"
         },
         {
           "path": "tests/test_sql_parameters.py",

@@ -65,4 +65,13 @@ CREATE TABLE atlas_revision (
         "CREATE TRIGGER atlas_revision_immutable BEFORE UPDATE ON atlas_revision "
         "FOR EACH ROW EXECUTE FUNCTION reject_atlas_revision_update()"
     ),
+    (
+        "DO $astralplane_atlas_function_search_path$ "
+        "BEGIN EXECUTE format("\
+        "'ALTER FUNCTION %I.reject_atlas_revision_update() "\
+        "SET search_path TO pg_catalog, %I, pg_temp', "\
+        "current_schema(), current_schema()"\
+        "); END "
+        "$astralplane_atlas_function_search_path$"
+    ),
 )
