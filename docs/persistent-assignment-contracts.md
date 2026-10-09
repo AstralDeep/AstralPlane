@@ -94,6 +94,18 @@ retained operation lifetime. Capacity refuses new events while retaining inspect
 and cancellation. The control envelope is at most 64 KiB and the complete assignment
 remains at most 256 KiB. This uses existing private JSON; no migration bytes change.
 
+### Durable completion subscriptions and wake receipts (089.002)
+
+`completion_subscription` is a neutral bounded waiter-to-source binding: an owner, a waiter
+operation, a source operation, a terminal condition (`completed`, `failed`, `cancelled`, or
+`any_terminal`), and a source-revision fence. `wake_receipt` records exactly one acceptance per
+`(subscription_id, idempotency_key)` with the observed terminal and revision; a replay references
+the original receipt and never creates a new delivery. Receipts are accepted only for live
+(non-revoked) subscriptions whose condition covers the observed terminal and whose fence admits
+the observed revision. Registration-versus-completion races resolve to one row, restarts keep
+receipts, and deletion cascades. A subscription never schedules work, never encodes IAM policy,
+and never substitutes for original session authority; nothing is written into wait-state JSON.
+
 One-shot `apply_control` requires strict `expected_state_version` in addition to the
 instruction/control vector. Persistent callers and their receipt signatures retain
 their existing contract. Replays of foundation one-shot receipts also remain valid.

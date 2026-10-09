@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -235,6 +235,25 @@ TypeSafe routing through its governed product policy; doing so does not erase
 encrypted credentials or the durable data-sharing acknowledgment. An `088.008`
 binary is not compatible merely because these tables are additive.
 
+### `089.002` completion subscriptions and wake receipts
+
+This additive edge requires the exact `089.001` registry and catalog. It adds
+two independent owner-scoped tables and alters nothing that exists.
+
+`completion_subscription` binds a waiter operation to a source operation with a
+terminal condition and a source-revision fence. `wake_receipt` records exactly
+one acceptance per subscription idempotency key and points replays at the
+original receipt. The tables stand alone: no foreign keys into operation state
+and no writes into wait-state JSON, so subscriptions never smuggle data into
+current wait state and survive independent lifecycle changes.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.002` revision/digest intact. An `089.001` binary is not compatible merely
+because these tables are additive.
+
 Prefer a reviewed forward repair through the guarded migration registry. If the
 previous composition must be restored, close admission and quiesce every writer,
 then restore the verified pre-upgrade PostgreSQL backup and all paired durable
@@ -362,7 +381,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`088.008` must carry its own pinned historical registry digest. A current `089.001` marker and
+`089.001` must carry its own pinned historical registry digest. A current `089.002` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -465,8 +484,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, and `088.008` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.001` state must carry the exact current
+   `088.007`, `088.008`, and `089.001` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.002` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

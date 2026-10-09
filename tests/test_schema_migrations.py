@@ -805,7 +805,8 @@ def test_089_002_completion_wake_edge_is_pinned_to_the_exact_089_001_registry() 
     ddl = "\n".join(COMPLETION_WAKE_SCHEMA_STATEMENTS)
     assert "CREATE TABLE completion_subscription" in ddl
     assert "CREATE TABLE wake_receipt" in ddl
-    assert "terminal_condition TEXT NOT NULL CHECK(terminal_condition IN" in ddl
+    assert "terminal_condition TEXT NOT NULL CHECK(" in ddl
+    assert "terminal_condition IN (" in ddl
     assert "wake_receipt_idempotent UNIQUE(subscription_id, idempotency_key)" in ddl
     assert "ALTER TABLE" not in ddl
     assert "IF NOT EXISTS" not in ddl
