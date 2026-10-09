@@ -198,9 +198,13 @@ def test_revoked_subscription_refuses_receipts(tx):
         revoke_subscription(
             tx, owner_id="owner-1", subscription_id=sub.subscription_id, revoked_at=160
         )
+    fresh = register_subscription(tx, **sub_kwargs())
     with pytest.raises(RepositoryDataError):
         revoke_subscription(
-            tx, owner_id="owner-1", subscription_id=sub.subscription_id, revoked_at=50
+            tx,
+            owner_id="owner-1",
+            subscription_id=fresh.subscription_id,
+            revoked_at=50,
         )
     with pytest.raises(RepositoryNotFoundError):
         revoke_subscription(
