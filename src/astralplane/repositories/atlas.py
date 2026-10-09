@@ -23,12 +23,13 @@ import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from astralplane.contracts import Transaction
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
+    RepositoryError,
     RepositoryNotFoundError,
     RepositoryValidationError,
     _bounded_limit,
@@ -126,9 +127,47 @@ def _clock(transaction: Transaction) -> int:
 
 def _lock_owner(transaction: Transaction, owner_id: str) -> None:
     _required_id(owner_id, "owner_id")
-    transaction.fetch_one(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,)
+    # Try-lock keeps owner fencing fail-fast: a concurrent uncommitted writer
+    # on the same owner surfaces as RepositoryConflictError instead of
+    # blocking on the advisory lock until the holder commits.
+    row = transaction.fetch_one(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,79)) AS acquired",
+        (owner_id,),
     )
+    if row is None or not row.get("acquired"):
+        raise RepositoryConflictError("owner has a concurrent writer")
+
+
+_LOCK_CONTENTION_SQLSTATES: Final = frozenset({"55P03"})
+
+
+def _is_lock_contention(exc: BaseException) -> bool:
+    pgcode = getattr(exc, "pgcode", None)
+    if pgcode is not None:
+        return pgcode in _LOCK_CONTENTION_SQLSTATES
+    return "could not obtain lock" in str(exc).lower()
+
+
+def _fetch_page_for_write(
+    transaction: Transaction, owner_id: str, page_id: str
+) -> Mapping[str, Any] | None:
+    # NOWAIT keeps a contended page fence fail-fast: a concurrent uncommitted
+    # writer surfaces as RepositoryConflictError instead of blocking until the
+    # holder commits, which would deadlock fence tests and stall callers.
+    try:
+        return transaction.fetch_one(
+            f"SELECT {_PAGE_FIELDS} FROM atlas_page "
+            "WHERE owner_id=%s AND page_id=%s FOR UPDATE NOWAIT",
+            (owner_id, page_id),
+        )
+    except RepositoryError:
+        raise
+    except BaseException as exc:
+        if _is_lock_contention(exc):
+            raise RepositoryConflictError(
+                "atlas page is locked by a concurrent writer"
+            ) from exc
+        raise
 
 
 def _page_id(value: object) -> str:
@@ -446,11 +485,7 @@ class AtlasRepository:
         replayed = self._replay_request(transaction, owner, request, envelope)
         if replayed is not None:
             return replayed
-        existing = transaction.fetch_one(
-            f"SELECT {_PAGE_FIELDS} FROM atlas_page "
-            "WHERE owner_id=%s AND page_id=%s FOR UPDATE",
-            (owner, identity),
-        )
+        existing = _fetch_page_for_write(transaction, owner, identity)
         if existing is not None:
             raise RepositoryConflictError("atlas page identity already exists")
         if (
@@ -521,11 +556,7 @@ class AtlasRepository:
         replayed = self._replay_request(transaction, owner, request, envelope)
         if replayed is not None:
             return replayed
-        row = transaction.fetch_one(
-            f"SELECT {_PAGE_FIELDS} FROM atlas_page "
-            "WHERE owner_id=%s AND page_id=%s FOR UPDATE",
-            (owner, identity),
-        )
+        row = _fetch_page_for_write(transaction, owner, identity)
         if row is None:
             raise RepositoryNotFoundError("atlas page not found")
         head = _head(row)
@@ -594,11 +625,7 @@ class AtlasRepository:
         replayed = self._replay_request(transaction, owner, request, envelope)
         if replayed is not None:
             return replayed
-        row = transaction.fetch_one(
-            f"SELECT {_PAGE_FIELDS} FROM atlas_page "
-            "WHERE owner_id=%s AND page_id=%s FOR UPDATE",
-            (owner, identity),
-        )
+        row = _fetch_page_for_write(transaction, owner, identity)
         if row is None:
             raise RepositoryNotFoundError("atlas page not found")
         head = _head(row)

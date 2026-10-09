@@ -44,8 +44,8 @@ class FakeAtlasTransaction:
     def fetch_one(self, statement: str, parameters: object = ()) -> dict[str, Any] | None:
         self.calls.append(statement)
         params = tuple(parameters) if isinstance(parameters, (list, tuple)) else ()
-        if "pg_advisory_xact_lock" in statement:
-            return {"pg_advisory_xact_lock": None}
+        if "advisory_xact_lock" in statement:
+            return {"acquired": True}
         if "clock_timestamp()" in statement:
             return {"now_ms": self.now_ms}
         if "FROM atlas_revision" in statement and "request_id=%s" in statement:
@@ -299,7 +299,7 @@ def test_create_page_appends_revision_one_and_advances_head(
     assert result.revision.content_digest == _digest(b"ciphertext-1")
     assert result.revision.predecessor_digest is None
     assert result.revision.request_id == request
-    assert "pg_advisory_xact_lock" in "\n".join(tx.calls)
+    assert "pg_try_advisory_xact_lock" in "\n".join(tx.calls)
     assert "FOR UPDATE" in "\n".join(tx.calls)
 
 
@@ -785,6 +785,55 @@ def test_reads_reject_invalid_bounds(
         repository.get_page(tx, owner_id="owner-a", page_id=page, include_deleted="yes")  # type: ignore[arg-type]
 
 
+class _LockContentionError(Exception):
+    pgcode = "55P03"
+
+    def __init__(self) -> None:
+        super().__init__(
+            'could not obtain lock on relation "atlas_page"'
+        )
+
+
+def test_contended_page_fence_fails_fast_as_conflict(
+    repository: AtlasRepository,
+) -> None:
+    from tests.repositories._support import ScriptedTransaction
+
+    page = uid4()
+    scripted = ScriptedTransaction(
+        one=[{"acquired": True}, None, _LockContentionError()]
+    )
+    with pytest.raises(RepositoryConflictError, match="concurrent writer"):
+        repository.append_revision(
+            scripted,  # type: ignore[arg-type]
+            owner_id="owner-a",
+            page_id=page,
+            expected_head=1,
+            title="Raced",
+            ciphertext=b"r",
+            request_id=uid4(),
+        )
+    assert "FOR UPDATE NOWAIT" in scripted.fetch_sql()
+
+
+def test_concurrent_owner_writer_fails_fast_as_conflict(
+    repository: AtlasRepository,
+) -> None:
+    from tests.repositories._support import ScriptedTransaction
+
+    scripted = ScriptedTransaction(one=[{"acquired": False}])
+    with pytest.raises(RepositoryConflictError, match="concurrent writer"):
+        repository.append_revision(
+            scripted,  # type: ignore[arg-type]
+            owner_id="owner-a",
+            page_id=uid4(),
+            expected_head=1,
+            title="Raced",
+            ciphertext=b"r",
+            request_id=uid4(),
+        )
+
+
 def test_append_to_a_missing_page_is_not_found(
     repository: AtlasRepository, tx: FakeAtlasTransaction
 ) -> None:
@@ -922,7 +971,7 @@ def test_database_clock_corruption_fails_closed(
     page = uid4()
     scripted = ScriptedTransaction(
         one=[
-            None,
+            {"acquired": True},
             None,
             None,
             None,

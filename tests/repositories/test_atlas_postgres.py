@@ -190,23 +190,29 @@ def test_postgres_revisions_are_immutable(atlas_db, repository) -> None:
     with atlas_db.transaction() as tx:
         created = _create(repository, tx)
         page = created.head.page_id
-        with pytest.raises(psycopg2.errors.CheckViolation, match="immutable"):
-            tx.execute(
-                "UPDATE atlas_revision SET title=%s WHERE owner_id=%s AND page_id=%s",
-                ("mutated", "owner-a", page),
-            )
+        with pytest.raises(  # noqa: SIM117 -- savepoint must stay nested
+            psycopg2.errors.CheckViolation, match="immutable"
+        ):
+            with tx.savepoint("immutable_check"):
+                tx.execute(
+                    "UPDATE atlas_revision SET title=%s WHERE owner_id=%s AND page_id=%s",
+                    ("mutated", "owner-a", page),
+                )
 
 
 def test_postgres_unique_identities_hold_across_owners(atlas_db, repository) -> None:
     with atlas_db.transaction() as tx:
         created = _create(repository, tx, owner="owner-a", slug="shared-slug")
         page = created.head.page_id
-        with pytest.raises(Exception, match=r"(?i)(duplicate|unique|conflict)"):
-            tx.execute(
-                "INSERT INTO atlas_page(owner_id,page_id,slug,head_revision,deleted,"
-                "deleted_reason,created_at,updated_at) VALUES(%s,%s,%s,1,FALSE,NULL,1,1)",
-                ("owner-b", page, "other-slug"),
-            )
+        with pytest.raises(  # noqa: SIM117 -- savepoint must stay nested
+            Exception, match=r"(?i)(duplicate|unique|conflict)"
+        ):
+            with tx.savepoint("identity_clash"):
+                tx.execute(
+                    "INSERT INTO atlas_page(owner_id,page_id,slug,head_revision,deleted,"
+                    "deleted_reason,created_at,updated_at) VALUES(%s,%s,%s,1,FALSE,NULL,1,1)",
+                    ("owner-b", page, "other-slug"),
+                )
 
 
 def test_postgres_delete_then_history_still_verifies(atlas_db, repository) -> None:
@@ -261,6 +267,53 @@ def test_postgres_chain_report_detects_a_removed_middle_revision(
         assert report.contiguous is False
 
 
+def _prior_089_001_registry():
+    from astralplane.database import migrations as canonical
+
+    return canonical.MigrationRegistry(
+        tuple(
+            e
+            for e in canonical.MIGRATION_REGISTRY.migrations
+            if e.target_revision <= "089.001"
+        ),
+        current_schema_verifier=lambda tx: canonical._verify_predecessor_plane_schema(
+            tx, "089.001"
+        ),
+        current_schema_verifier_checksum=(
+            "155427334f10cae9a4fb0103b8ada8916762d7dfcb61baadf607bc2431c6fba1"
+        ),
+        predecessor_schema_verifier=canonical._verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=(
+            "a91bdcd9592cb719168e81e08b046c90068d26771d68eed5df72647170e3b5ad"
+        ),
+    )
+
+
+def _prior_089_001_runner(database):
+    from dataclasses import replace
+
+    from astralplane.database import migrations as canonical
+
+    registry = _prior_089_001_registry()
+    assert registry.digest != canonical.MIGRATION_REGISTRY.digest
+    revision = replace(
+        canonical.CURRENT_DATA_PLANE_REVISION,
+        schema_revision="089.001",
+        migration_digest=registry.digest,
+        read_compatible_from=tuple(
+            r
+            for r in canonical.CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            if r < "089.001"
+        ),
+        accepted_predecessor_digests=tuple(
+            p
+            for p in canonical.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if p[0] < "089.001"
+        ),
+    )
+    return MigrationRunner(database, revision=revision, registry=registry)
+
+
 def test_postgres_089_002_edge_applies_once_and_repeats_as_noop(
     migrated_clone, postgres_administrator_dsn
 ) -> None:
@@ -284,18 +337,30 @@ def test_postgres_089_002_edge_applies_once_and_repeats_as_noop(
             database = PlaneDatabase(pool)
             first = BaselineMigrationRunner(
                 database,
-                MigrationRunner(
-                    database,
-                    revision=CURRENT_DATA_PLANE_REVISION,
-                    registry=MIGRATION_REGISTRY,
-                ),
+                _prior_089_001_runner(database),
             ).run(expected_revision="089.001")
             assert first.target_revision == "089.001"
             assert first.applied_steps[-1] == "astralplane-089-typesafe-credentials"
 
+            # The scratch 089.001 schema carries this test's truncated
+            # registry digest (historical verifier pins are not recoverable),
+            # so the edge runner accepts it for the 089.001 predecessor slot.
+            # Schema CONTENT is the genuine 089.001 migration output, and the
+            # structure verifier still pins the canonical 089.001 digest.
+            from dataclasses import replace
+
+            edge_revision = replace(
+                CURRENT_DATA_PLANE_REVISION,
+                accepted_predecessor_digests=tuple(
+                    ("089.001", _prior_089_001_registry().digest)
+                    if p[0] == "089.001"
+                    else p
+                    for p in CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+                ),
+            )
             edge = MigrationRunner(
                 database,
-                revision=CURRENT_DATA_PLANE_REVISION,
+                revision=edge_revision,
                 registry=MIGRATION_REGISTRY,
             ).run(expected_revision="089.002")
             assert edge.source_revision == "089.001"
