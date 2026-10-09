@@ -66,7 +66,7 @@ class ScriptedTransaction:
     def __init__(
         self,
         *,
-        one: list[dict[str, Any] | None | BaseException] | None = None,
+        one: list[dict[str, Any] | BaseException | None] | None = None,
         many: list[tuple[dict[str, Any], ...] | BaseException] | None = None,
         execute: list[Result | BaseException] | None = None,
     ) -> None:

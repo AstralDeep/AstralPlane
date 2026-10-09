@@ -164,17 +164,16 @@ def test_postgres_stale_second_writer_loses_while_first_commits(
                 ciphertext=b"first",
                 request_id=uid4(),
             )
-            with second_database.transaction() as second_tx:
-                with pytest.raises(RepositoryConflictError):
-                    repository.append_revision(
-                        second_tx,
-                        owner_id="owner-a",
-                        page_id=page,
-                        expected_head=1,
-                        title="Stale writer",
-                        ciphertext=b"stale",
-                        request_id=uid4(),
-                    )
+            with second_database.transaction() as second_tx, pytest.raises(RepositoryConflictError):
+                repository.append_revision(
+                    second_tx,
+                    owner_id="owner-a",
+                    page_id=page,
+                    expected_head=1,
+                    title="Stale writer",
+                    ciphertext=b"stale",
+                    request_id=uid4(),
+                )
     finally:
         second_connection.close()
 
@@ -202,7 +201,7 @@ def test_postgres_unique_identities_hold_across_owners(atlas_db, repository) -> 
     with atlas_db.transaction() as tx:
         created = _create(repository, tx, owner="owner-a", slug="shared-slug")
         page = created.head.page_id
-        with pytest.raises(Exception, match="(?i)(duplicate|unique|conflict)"):
+        with pytest.raises(Exception, match=r"(?i)(duplicate|unique|conflict)"):
             tx.execute(
                 "INSERT INTO atlas_page(owner_id,page_id,slug,head_revision,deleted,"
                 "deleted_reason,created_at,updated_at) VALUES(%s,%s,%s,1,FALSE,NULL,1,1)",

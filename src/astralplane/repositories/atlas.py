@@ -21,9 +21,9 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import Mapping
 
 from astralplane.contracts import Transaction
 from astralplane.repositories import (
@@ -665,7 +665,11 @@ class AtlasRepository:
         if any(type(item) is not int for item in observed):
             raise RepositoryDataError("persisted atlas revision number is unsupported")
         contiguous = observed == tuple(range(1, head_revision + 1))
-        matches = bool(observed) and observed[-1] == head_revision and len(observed) == head_revision
+        matches = (
+            bool(observed)
+            and observed[-1] == head_revision
+            and len(observed) == head_revision
+        )
         return AtlasChainReport(
             owner_id=owner,
             page_id=identity,

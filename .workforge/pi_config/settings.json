@@ -1,0 +1,14 @@
+{
+  "retry": {
+    "enabled": false,
+    "maxRetries": 0,
+    "baseDelayMs": 5000,
+    "maxDelayMs": 60000,
+    "retryWindowMs": 0,
+    "provider": {
+      "timeoutMs": 300000,
+      "maxRetries": 2,
+      "maxRetryDelayMs": 60000
+    }
+  }
+}

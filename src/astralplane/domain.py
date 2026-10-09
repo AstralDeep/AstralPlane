@@ -14,7 +14,7 @@ from typing import TypeAlias
 
 from astralplane.errors import DomainValidationError
 
-DomainScalar: TypeAlias = None | bool | int | float | str
+DomainScalar: TypeAlias = bool | int | float | str | None
 DomainValue: TypeAlias = DomainScalar | tuple["DomainValue", ...] | Mapping[str, "DomainValue"]
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@/-]{0,126}[A-Za-z0-9])?$")
