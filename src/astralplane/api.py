@@ -96,6 +96,15 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas import (
+    AtlasChainReport,
+    AtlasPageHead,
+    AtlasPageListing,
+    AtlasRepository,
+    AtlasRevisionHistory,
+    AtlasRevisionRecord,
+    AtlasWriteResult,
+)
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
@@ -249,6 +258,10 @@ def create_attachment_materialization_coordinator(
     )
 
 
+def create_atlas_repository() -> AtlasRepository:
+    return AtlasRepository()
+
+
 def create_attachment_parser_repository() -> AttachmentParserRepository:
     return AttachmentParserRepository()
 
@@ -384,6 +397,7 @@ class RepositoryCatalog:
     history: HistoryRepository
     workspaces: WorkspaceRepository
     artifacts: ArtifactRepository
+    atlas: AtlasRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
     knowledge: KnowledgeRepository
@@ -415,6 +429,7 @@ class RepositoryCatalog:
                 "agent_management": self.agent_management,
                 "agents": self.agents,
                 "artifacts": self.artifacts,
+                "atlas": self.atlas,
                 "attachment_parsers": self.attachment_parsers,
                 "audit": self.audit,
                 "audit_retention": self.audit_retention,
@@ -481,6 +496,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         artifacts=create_artifact_repository(),
+        atlas=create_atlas_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
         knowledge=create_knowledge_repository(),
@@ -716,6 +732,13 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasChainReport",
+    "AtlasPageHead",
+    "AtlasPageListing",
+    "AtlasRepository",
+    "AtlasRevisionHistory",
+    "AtlasRevisionRecord",
+    "AtlasWriteResult",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",
@@ -758,6 +781,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",
