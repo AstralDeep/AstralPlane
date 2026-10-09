@@ -6,6 +6,7 @@ paths they record, and fail-closed refusal of bad base SHAs and malformed or mis
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import os
 import subprocess
@@ -28,6 +29,11 @@ GIT_ENVIRONMENT = {
     "GIT_COMMITTER_EMAIL": "author@example.test",
 }
 CI_OPTIONS = ("--diff-range-notation", "..", "--ignore-staged", "--ignore-unstaged")
+
+
+def _require_diff_cover() -> None:
+    if importlib.util.find_spec("diff_cover") is None:
+        pytest.skip("diff-cover is required for changed-coverage report tests")
 MODULE = "package/module.py"
 BASE_MODULE = "first = 1\nsecond = 2\n"
 EXTENDED_MODULE = BASE_MODULE + "".join(f"value_{line} = {line}\n" for line in range(3, 13))
@@ -67,6 +73,7 @@ class Repository:
     def diff_cover(
         self, hits: dict[int, int], base: str, options: tuple[str, ...] = CI_OPTIONS
     ) -> Path:
+        _require_diff_cover()
         lines = "".join(f'<line number="{line}" hits="{count}"/>' for line, count in hits.items())
         coverage = self.root.parent / "coverage.xml"
         coverage.write_text(
