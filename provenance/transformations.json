@@ -771,7 +771,7 @@
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "7f712f43c0211476a477198880767bcc3af8487ad54ec897d050fad92a04926d"
+          "sha256": "01feb6798f11cd8d0246fd10b4b41e43ff3a3d1dd4a1597eb6a15f30dd4ac441"
         },
         {
           "path": "tests/test_sql_parameters.py",

@@ -426,7 +426,7 @@ def test_work_created_discriminator_and_peek_preselected_then_queued():
         work.configure(tx, configs)
         work.bind_configs(configs)
         request = OperationRequest(
-            operation_kind="stop-test",
+            operation_kind="stop_test",
             admission_class=AdmissionClass.INTERACTIVE,
             owner=OperationOwner(OwnerScope.USER, "stop-owner", None),
             submission_id=uuid4(),

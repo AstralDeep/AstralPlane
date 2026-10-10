@@ -828,7 +828,7 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     )
     assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.003"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "e88f322be6908b738f6854d559e8193ad94a993baf0a967eef601d0e727771c3"
+        "3441e750601f9b78fa7057d36e0b0c51bed6a912450baca6a30db7aa33fcae22"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (
