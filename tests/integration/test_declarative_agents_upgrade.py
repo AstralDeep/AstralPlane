@@ -214,6 +214,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

@@ -290,6 +290,7 @@ class AcceptedAdmission:
     state_revision: int
     queue_position: int | None
     queue_deadline_at: datetime | None
+    created: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -911,7 +912,7 @@ class WorkAdmissionRepository:
         return int(row["queue_position"]) if row is not None else None
 
     def _accepted(
-        self, cursor: _StatementSession, operation: OperationRecord
+        self, cursor: _StatementSession, operation: OperationRecord, *, created: bool = False
     ) -> AcceptedAdmission:
         return AcceptedAdmission(
             accepted=True,
@@ -920,6 +921,7 @@ class WorkAdmissionRepository:
             state_revision=operation.state_revision,
             queue_position=self._queue_position(cursor, operation),
             queue_deadline_at=operation.queue_deadline_at,
+            created=created,
         )
 
     @staticmethod
@@ -1260,7 +1262,7 @@ class WorkAdmissionRepository:
             retention=retention,
             operation_id=operation_id,
         )
-        return self._accepted(cursor, self._operation_from_row(row))
+        return self._accepted(cursor, self._operation_from_row(row), created=True)
 
     @staticmethod
     def _expire_queued_locked(
@@ -1379,6 +1381,41 @@ class WorkAdmissionRepository:
                 execution_lease_token=execution_token,
             ),
         )
+
+    def peek_next(
+        self, transaction: Transaction, class_name: AdmissionClass
+    ) -> OperationRecord | None:
+        class_name = _validated_class(class_name)
+        cursor = _StatementSession(transaction)
+        cursor.execute(
+            """
+            SELECT operation.*
+            FROM operation_record AS operation
+            JOIN operation_admission_slot AS marker
+              ON marker.operation_id = operation.operation_id
+             AND marker.class_name = operation.admission_class
+             AND marker.lease_token = operation.execution_lease_token
+            WHERE operation.admission_class = %s
+              AND operation.state = 'running'
+              AND operation.cancel_requested_at IS NULL
+            ORDER BY operation.accepted_at, operation.operation_id
+            LIMIT 1
+            """,
+            (class_name.value,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            cursor.execute(
+                """
+                SELECT * FROM operation_record
+                WHERE admission_class = %s AND state = 'queued'
+                ORDER BY accepted_at, operation_id
+                LIMIT 1
+                """,
+                (class_name.value,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else self._operation_from_row(row)
 
     def claim_next(
         self,

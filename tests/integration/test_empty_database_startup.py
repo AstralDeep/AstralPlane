@@ -10,7 +10,7 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -343,6 +343,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -628,6 +629,7 @@ def test_two_starter_migration_race_converges_once(
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
     )
     connections = [
         connect_fixture_database(database_url),
@@ -956,6 +958,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
     )
 
     cursor = fixture.connection.cursor()
@@ -1161,7 +1164,8 @@ def test_work_admission_real_postgresql_owner_replay_fence_and_rollback(
             retention=timedelta(days=1),
             slot_lease=timedelta(seconds=30),
         )
-    assert replay == accepted
+    assert accepted.created is True and replay.created is False
+    assert replay == replace(accepted, created=False)
 
     with (
         fixture.database.transaction() as transaction,

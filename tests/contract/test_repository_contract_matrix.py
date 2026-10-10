@@ -158,6 +158,10 @@ def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.stop_epochs.get(transaction, owner_id=_OWNER)
+
+
 def _offline_grants(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.offline_grants.get_grant(
         transaction,
@@ -797,6 +801,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryDataError"),
     ),
     RepositoryContract(
+        "stop_epochs",
+        api.create_stop_epoch_repository,
+        "src/astralplane/repositories/stop_epochs.py",
+        _stop_epochs,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "revision = %s", "epoch = %s"),
+        ("ON CONFLICT", "replay changed immutable"),
+        None,
+        ("RepositoryConflictError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "tool_policy_state",
         api.create_tool_policy_state_repository,
         "src/astralplane/repositories/tool_policy.py",
@@ -1142,6 +1158,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_share_grants:test_create_accepts_exact_digest_replay_after_open",
         "tests.repositories.test_share_grants:test_record_open_rechecks_digest_revocation_and_expiry_atomically",
         "tests.repositories.test_share_grants:test_record_open_rechecks_digest_revocation_and_expiry_atomically",
+    ),
+    BehavioralEvidence(
+        "stop_epochs",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_owner_isolation",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_exact_replay",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_first_engagement_race",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_caller_failure_rolls_back",
     ),
     BehavioralEvidence(
         "tool_policy_state",
