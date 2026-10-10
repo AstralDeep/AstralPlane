@@ -96,7 +96,8 @@ def test_stop_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema
         assert tx.fetch_all("SELECT * FROM peer_stop_acknowledgment") == ()
         assert tx.fetch_all("SELECT * FROM owner_stop_operation_epoch") == ()
     assert at_089_003(db).run(expected_revision="089.003").already_current
-    assert BaselineMigrationRunner(db, at_089_003(db)).run(expected_revision="089.003").already_current
+    runner_089_003 = BaselineMigrationRunner(db, at_089_003(db))
+    assert runner_089_003.run(expected_revision="089.003").already_current
     with pytest.raises(SchemaRevisionError):
         predecessor(db).run(expected_revision="089.002")
 

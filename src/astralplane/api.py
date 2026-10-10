@@ -100,6 +100,7 @@ from astralplane.repositories.attachment_parsers import AttachmentParserReposito
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
 from astralplane.repositories.chat_steps import ChatStepRepository
+from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
 from astralplane.repositories.credentials import CredentialRepository
 from astralplane.repositories.drafts import (
@@ -165,7 +166,6 @@ from astralplane.repositories.work_admission import (
     WorkAdmissionRepository,
 )
 from astralplane.repositories.workspaces import WorkspaceRepository
-from astralplane.repositories.completion_wake import CompletionWakeRepository
 
 
 def create_history_repository() -> HistoryRepository:

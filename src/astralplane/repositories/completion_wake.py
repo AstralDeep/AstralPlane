@@ -289,7 +289,7 @@ def accept_wake_receipt(
             return WakeReceipt(**dict(raced))
         raise RepositoryConflictError(
             "subscription revoked or fence moved during acceptance"
-        )
+        ) from None
     if getattr(result, "rowcount", 1) != 1:
         raise RepositoryConflictError(
             "subscription revoked or fence moved during acceptance"
