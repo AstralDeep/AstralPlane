@@ -30,21 +30,31 @@ compose ownership, audit, outbox, and authority writes into one atomic unit.
 ## Isolation and concurrency
 
 - Every ordinary read and write is scoped to the calling owner in the SQL predicate itself.
+- Activation and revocation require the caller's `expected_mesh_version` and
+  `expected_member_version`; activation uses member version `0` only for create-only intent.
+  Existing members need their exact current version, including intentional re-enrollment after
+  retirement or revocation. Confirmation also requires `expected_invitation_version` and the
+  host's `as_of` within the invitation window. Stale authority cannot reactivate a member.
+- Compound transitions take the mesh lock first and use a local savepoint, so caught conflicts
+  preserve the caller's other writes without consuming an epoch or partially confirming.
 - Epoch counters are allocated with `UPDATE mesh_record ... RETURNING` inside the caller's
-  transaction, so barrier-started concurrent activations and revocations receive distinct,
-  monotonic epochs without a second database.
-- Invitation consumption, expiry, and confirmation are single fenced statements keyed on state,
-  digest, and expiry; exactly one concurrent consumer or confirmer wins and every loser receives
+  transaction. Concurrent writes observing the same revision admit one winner; losers refresh
+  current records before a new host decision. Accepted writes receive distinct monotonic epochs.
+- Invitation consumption and expiry use fenced state transitions; confirmation additionally
+  validates current mesh/member/invitation versions and the issue/expiry window; exactly one concurrent consumer or confirmer wins and every loser receives
   a typed conflict (`mesh_invitation_expired`, `mesh_invitation_digest_mismatch`,
   `repository_conflict`) instead of silent success.
 - `bootstrap_mesh` creates the mesh and its first member atomically and replays idempotently;
-  concurrent bootstraps of the same mesh identity admit exactly one winner.
+  concurrent exact replays return the first member without advancing epochs. An existing mesh
+  cannot gain another bootstrap member; later enrollment uses explicit current-revision fences.
 - Transition fences (`record_version`, state predicates) raise typed conflicts on stale writes.
 
 ## Compatibility behavior
 
 The slice is purely additive over the `089.001` catalog: no existing table, column, or function
-changes, and no edge in this slice uses `IF NOT EXISTS`. Rollback is code-only: restore the prior
-Plane/Deep composition while leaving the schema and rows in place. Joint restore follows the
-`089.002` recovery section in [migration and recovery](migration-and-recovery.md); epoch counters
-are monotonic by design and are never rewritten.
+changes, and no edge in this slice uses `IF NOT EXISTS`. The owner/version repair changes only
+this unmerged repository API: its guarded DDL, schema revision, migration digest, and component
+pins stay unchanged. An older Plane binary cannot run against the newer schema. Recovery uses
+a qualified forward repair or the coordinated PostgreSQL/blob restore in the `089.002` section
+of [migration and recovery](migration-and-recovery.md), with the matching prior composition.
+Epoch counters are monotonic by design and are never rewritten.

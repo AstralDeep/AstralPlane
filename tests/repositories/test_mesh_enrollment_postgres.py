@@ -125,6 +125,10 @@ def test_member_activation_allocates_monotonic_epochs_and_reactivates():
                 member_id=uid(),
                 member_kind="agent",
                 display_label="synthetic agent",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=0,
             )
             assert second.membership_epoch == member_record.membership_epoch + 1
             retired = repo.retire_member(
@@ -149,6 +153,12 @@ def test_member_activation_allocates_monotonic_epochs_and_reactivates():
                 mesh_id=mesh,
                 member_id=second.member_id,
                 member_kind="agent",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=repo.get_member(
+                    tx, owner_id=owner, mesh_id=mesh, member_id=second.member_id
+                ).record_version,
             )
             assert reactivated.member_status == "active"
             assert reactivated.membership_epoch > second.membership_epoch
@@ -173,6 +183,8 @@ def test_member_activation_allocates_monotonic_epochs_and_reactivates():
                     mesh_id=mesh,
                     member_id=uid(),
                     member_kind="device",
+                    expected_mesh_version=1,
+                    expected_member_version=0,
                 )
     finally:
         next(fixture, None)
@@ -258,6 +270,18 @@ def test_invitation_lifecycle_is_atomic_and_single_use():
                 owner_id=owner,
                 invitation_id=invitation.invitation_id,
                 member_id=uid(),
+                expected_invitation_version=repo.get_invitation(
+                    tx, owner_id=owner, invitation_id=invitation.invitation_id
+                ).record_version,
+                expected_mesh_version=repo.get_mesh(
+                    tx,
+                    owner_id=owner,
+                    mesh_id=repo.get_invitation(
+                        tx, owner_id=owner, invitation_id=invitation.invitation_id
+                    ).mesh_id,
+                ).record_version,
+                expected_member_version=0,
+                as_of=ISSUED + 10,
             )
             assert confirmed.invitation_state == "confirmed"
             assert member_record.member_kind == "device"
@@ -269,10 +293,25 @@ def test_invitation_lifecycle_is_atomic_and_single_use():
                     owner_id=owner,
                     invitation_id=invitation.invitation_id,
                     member_id=uid(),
+                    expected_invitation_version=repo.get_invitation(
+                        tx, owner_id=owner, invitation_id=invitation.invitation_id
+                    ).record_version,
+                    expected_mesh_version=repo.get_mesh(
+                        tx,
+                        owner_id=owner,
+                        mesh_id=repo.get_invitation(
+                            tx, owner_id=owner, invitation_id=invitation.invitation_id
+                        ).mesh_id,
+                    ).record_version,
+                    expected_member_version=0,
+                    as_of=ISSUED + 10,
                 )
-            assert repo.get_invitation(
-                tx, owner_id=owner, invitation_id=invitation.invitation_id
-            ).invitation_state == "confirmed"
+            assert (
+                repo.get_invitation(
+                    tx, owner_id=owner, invitation_id=invitation.invitation_id
+                ).invitation_state
+                == "confirmed"
+            )
     finally:
         next(fixture, None)
 
@@ -313,6 +352,18 @@ def test_pending_invitations_can_expire_or_be_revoked_but_not_confirmed():
                     owner_id=owner,
                     invitation_id=expiring.invitation_id,
                     member_id=uid(),
+                    expected_invitation_version=repo.get_invitation(
+                        tx, owner_id=owner, invitation_id=expiring.invitation_id
+                    ).record_version,
+                    expected_mesh_version=repo.get_mesh(
+                        tx,
+                        owner_id=owner,
+                        mesh_id=repo.get_invitation(
+                            tx, owner_id=owner, invitation_id=expiring.invitation_id
+                        ).mesh_id,
+                    ).record_version,
+                    expected_member_version=0,
+                    as_of=ISSUED + 10,
                 )
             revoked = repo.issue_invitation(
                 tx,
@@ -406,8 +457,7 @@ def test_concurrent_invitation_consumption_admits_exactly_one():
             ),
         )
         states = sorted(
-            "won" if not isinstance(outcome, BaseException) else "lost"
-            for outcome in outcomes
+            "won" if not isinstance(outcome, BaseException) else "lost" for outcome in outcomes
         )
         assert states == ["lost", "won"]
         with db.transaction() as tx:
@@ -415,43 +465,50 @@ def test_concurrent_invitation_consumption_admits_exactly_one():
                 tx, owner_id=owner, invitation_id=invitation_id
             )
             assert final.invitation_state == "consumed"
-            members = MeshEnrollmentRepository().list_members(
-                tx, owner_id=owner, mesh_id=mesh
-            )
+            members = MeshEnrollmentRepository().list_members(tx, owner_id=owner, mesh_id=mesh)
             assert len(members) == 1
     finally:
         next(fixture, None)
 
 
-def test_concurrent_activations_allocates_distinct_monotonic_epochs():
+def test_concurrent_activation_rejects_stale_revision_and_refreshes_monotonic_epochs():
     fixture = standalone_database()
     db = next(fixture)
     try:
         with db.transaction() as tx:
-            _, owner, mesh, _, _ = bootstrap(tx)
+            repo, owner, mesh, initial, _ = bootstrap(tx)
         operations = tuple(
-            (
-                lambda tx, index=index: MeshEnrollmentRepository().activate_member(
-                    tx,
-                    owner_id=owner,
-                    mesh_id=mesh,
-                    member_id=f"racer-{index}",
-                    member_kind="device",
-                )
+            lambda tx, index=index: repo.activate_member(
+                tx,
+                owner_id=owner,
+                mesh_id=mesh,
+                member_id=f"racer-{index}",
+                member_kind="device",
+                expected_mesh_version=initial.record_version,
+                expected_member_version=0,
             )
             for index in range(3)
         )
         outcomes = parallel_transactions(db, operations)
-        epochs = sorted(outcome.membership_epoch for outcome in outcomes)
-        assert len(set(epochs)) == 3
+        assert sum(not isinstance(value, BaseException) for value in outcomes) == 1
+        assert sum(isinstance(value, RepositoryConflictError) for value in outcomes) == 2
         with db.transaction() as tx:
-            mesh_record = MeshEnrollmentRepository().get_mesh(tx, owner_id=owner, mesh_id=mesh)
-            assert mesh_record.membership_epoch == max(epochs)
-            members = MeshEnrollmentRepository().list_members(
-                tx, owner_id=owner, mesh_id=mesh
-            )
-            assert {item.member_id for item in members if item.member_id.startswith("racer-")}
-            assert len([item for item in members if item.member_id.startswith("racer-")]) == 3
+            assert repo.get_mesh(tx, owner_id=owner, mesh_id=mesh).membership_epoch == 2
+            for index, outcome in enumerate(outcomes):
+                if isinstance(outcome, RepositoryConflictError):
+                    current = repo.get_mesh(tx, owner_id=owner, mesh_id=mesh)
+                    repo.activate_member(
+                        tx,
+                        owner_id=owner,
+                        mesh_id=mesh,
+                        member_id=f"racer-{index}",
+                        member_kind="device",
+                        expected_mesh_version=current.record_version,
+                        expected_member_version=0,
+                    )
+            members = repo.list_members(tx, owner_id=owner, mesh_id=mesh)
+            assert sorted(value.membership_epoch for value in members) == [1, 2, 3, 4]
+            assert repo.get_mesh(tx, owner_id=owner, mesh_id=mesh).record_version == 4
     finally:
         next(fixture, None)
 
@@ -539,6 +596,10 @@ def test_public_identity_binds_only_active_members_and_replays_exactly():
                 mesh_id=mesh,
                 member_id=uid(),
                 member_kind="agent",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=0,
             )
             bound = repo.bind_public_identity(
                 tx,
@@ -557,6 +618,12 @@ def test_public_identity_binds_only_active_members_and_replays_exactly():
                 member_id=replacement.member_id,
                 revocation_id=uid(),
                 reason="rotate off the mesh",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=repo.get_member(
+                    tx, owner_id=owner, mesh_id=mesh, member_id=replacement.member_id
+                ).record_version,
             )
             with pytest.raises(RepositoryConflictError):
                 repo.bind_public_identity(
@@ -592,6 +659,10 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                 mesh_id=mesh,
                 member_id=uid(),
                 member_kind="device",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=0,
             )
             second_member = repo.activate_member(
                 tx,
@@ -599,6 +670,10 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                 mesh_id=mesh,
                 member_id=uid(),
                 member_kind="device",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=0,
             )
             revoked, record = repo.revoke_member(
                 tx,
@@ -607,6 +682,12 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                 member_id=first_member.member_id,
                 revocation_id=uid(),
                 reason="stolen device",
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=repo.get_member(
+                    tx, owner_id=owner, mesh_id=mesh, member_id=first_member.member_id
+                ).record_version,
             )
             assert revoked.member_status == "revoked"
             assert record.revocation_epoch == 1
@@ -618,6 +699,12 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                     mesh_id=mesh,
                     member_id=first_member.member_id,
                     revocation_id=uid(),
+                    expected_mesh_version=repo.get_mesh(
+                        tx, owner_id=owner, mesh_id=mesh
+                    ).record_version,
+                    expected_member_version=repo.get_member(
+                        tx, owner_id=owner, mesh_id=mesh, member_id=first_member.member_id
+                    ).record_version,
                 )
             _, second_record = repo.revoke_member(
                 tx,
@@ -625,6 +712,12 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                 mesh_id=mesh,
                 member_id=second_member.member_id,
                 revocation_id=uid(),
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=repo.get_member(
+                    tx, owner_id=owner, mesh_id=mesh, member_id=second_member.member_id
+                ).record_version,
             )
             assert second_record.revocation_epoch > record.revocation_epoch
             _, bootstrap_record = repo.revoke_member(
@@ -633,6 +726,12 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                 mesh_id=mesh,
                 member_id=member_record.member_id,
                 revocation_id=uid(),
+                expected_mesh_version=repo.get_mesh(
+                    tx, owner_id=owner, mesh_id=mesh
+                ).record_version,
+                expected_member_version=repo.get_member(
+                    tx, owner_id=owner, mesh_id=mesh, member_id=member_record.member_id
+                ).record_version,
             )
             assert bootstrap_record.revocation_epoch > second_record.revocation_epoch
             records = repo.list_revocations(tx, owner_id=owner, mesh_id=mesh)
@@ -648,6 +747,8 @@ def test_revocation_allocates_monotonic_epochs_and_stays_visible():
                     mesh_id=mesh,
                     member_id=member_record.member_id,
                     revocation_id=uid(),
+                    expected_mesh_version=1,
+                    expected_member_version=1,
                 )
     finally:
         next(fixture, None)
@@ -802,6 +903,10 @@ def test_invalid_enrollment_inputs_fail_closed():
                     mesh_id=mesh,
                     member_id=uid(),
                     member_kind="robot",
+                    expected_mesh_version=repo.get_mesh(
+                        tx, owner_id=owner, mesh_id=mesh
+                    ).record_version,
+                    expected_member_version=0,
                 )
             with pytest.raises(RepositoryValidationError):
                 repo.issue_invitation(
@@ -854,6 +959,10 @@ def test_invalid_enrollment_inputs_fail_closed():
                     member_id=uid(),
                     revocation_id=uid(),
                     reason="x" * 600,
+                    expected_mesh_version=repo.get_mesh(
+                        tx, owner_id=owner, mesh_id=mesh
+                    ).record_version,
+                    expected_member_version=0,
                 )
     finally:
         next(fixture, None)

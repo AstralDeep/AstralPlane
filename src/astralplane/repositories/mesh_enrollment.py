@@ -26,6 +26,7 @@ _MAX_ID = 128
 _MAX_OWNER = 512
 _MEMBER_KINDS: Final = ("device", "agent", "companion")
 
+
 class MeshMemberKind(StrEnum):
     DEVICE = "device"
     AGENT = "agent"
@@ -340,92 +341,57 @@ class MeshEnrollmentRepository:
         member = _required_id(bootstrap_member_id, "bootstrap_member_id", maximum=_MAX_ID)
         kind = _kind(bootstrap_member_kind, "bootstrap_member_kind")
         label = _optional_text(bootstrap_label, "bootstrap_label", 256)
-        row = transaction.fetch_one(
-            f"""
-            INSERT INTO mesh_record (mesh_id, owner_id, display_name)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (mesh_id) DO NOTHING
-            RETURNING {_MESH_FIELDS}
-            """,
-            (mesh, owner, name),
-        )
-        if row is None:
-            existing = transaction.fetch_one(
-                f"SELECT {_MESH_FIELDS} FROM mesh_record WHERE mesh_id = %s",
-                (mesh,),
-            )
-            if existing is None or _row_value(existing, "owner_id") != owner:
-                raise RepositoryConflictError("mesh identity is bound to another owner")
-            if _row_value(existing, "display_name") != name:
-                raise RepositoryConflictError("mesh replay changed immutable semantics")
-            row = existing
-        mesh_record = _mesh(row)
-        existing_member = transaction.fetch_one(
-            f"""
-            SELECT {_MEMBER_FIELDS} FROM mesh_member
-            WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
-            """,
-            (mesh, member, owner),
-        )
-        if existing_member is not None:
-            if (
-                _row_value(existing_member, "member_kind") != kind
-                or _row_value(existing_member, "display_label") != label
-            ):
-                raise RepositoryConflictError("bootstrap member replay changed semantics")
-            return mesh_record, _member(existing_member)
-        epoch_row = transaction.fetch_one(
-            """
-            UPDATE mesh_record
-               SET membership_epoch = membership_epoch + 1,
-                   updated_at = now()
-             WHERE mesh_id = %s AND owner_id = %s
-            RETURNING membership_epoch
-            """,
-            (mesh, owner),
-        )
-        if epoch_row is None:  # pragma: no cover
-            raise RepositoryConflictError("mesh disappeared during bootstrap")
-        epoch = _row_value(epoch_row, "membership_epoch")
-        member_row = transaction.fetch_one(
-            f"""
-            INSERT INTO mesh_member (
-                mesh_id, member_id, owner_id, member_kind, display_label,
-                membership_epoch
-            )
-            SELECT %s, %s, %s, %s, %s, %s
-            WHERE EXISTS (
-                SELECT 1 FROM mesh_record
-                WHERE mesh_id = %s AND owner_id = %s
-            )
-            ON CONFLICT (mesh_id, member_id) DO NOTHING
-            RETURNING {_MEMBER_FIELDS}
-            """,
-            (mesh, member, owner, kind, label, epoch, mesh, owner),
-        )
-        if member_row is None:
-            winner = transaction.fetch_one(
+        with transaction.savepoint("mesh_bootstrap"):
+            row = transaction.fetch_one(
                 f"""
-                SELECT {_MEMBER_FIELDS} FROM mesh_member
-                WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
+                INSERT INTO mesh_record (mesh_id, owner_id, display_name, membership_epoch)
+                VALUES (%s, %s, %s, 1)
+                ON CONFLICT (mesh_id) DO NOTHING
+                RETURNING {_MESH_FIELDS}
                 """,
-                (mesh, member, owner),
+                (mesh, owner, name),
             )
-            if winner is None:
-                raise RepositoryConflictError("mesh disappeared during bootstrap")
-            if (
-                _row_value(winner, "member_kind") != kind
-                or _row_value(winner, "display_label") != label
-            ):
-                raise RepositoryConflictError("bootstrap member replay changed semantics")
-            member_row = winner
-        refreshed = transaction.fetch_one(
-            f"SELECT {_MESH_FIELDS} FROM mesh_record WHERE mesh_id = %s AND owner_id = %s",
-            (mesh, owner),
-        )
-        if refreshed is None:  # pragma: no cover
-            raise RepositoryConflictError("mesh disappeared during bootstrap")
-        return _mesh(refreshed), _member(member_row)
+            if row is None:
+                existing = transaction.fetch_one(
+                    f"SELECT {_MESH_FIELDS} FROM mesh_record "
+                    "WHERE mesh_id = %s AND owner_id = %s FOR UPDATE",
+                    (mesh, owner),
+                )
+                if existing is None:
+                    raise RepositoryConflictError("mesh identity is unavailable for this owner")
+                if _row_value(existing, "display_name") != name:
+                    raise RepositoryConflictError("mesh replay changed immutable semantics")
+                existing_member = transaction.fetch_one(
+                    f"SELECT {_MEMBER_FIELDS} FROM mesh_member "
+                    "WHERE mesh_id = %s AND member_id = %s AND owner_id = %s",
+                    (mesh, member, owner),
+                )
+                if (
+                    existing_member is None
+                    or _row_value(existing_member, "membership_epoch") != 1
+                    or _row_value(existing_member, "member_kind") != kind
+                    or _row_value(existing_member, "display_label") != label
+                ):
+                    raise RepositoryConflictError("bootstrap member replay changed semantics")
+                return _mesh(existing), _member(existing_member)
+            member_row = transaction.fetch_one(
+                f"""
+                INSERT INTO mesh_member (
+                    mesh_id, member_id, owner_id, member_kind, display_label, membership_epoch
+                )
+                SELECT %s, %s, %s, %s, %s, 1
+                WHERE EXISTS (
+                    SELECT 1 FROM mesh_record
+                    WHERE mesh_id = %s AND owner_id = %s AND record_version = 1
+                )
+                ON CONFLICT (mesh_id, member_id) DO NOTHING
+                RETURNING {_MEMBER_FIELDS}
+                """,
+                (mesh, member, owner, kind, label, mesh, owner),
+            )
+            if member_row is None:
+                raise RepositoryConflictError("bootstrap member identity is unavailable")
+            return _mesh(row), _member(member_row)
 
     def get_mesh(
         self,
@@ -502,8 +468,8 @@ class MeshEnrollmentRepository:
         mesh: str,
     ) -> RepositoryNotFoundError:
         row = transaction.fetch_one(
-            "SELECT owner_id FROM mesh_record WHERE mesh_id = %s",
-            (mesh,),
+            "SELECT owner_id FROM mesh_record WHERE mesh_id = %s AND owner_id = %s",
+            (mesh, owner),
         )
         if row is None or _row_value(row, "owner_id") != owner:
             return RepositoryNotFoundError("mesh not found for this owner")
@@ -517,6 +483,8 @@ class MeshEnrollmentRepository:
         mesh_id: str,
         member_id: str,
         member_kind: str,
+        expected_mesh_version: int,
+        expected_member_version: int,
         display_label: str | None = None,
     ) -> MeshMemberRecord:
         owner = _required_id(owner_id, "owner_id", maximum=_MAX_OWNER)
@@ -524,41 +492,88 @@ class MeshEnrollmentRepository:
         member = _required_id(member_id, "member_id", maximum=_MAX_ID)
         kind = _kind(member_kind, "member_kind")
         label = _optional_text(display_label, "display_label", 256)
-        epoch_row = transaction.fetch_one(
-            """
-            UPDATE mesh_record
-               SET membership_epoch = membership_epoch + 1,
-                   record_version = record_version + 1,
-                   updated_at = now()
-             WHERE mesh_id = %s AND owner_id = %s
-            RETURNING membership_epoch
-            """,
-            (mesh, owner),
-        )
-        if epoch_row is None:
-            raise RepositoryNotFoundError("mesh not found for this owner")
-        epoch = _row_value(epoch_row, "membership_epoch")
-        row = transaction.fetch_one(
-            f"""
-            INSERT INTO mesh_member (
-                mesh_id, member_id, owner_id, member_kind, display_label,
-                membership_epoch
+        mesh_version = _version(expected_mesh_version, "expected_mesh_version")
+        member_version = _non_negative_int(expected_member_version, "expected_member_version")
+        with transaction.savepoint("mesh_activation"):
+            self._lock_mesh(transaction, owner, mesh, mesh_version)
+            existing = transaction.fetch_one(
+                f"SELECT {_MEMBER_FIELDS} FROM mesh_member "
+                "WHERE mesh_id = %s AND member_id = %s AND owner_id = %s FOR UPDATE",
+                (mesh, member, owner),
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (mesh_id, member_id) DO UPDATE SET
-                member_kind = EXCLUDED.member_kind,
-                display_label = EXCLUDED.display_label,
-                membership_epoch = EXCLUDED.membership_epoch,
-                member_status = 'active',
-                record_version = mesh_member.record_version + 1,
-                updated_at = now()
-            RETURNING {_MEMBER_FIELDS}
-            """,
-            (mesh, member, owner, kind, label, epoch),
+            if existing is None and member_version != 0:
+                raise RepositoryConflictError("member record version fence rejected activation")
+            if existing is not None and _row_value(existing, "record_version") != member_version:
+                raise RepositoryConflictError("member record version fence rejected activation")
+            epoch_row = transaction.fetch_one(
+                """
+                UPDATE mesh_record
+                   SET membership_epoch = membership_epoch + 1,
+                       record_version = record_version + 1,
+                       updated_at = now()
+                 WHERE mesh_id = %s AND owner_id = %s AND record_version = %s
+                RETURNING membership_epoch
+                """,
+                (mesh, owner, mesh_version),
+            )
+            if epoch_row is None:
+                raise RepositoryConflictError("mesh record version fence rejected activation")
+            epoch = _row_value(epoch_row, "membership_epoch")
+            if existing is None:
+                row = transaction.fetch_one(
+                    f"""
+                    INSERT INTO mesh_member (
+                        mesh_id, member_id, owner_id, member_kind, display_label, membership_epoch
+                    )
+                    SELECT %s, %s, %s, %s, %s, %s
+                    WHERE %s = 0 AND EXISTS (
+                        SELECT 1 FROM mesh_record
+                        WHERE mesh_id = %s AND owner_id = %s AND record_version = %s
+                    )
+                    ON CONFLICT (mesh_id, member_id) DO NOTHING
+                    RETURNING {_MEMBER_FIELDS}
+                    """,
+                    (
+                        mesh,
+                        member,
+                        owner,
+                        kind,
+                        label,
+                        epoch,
+                        member_version,
+                        mesh,
+                        owner,
+                        mesh_version + 1,
+                    ),
+                )
+            else:
+                row = transaction.fetch_one(
+                    f"""
+                    UPDATE mesh_member
+                       SET member_kind = %s, display_label = %s, membership_epoch = %s,
+                           member_status = 'active', record_version = record_version + 1,
+                           updated_at = now()
+                     WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
+                       AND record_version = %s
+                    RETURNING {_MEMBER_FIELDS}
+                    """,
+                    (kind, label, epoch, mesh, member, owner, member_version),
+                )
+            if row is None:
+                raise RepositoryConflictError("member record version fence rejected activation")
+            return _member(row)
+
+    def _lock_mesh(
+        self, transaction: Transaction, owner: str, mesh: str, version: int
+    ) -> MeshRecord:
+        row = transaction.fetch_one(
+            f"SELECT {_MESH_FIELDS} FROM mesh_record "
+            "WHERE mesh_id = %s AND owner_id = %s AND record_version = %s FOR UPDATE",
+            (mesh, owner, version),
         )
         if row is None:
-            raise RepositoryConflictError("member activation lost its row")
-        return _member(row)
+            raise self._mesh_write_miss(transaction, owner, mesh)
+        return _mesh(row)
 
     def get_member(
         self,
@@ -642,8 +657,8 @@ class MeshEnrollmentRepository:
     ) -> RepositoryNotFoundError | RepositoryConflictError:
         row = transaction.fetch_one(
             "SELECT owner_id, member_status FROM mesh_member "
-            "WHERE mesh_id = %s AND member_id = %s",
-            (mesh, member),
+            "WHERE mesh_id = %s AND member_id = %s AND owner_id = %s",
+            (mesh, member, owner),
         )
         if row is None or _row_value(row, "owner_id") != owner:
             return RepositoryNotFoundError("member not found for this owner")
@@ -659,6 +674,8 @@ class MeshEnrollmentRepository:
         mesh_id: str,
         member_id: str,
         revocation_id: str,
+        expected_mesh_version: int,
+        expected_member_version: int,
         reason: str | None = None,
     ) -> tuple[MeshMemberRecord, MeshMemberRevocationRecord]:
         owner = _required_id(owner_id, "owner_id", maximum=_MAX_OWNER)
@@ -666,59 +683,79 @@ class MeshEnrollmentRepository:
         member = _required_id(member_id, "member_id", maximum=_MAX_ID)
         revocation = _required_id(revocation_id, "revocation_id", maximum=_MAX_ID)
         bounded_reason = _optional_text(reason, "reason", 512)
-        locked = transaction.fetch_one(
-            """
-            SELECT member_status FROM mesh_member
-            WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
-            FOR UPDATE
-            """,
-            (mesh, member, owner),
-        )
-        if locked is None:
-            raise RepositoryNotFoundError("member not found for this owner")
-        if _row_value(locked, "member_status") == "revoked":
-            raise RepositoryConflictError("member is already revoked")
-        epoch_row = transaction.fetch_one(
-            """
-            UPDATE mesh_record
-               SET revocation_epoch = revocation_epoch + 1,
-                   record_version = record_version + 1,
-                   updated_at = now()
-             WHERE mesh_id = %s AND owner_id = %s
-            RETURNING revocation_epoch
-            """,
-            (mesh, owner),
-        )
-        if epoch_row is None:
-            raise RepositoryNotFoundError("mesh not found for this owner")
-        epoch = _row_value(epoch_row, "revocation_epoch")
-        member_row = transaction.fetch_one(
-            f"""
-            UPDATE mesh_member
-               SET member_status = 'revoked',
-                   record_version = record_version + 1,
-                   updated_at = now()
-             WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
-               AND member_status <> 'revoked'
-            RETURNING {_MEMBER_FIELDS}
-            """,
-            (mesh, member, owner),
-        )
-        if member_row is None:
-            raise self._member_write_miss(transaction, owner, mesh, member)
-        revocation_row = transaction.fetch_one(
-            f"""
-            INSERT INTO mesh_member_revocation (
-                revocation_id, mesh_id, owner_id, member_id, revocation_epoch, reason
+        mesh_version = _version(expected_mesh_version, "expected_mesh_version")
+        member_version = _version(expected_member_version, "expected_member_version")
+        with transaction.savepoint("mesh_revocation"):
+            self._lock_mesh(transaction, owner, mesh, mesh_version)
+            locked = transaction.fetch_one(
+                "SELECT member_status, record_version FROM mesh_member "
+                "WHERE mesh_id = %s AND member_id = %s AND owner_id = %s FOR UPDATE",
+                (mesh, member, owner),
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING {_REVOCATION_FIELDS}
-            """,
-            (revocation, mesh, owner, member, epoch, bounded_reason),
-        )
-        if revocation_row is None:  # pragma: no cover
-            raise RepositoryConflictError("revocation record vanished within the transaction")
-        return _member(member_row), _revocation(revocation_row)
+            if locked is None:
+                raise RepositoryNotFoundError("member not found for this owner")
+            if (
+                _row_value(locked, "member_status") == "revoked"
+                or _row_value(locked, "record_version") != member_version
+            ):
+                raise RepositoryConflictError("member state or version fence rejected revocation")
+            epoch_row = transaction.fetch_one(
+                """
+                UPDATE mesh_record
+                   SET revocation_epoch = revocation_epoch + 1,
+                       record_version = record_version + 1,
+                       updated_at = now()
+                 WHERE mesh_id = %s AND owner_id = %s AND record_version = %s
+                RETURNING revocation_epoch
+                """,
+                (mesh, owner, mesh_version),
+            )
+            if epoch_row is None:
+                raise RepositoryConflictError("mesh record version fence rejected revocation")
+            epoch = _row_value(epoch_row, "revocation_epoch")
+            member_row = transaction.fetch_one(
+                f"""
+                UPDATE mesh_member
+                   SET member_status = 'revoked', record_version = record_version + 1,
+                       updated_at = now()
+                 WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
+                   AND record_version = %s AND member_status <> 'revoked'
+                RETURNING {_MEMBER_FIELDS}
+                """,
+                (mesh, member, owner, member_version),
+            )
+            if member_row is None:
+                raise RepositoryConflictError("member state or version fence rejected revocation")
+            revocation_row = transaction.fetch_one(
+                f"""
+                INSERT INTO mesh_member_revocation (
+                    revocation_id, mesh_id, owner_id, member_id, revocation_epoch, reason
+                )
+                SELECT %s, %s, %s, %s, %s, %s
+                WHERE EXISTS (
+                    SELECT 1 FROM mesh_member
+                    WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
+                      AND record_version = %s AND member_status = 'revoked'
+                )
+                ON CONFLICT (revocation_id) DO NOTHING
+                RETURNING {_REVOCATION_FIELDS}
+                """,
+                (
+                    revocation,
+                    mesh,
+                    owner,
+                    member,
+                    epoch,
+                    bounded_reason,
+                    mesh,
+                    member,
+                    owner,
+                    member_version + 1,
+                ),
+            )
+            if revocation_row is None:
+                raise RepositoryConflictError("revocation identity is unavailable")
+            return _member(member_row), _revocation(revocation_row)
 
     def list_revocations(
         self,
@@ -785,17 +822,35 @@ class MeshEnrollmentRepository:
                 identity_id, mesh_id, owner_id, member_id, algorithm, public_key,
                 key_fingerprint, activated_epoch
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s
+            WHERE EXISTS (
+                SELECT 1 FROM mesh_member
+                WHERE mesh_id = %s AND member_id = %s AND owner_id = %s
+                  AND member_status = 'active' AND record_version = %s
+            )
             ON CONFLICT (identity_id) DO NOTHING
             RETURNING {_IDENTITY_FIELDS}
             """,
-            (identity, mesh, owner, member, bounded_algorithm, bounded_key,
-             fingerprint, epoch),
+            (
+                identity,
+                mesh,
+                owner,
+                member,
+                bounded_algorithm,
+                bounded_key,
+                fingerprint,
+                epoch,
+                mesh,
+                member,
+                owner,
+                _row_value(locked, "record_version"),
+            ),
         )
         if row is None:
             existing = transaction.fetch_one(
-                f"SELECT {_IDENTITY_FIELDS} FROM mesh_public_identity WHERE identity_id = %s",
-                (identity,),
+                f"SELECT {_IDENTITY_FIELDS} FROM mesh_public_identity "
+                "WHERE identity_id = %s AND owner_id = %s",
+                (identity, owner),
             )
             if existing is None or _row_value(existing, "owner_id") != owner:
                 raise RepositoryConflictError("identity is bound to another owner")
@@ -808,7 +863,12 @@ class MeshEnrollmentRepository:
                 _row_value(existing, "activated_epoch"),
             )
             if immutable != (
-                mesh, member, bounded_algorithm, bounded_key, fingerprint, epoch,
+                mesh,
+                member,
+                bounded_algorithm,
+                bounded_key,
+                fingerprint,
+                epoch,
             ):
                 raise RepositoryConflictError("identity replay changed immutable semantics")
             row = existing
@@ -916,8 +976,8 @@ class MeshEnrollmentRepository:
     ) -> RepositoryNotFoundError | RepositoryConflictError:
         row = transaction.fetch_one(
             "SELECT owner_id, identity_state FROM mesh_public_identity "
-            "WHERE identity_id = %s",
-            (identity,),
+            "WHERE identity_id = %s AND owner_id = %s",
+            (identity, owner),
         )
         if row is None or _row_value(row, "owner_id") != owner:
             return RepositoryNotFoundError("identity not found for this owner")
@@ -950,17 +1010,21 @@ class MeshEnrollmentRepository:
                 challenge_id, mesh_id, owner_id, member_id, challenge_digest,
                 issued_at, expires_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            SELECT %s, %s, %s, %s, %s, %s, %s
+            WHERE EXISTS (
+                SELECT 1 FROM mesh_record WHERE mesh_id = %s AND owner_id = %s
+            )
             ON CONFLICT (challenge_id) DO NOTHING
             RETURNING {_CHALLENGE_FIELDS}
             """,
-            (challenge, mesh, owner, member, digest, issued, expires),
+            (challenge, mesh, owner, member, digest, issued, expires, mesh, owner),
         )
         if row is None:
+            self.get_mesh(transaction, owner_id=owner, mesh_id=mesh)
             existing = transaction.fetch_one(
                 f"SELECT {_CHALLENGE_FIELDS} FROM mesh_enrollment_challenge "
-                "WHERE challenge_id = %s",
-                (challenge,),
+                "WHERE challenge_id = %s AND owner_id = %s",
+                (challenge, owner),
             )
             if existing is None or _row_value(existing, "owner_id") != owner:
                 raise RepositoryConflictError("challenge identity is bound to another owner")
@@ -997,10 +1061,10 @@ class MeshEnrollmentRepository:
                    record_version = record_version + 1,
                    updated_at = now()
              WHERE challenge_id = %s AND owner_id = %s AND challenge_digest = %s
-               AND challenge_state = 'pending' AND expires_at > %s
+               AND challenge_state = 'pending' AND issued_at <= %s AND expires_at > %s
             RETURNING {_CHALLENGE_FIELDS}
             """,
-            (observed, challenge, owner, digest, observed),
+            (observed, challenge, owner, digest, observed, observed),
         )
         if row is None:
             raise self._challenge_miss(transaction, owner, challenge, digest)
@@ -1015,18 +1079,16 @@ class MeshEnrollmentRepository:
     ) -> RepositoryConflictError | RepositoryNotFoundError:
         row = transaction.fetch_one(
             "SELECT owner_id, challenge_digest, challenge_state, expires_at "
-            "FROM mesh_enrollment_challenge WHERE challenge_id = %s",
-            (challenge,),
+            "FROM mesh_enrollment_challenge WHERE challenge_id = %s AND owner_id = %s",
+            (challenge, owner),
         )
         if row is None or _row_value(row, "owner_id") != owner:
             return RepositoryNotFoundError("challenge not found for this owner")
         if digest is not None and _row_value(row, "challenge_digest") != digest:
             return MeshInvitationDigestMismatchError("challenge digest does not match")
         if _row_value(row, "challenge_state") == "pending":
-            return MeshChallengeExpiredError("challenge has expired")
-        return RepositoryConflictError(
-            f"challenge is already {_row_value(row, 'challenge_state')}"
-        )
+            return MeshChallengeExpiredError("challenge is outside its validity window")
+        return RepositoryConflictError(f"challenge is already {_row_value(row, 'challenge_state')}")
 
     def cancel_enrollment_challenge(
         self,
@@ -1103,17 +1165,21 @@ class MeshEnrollmentRepository:
                 invitation_id, mesh_id, owner_id, member_kind, member_label,
                 invitation_digest, issued_at, expires_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s
+            WHERE EXISTS (
+                SELECT 1 FROM mesh_record WHERE mesh_id = %s AND owner_id = %s
+            )
             ON CONFLICT (invitation_id) DO NOTHING
             RETURNING {_INVITATION_FIELDS}
             """,
-            (invitation, mesh, owner, kind, label, digest, issued, expires),
+            (invitation, mesh, owner, kind, label, digest, issued, expires, mesh, owner),
         )
         if row is None:
+            self.get_mesh(transaction, owner_id=owner, mesh_id=mesh)
             existing = transaction.fetch_one(
                 f"SELECT {_INVITATION_FIELDS} FROM mesh_enrollment_invitation "
-                "WHERE invitation_id = %s",
-                (invitation,),
+                "WHERE invitation_id = %s AND owner_id = %s",
+                (invitation, owner),
             )
             if existing is None or _row_value(existing, "owner_id") != owner:
                 raise RepositoryConflictError("invitation identity is bound to another owner")
@@ -1193,10 +1259,10 @@ class MeshEnrollmentRepository:
                    record_version = record_version + 1,
                    updated_at = now()
              WHERE invitation_id = %s AND owner_id = %s AND invitation_digest = %s
-               AND invitation_state = 'pending' AND expires_at > %s
+               AND invitation_state = 'pending' AND issued_at <= %s AND expires_at > %s
             RETURNING {_INVITATION_FIELDS}
             """,
-            (observed, invitation, owner, digest, observed),
+            (observed, invitation, owner, digest, observed, observed),
         )
         if row is None:
             raise self._invitation_miss(transaction, owner, invitation, digest)
@@ -1211,15 +1277,15 @@ class MeshEnrollmentRepository:
     ) -> RepositoryConflictError | RepositoryNotFoundError:
         row = transaction.fetch_one(
             "SELECT owner_id, invitation_digest, invitation_state, expires_at "
-            "FROM mesh_enrollment_invitation WHERE invitation_id = %s",
-            (invitation,),
+            "FROM mesh_enrollment_invitation WHERE invitation_id = %s AND owner_id = %s",
+            (invitation, owner),
         )
         if row is None or _row_value(row, "owner_id") != owner:
             return RepositoryNotFoundError("invitation not found for this owner")
         if digest is not None and _row_value(row, "invitation_digest") != digest:
             return MeshInvitationDigestMismatchError("invitation digest does not match")
         if _row_value(row, "invitation_state") == "pending":
-            return MeshInvitationExpiredError("invitation has expired")
+            return MeshInvitationExpiredError("invitation is outside its validity window")
         return RepositoryConflictError(
             f"invitation is already {_row_value(row, 'invitation_state')}"
         )
@@ -1283,33 +1349,57 @@ class MeshEnrollmentRepository:
         owner_id: str,
         invitation_id: str,
         member_id: str,
+        expected_invitation_version: int,
+        expected_mesh_version: int,
+        expected_member_version: int,
+        as_of,
         display_label: str | None = None,
     ) -> tuple[MeshEnrollmentInvitationRecord, MeshMemberRecord]:
         owner = _required_id(owner_id, "owner_id", maximum=_MAX_OWNER)
         invitation = _required_id(invitation_id, "invitation_id", maximum=_MAX_ID)
         member = _required_id(member_id, "member_id", maximum=_MAX_ID)
         label = _optional_text(display_label, "display_label", 256)
-        row = transaction.fetch_one(
-            f"""
-            UPDATE mesh_enrollment_invitation
-               SET invitation_state = 'confirmed',
-                   confirmed_at = EXTRACT(EPOCH FROM now())::bigint,
-                   record_version = record_version + 1,
-                   updated_at = now()
-             WHERE invitation_id = %s AND owner_id = %s AND invitation_state = 'consumed'
-            RETURNING {_INVITATION_FIELDS}
-            """,
-            (invitation, owner),
-        )
-        if row is None:
-            raise self._invitation_miss(transaction, owner, invitation, None)
-        confirmed = _invitation(row)
-        member_record = self.activate_member(
-            transaction,
-            owner_id=owner,
-            mesh_id=confirmed.mesh_id,
-            member_id=member,
-            member_kind=confirmed.member_kind,
-            display_label=label if label is not None else confirmed.member_label,
-        )
-        return confirmed, member_record
+        invitation_version = _version(expected_invitation_version, "expected_invitation_version")
+        mesh_version = _version(expected_mesh_version, "expected_mesh_version")
+        member_version = _non_negative_int(expected_member_version, "expected_member_version")
+        observed = _non_negative_int(as_of, "as_of")
+        current = self.get_invitation(transaction, owner_id=owner, invitation_id=invitation)
+        with transaction.savepoint("mesh_confirmation"):
+            self._lock_mesh(transaction, owner, current.mesh_id, mesh_version)
+            row = transaction.fetch_one(
+                f"""
+                UPDATE mesh_enrollment_invitation
+                   SET invitation_state = 'confirmed', confirmed_at = %s,
+                       record_version = record_version + 1, updated_at = now()
+                 WHERE invitation_id = %s AND owner_id = %s AND mesh_id = %s
+                   AND record_version = %s AND invitation_state = 'consumed'
+                   AND issued_at <= %s AND consumed_at <= %s AND expires_at > %s
+                RETURNING {_INVITATION_FIELDS}
+                """,
+                (
+                    observed,
+                    invitation,
+                    owner,
+                    current.mesh_id,
+                    invitation_version,
+                    observed,
+                    observed,
+                    observed,
+                ),
+            )
+            if row is None:
+                raise RepositoryConflictError(
+                    "invitation state, window or version fence rejected confirmation"
+                )
+            confirmed = _invitation(row)
+            member_record = self.activate_member(
+                transaction,
+                owner_id=owner,
+                mesh_id=confirmed.mesh_id,
+                member_id=member,
+                member_kind=confirmed.member_kind,
+                expected_mesh_version=mesh_version,
+                expected_member_version=member_version,
+                display_label=label if label is not None else confirmed.member_label,
+            )
+            return confirmed, member_record

@@ -266,8 +266,10 @@ AstralPlane. `mesh_enrollment_challenge` and `mesh_enrollment_invitation` store
 opaque SHA-256 digests of the possession secret and the invitation secret, never
 the secrets themselves, with host-supplied BIGINT issue/expiry windows. The
 invitation state machine (`pending` → `consumed` → `confirmed`, plus `expired`
-and `revoked`) is advanced by single fenced `UPDATE ... RETURNING` statements, so
-concurrent consumers or confirmations of the same invitation admit exactly one
+and `revoked`) uses fenced `UPDATE ... RETURNING` statements. Confirmation and
+member activation share a mesh-first lock and a savepoint, with current mesh,
+member, invitation and host-time fences; a losing transition leaves no partial
+confirmation or epoch advance. Concurrent consumers or confirmations admit one
 winner. `mesh_member_revocation` records each revocation with its own epoch and
 reason. Possession proof, IAM, QR/network handling, and admission policy remain
 with the host; the host computes every digest it stores.
