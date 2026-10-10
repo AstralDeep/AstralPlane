@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -697,7 +697,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.005", "088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.001")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
 
 
 def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_registry() -> None:
@@ -707,7 +707,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,16 +732,16 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.001"
-    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
+        "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('framework_credential')" in query_tables
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
-    assert set(accepted) >= {"088.006", "088.007"}
+    assert set(accepted) >= {"088.006", "088.007", "089.001"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.001")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
 
 
 def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registry() -> None:
@@ -751,7 +751,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     )
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
@@ -785,6 +785,65 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('user_typesafe_credential')" in query_tables
     assert "('user_data_sharing_acknowledgment')" in query_tables
+
+
+def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.mesh_schema import MESH_SCHEMA_STATEMENTS
+
+    edge = canonical.PLANE_SCHEMA_089_002_MIGRATION
+    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert edge.name == "astralplane-089-mesh-enrollment-records"
+    assert edge.source_revisions == ("089.001",)
+    assert edge.target_revision == "089.002"
+    assert edge.checksum == canonical._statements_checksum(MESH_SCHEMA_STATEMENTS)
+
+    ddl = "\n".join(MESH_SCHEMA_STATEMENTS)
+    for table in (
+        "mesh_record",
+        "mesh_member",
+        "mesh_public_identity",
+        "mesh_enrollment_challenge",
+        "mesh_enrollment_invitation",
+        "mesh_member_revocation",
+    ):
+        assert f"CREATE TABLE {table}" in ddl
+    assert "member_kind TEXT NOT NULL CHECK(member_kind IN ('device','agent','companion'))" in ddl
+    assert "membership_epoch BIGINT NOT NULL CHECK(membership_epoch >= 1)" in ddl
+    assert "key_fingerprint TEXT NOT NULL CHECK(key_fingerprint ~ '^[0-9a-f]{64}$')" in ddl
+    assert "REFERENCES mesh_member(mesh_id, member_id)" in ddl
+    assert "issued_at BIGINT NOT NULL" in ddl
+    assert "CHECK(expires_at > issued_at)" in ddl
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+
+    assert canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST == (
+        "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
+        "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
+        canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
+    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
+        "dc9d7ec5b8c5be483c16f89ce7d723410c402fb6f5dc8962663c53a41e7609b5"
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    for table in (
+        "mesh_record",
+        "mesh_member",
+        "mesh_public_identity",
+        "mesh_enrollment_challenge",
+        "mesh_enrollment_invitation",
+        "mesh_member_revocation",
+    ):
+        assert f"('{table}')" in query_tables
+    accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
+    assert set(accepted) >= {"088.008", "089.001"}
+    with pytest.raises(SchemaRevisionError):
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
 
 
 class _NoStructure:

@@ -65,7 +65,7 @@ def test_import_upgrades_through_normal_registry_and_preserves_records(
             )
             assert migrated["already_current"] is bool(attempt)
             assert migrated["migration_digest"] == MIGRATION_DIGEST
-            assert migrated["target_revision"] == "089.001"
+            assert migrated["target_revision"] == "089.002"
             assert migrated["product_reconciliation_completed"] is False
             assert _representative_snapshot(connection) == before
             assert verify_blob_fixture(blob_root) == blobs

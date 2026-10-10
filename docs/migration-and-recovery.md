@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -251,6 +251,46 @@ key resolution, the routing adapter's behavior, or the enforcement of
 acknowledgment before a credential save. Those are product concerns verified
 outside this repository.
 
+### `089.002` mesh enrollment records and recovery
+
+This additive edge requires the exact `089.001` registry and catalog. It adds
+eight independent objects and alters nothing that exists.
+
+`mesh_record` holds one owner's personal mesh with its bounded display name and
+the two monotonic epoch counters: `membership_epoch` for member activations and
+`revocation_epoch` for revocations. `mesh_member` stores each device, agent, or
+companion identity with the membership epoch it was activated at, its status,
+and a `record_version` used as a compare-and-set fence. `mesh_public_identity`
+stores only public key material plus its digest; private device keys never reach
+AstralPlane. `mesh_enrollment_challenge` and `mesh_enrollment_invitation` store
+opaque SHA-256 digests of the possession secret and the invitation secret, never
+the secrets themselves, with host-supplied BIGINT issue/expiry windows. The
+invitation state machine (`pending` → `consumed` → `confirmed`, plus `expired`
+and `revoked`) is advanced by single fenced `UPDATE ... RETURNING` statements, so
+concurrent consumers or confirmations of the same invitation admit exactly one
+winner. `mesh_member_revocation` records each revocation with its own epoch and
+reason. Possession proof, IAM, QR/network handling, and admission policy remain
+with the host; the host computes every digest it stores.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep the new tables and the exact
+`089.002` revision/digest intact. Epoch counters are monotonic by design and must
+never be rewritten. A matching qualified application may stop enrolling meshes
+through its governed product policy; doing so does not erase membership or
+revocation evidence. An `089.001` binary is not compatible merely because these
+tables are additive.
+
+Prefer a reviewed forward repair through the guarded migration registry. If the
+previous composition must be restored, close admission and quiesce every writer,
+then restore the verified pre-upgrade PostgreSQL backup and all paired durable
+roots together, with the exact prior application and unchanged credential/audit
+keys. Retire restored sessions through the governed recovery contract and
+reconcile uncertain effects before reopening admission. Rehearse this paired
+restore and re-upgrade on an isolated copy first. Never drop these tables,
+rewrite revision/digest markers, or execute ad-hoc downgrade SQL.
+
 ### `088.008` framework credentials and recovery
 
 This additive edge requires the exact `088.007` registry and catalog. It creates the owner-keyed
@@ -362,7 +402,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`088.008` must carry its own pinned historical registry digest. A current `089.001` marker and
+`089.001` must carry its own pinned historical registry digest. A current `089.002` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -465,8 +505,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, and `088.008` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.001` state must carry the exact current
+   `088.007`, `088.008`, and `089.001` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.002` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

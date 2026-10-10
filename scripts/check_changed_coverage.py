@@ -1,7 +1,8 @@
 """Turns diff-cover's JSON report for the committed range BASE_SHA..HEAD into the changed-line
 coverage decision that .github/workflows/ci.yml records for every change. It verifies both
-commits with git, fails closed on a malformed base SHA or a malformed or mismatched report, and
-prints and appends to the GitHub step summary a pass, a fail, or an explicit not-applicable outcome.
+commits with git, accepts only reports that provably measure exactly that committed range, fails
+closed on a malformed base SHA or a malformed or mismatched report, and prints and appends to the
+GitHub step summary a pass, a fail, or an explicit not-applicable outcome.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from typing import Any
 SUMMARY_ENVIRONMENT = "GITHUB_STEP_SUMMARY"
 COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 ZERO_SHA = "0" * 40
+COMMITTED_DIFF = "{base}..HEAD"
+WORKING_TREE_DIFF_SUFFIX = ", staged and unstaged changes"
 REPORT_FIELDS = (
     "diff_name",
     "src_stats",
@@ -150,6 +153,10 @@ def _git(repository: Path, *arguments: str) -> str:
     return completed.stdout
 
 
+def _has_uncommitted_changes(repository: Path) -> bool:
+    return _git(repository, "status", "--porcelain") != ""
+
+
 def resolve_comparison(repository: Path, base_sha: str) -> Comparison:
     if COMMIT_SHA.fullmatch(base_sha) is None or base_sha == ZERO_SHA:
         raise CoverageDecisionError(
@@ -206,7 +213,11 @@ def _measured_path(path: str, stats: object, changed: frozenset[str]) -> Measure
     return MeasuredPath(path, covered, uncovered)
 
 
-def load_report(path: Path, comparison: Comparison) -> tuple[MeasuredPath, ...]:
+def load_report(
+    path: Path,
+    comparison: Comparison,
+    repository: Path,
+) -> tuple[MeasuredPath, ...]:
     try:
         document = json.loads(path.read_bytes().decode("utf-8"))
     except (OSError, ValueError) as error:
@@ -215,11 +226,18 @@ def load_report(path: Path, comparison: Comparison) -> tuple[MeasuredPath, ...]:
         raise CoverageDecisionError(
             f"diff-cover report {path} must be an object with {', '.join(REPORT_FIELDS)}"
         )
-    expected_diff = f"{comparison.base_sha}..HEAD"
-    if document["diff_name"] != expected_diff:
+    expected_diff = COMMITTED_DIFF.format(base=comparison.base_sha)
+    working_tree_diff = f"{expected_diff}{WORKING_TREE_DIFF_SUFFIX}"
+    if document["diff_name"] not in (expected_diff, working_tree_diff):
         raise CoverageDecisionError(
             f"diff-cover compared {document['diff_name']!r}, not {expected_diff!r} "
             "with staged and unstaged changes ignored"
+        )
+    if document["diff_name"] == working_tree_diff and _has_uncommitted_changes(repository):
+        raise CoverageDecisionError(
+            f"diff-cover compared {working_tree_diff!r} while the repository has staged, "
+            "unstaged, or untracked changes, so the measured lines are not the committed "
+            "range alone; commit them or rerun diff-cover with --ignore-staged --ignore-unstaged"
         )
     stats = document["src_stats"]
     if not isinstance(stats, dict):
@@ -266,7 +284,9 @@ def main(argv: list[str] | None = None) -> int:
     summary = os.environ.get(SUMMARY_ENVIRONMENT) or None
     try:
         comparison = resolve_comparison(Path.cwd(), args.base_sha)
-        decision = Decision(comparison, args.fail_under, load_report(args.report, comparison))
+        decision = Decision(
+            comparison, args.fail_under, load_report(args.report, comparison, Path.cwd())
+        )
         print(json.dumps(decision.as_dict(), indent=2, sort_keys=True))
         _append_summary(summary, decision.markdown())
     except CoverageDecisionError as error:

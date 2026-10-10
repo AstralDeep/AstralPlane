@@ -128,6 +128,7 @@ from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
+from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -206,6 +207,10 @@ def create_credential_repository() -> CredentialRepository:
 
 def create_offline_grant_repository() -> OfflineGrantRepository:
     return OfflineGrantRepository()
+
+
+def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
+    return MeshEnrollmentRepository()
 
 
 def create_framework_credential_repository() -> FrameworkCredentialRepository:
@@ -392,6 +397,7 @@ class RepositoryCatalog:
     background_tasks: BackgroundTaskRepository
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
+    mesh_enrollment: MeshEnrollmentRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
     harness_cleanup: HarnessCleanupRepository
@@ -433,6 +439,7 @@ class RepositoryCatalog:
                 "identity": self.identity,
                 "knowledge": self.knowledge,
                 "maintenance": self.maintenance,
+                "mesh_enrollment": self.mesh_enrollment,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -489,6 +496,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         background_tasks=create_background_task_repository(),
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
+        mesh_enrollment=create_mesh_enrollment_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
         harness_cleanup=create_harness_cleanup_repository(),
