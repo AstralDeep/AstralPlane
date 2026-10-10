@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -235,25 +235,6 @@ TypeSafe routing through its governed product policy; doing so does not erase
 encrypted credentials or the durable data-sharing acknowledgment. An `088.008`
 binary is not compatible merely because these tables are additive.
 
-### `089.002` completion subscriptions and wake receipts
-
-This additive edge requires the exact `089.001` registry and catalog. It adds
-two independent owner-scoped tables and alters nothing that exists.
-
-`completion_subscription` binds a waiter operation to a source operation with a
-terminal condition and a source-revision fence. `wake_receipt` records exactly
-one acceptance per subscription idempotency key and points replays at the
-original receipt. The tables stand alone: no foreign keys into operation state
-and no writes into wait-state JSON, so subscriptions never smuggle data into
-current wait state and survive independent lifecycle changes.
-
-Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
-rollback checks described above. Failed DDL rolls back with registry metadata.
-
-**Recovery.** Once this transaction commits, keep both tables and the exact
-`089.002` revision/digest intact. An `089.001` binary is not compatible merely
-because these tables are additive.
-
 Prefer a reviewed forward repair through the guarded migration registry. If the
 previous composition must be restored, close admission and quiesce every writer,
 then restore the verified pre-upgrade PostgreSQL backup and all paired durable
@@ -269,6 +250,98 @@ Schema qualification does not establish the product's probe path, its encryption
 key resolution, the routing adapter's behavior, or the enforcement of
 acknowledgment before a credential save. Those are product concerns verified
 outside this repository.
+
+### `089.003` owner stop epochs and recovery
+
+The guarded `089.002 -> 089.003` edge requires predecessor registry digest
+`8570c65182f5c90f12319435f9b2614d6ebfff0d1404e4650df6f2bd34962565`
+and its full catalog. It adds neutral owner stop anchors/epochs and immutable
+peer acknowledgment rows plus immutable operation epoch bindings, without rewriting mesh, IAM, audit, operation, grant,
+credential, accounting or blob records. Current catalog digest is
+`3441e750601f9b78fa7057d36e0b0c51bed6a912450baca6a30db7aa33fcae22`.
+Partial DDL or stamp failure rolls back together; a repeat verifies the complete
+current catalog and performs no write. Unknown/same-name tables are refused.
+
+Quiesce host admission and writers, retain the matching old composition and
+verify a joint PostgreSQL/durable-root backup before adopting the new pin. Run
+the matched registry through normal host initialization; verify repeat startup,
+retained representative state and the new host stop/admission transactions
+before reopening. An old binary is not compatible merely because its rows
+remain present. Host authorization, audit, peer verification and control effects
+are independently qualified; schema completion does not establish them.
+
+On failure, preserve failed state and keep admission closed. Retry only from
+the exact qualified predecessor/current catalog, or restore the verified paired
+pre-upgrade database/durable roots and matching composition. Do not drop tables,
+alter revision markers or reset stop epochs to simulate downgrade. After a
+joint restore, explicitly retire restored sessions through the matching Plane
+recovery facade, restart all application caches, obtain fresh IAM authority and
+reconcile stop state before admission. Restored stop/receipt observations remain
+historical; the host must not claim that a remote peer has resumed from them.
+
+### `089.004` completion subscriptions and wake receipts
+
+This additive edge requires the exact `089.003` registry and catalog. It adds
+two independent owner-scoped tables and alters nothing that exists.
+
+`completion_subscription` binds a waiter operation to a source operation with a
+terminal condition and a source-revision fence. `wake_receipt` records exactly
+one acceptance per subscription idempotency key and points replays at the
+original receipt. The tables stand alone: no foreign keys into operation state
+and no writes into wait-state JSON, so subscriptions never smuggle data into
+current wait state and survive independent lifecycle changes. Ownership, live
+state, terminal coverage and the revision fence are enforced inside the
+mutation statements with rowcount checks, so an acceptance racing a revocation
+fails closed instead of slipping a receipt through.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.004` revision/digest intact. An `089.003` binary is not compatible merely
+because these tables are additive.
+
+### `089.002` mesh enrollment records and recovery
+
+This additive edge requires the exact `089.001` registry and catalog. It adds
+eight independent objects and alters nothing that exists.
+
+`mesh_record` holds one owner's personal mesh with its bounded display name and
+the two monotonic epoch counters: `membership_epoch` for member activations and
+`revocation_epoch` for revocations. `mesh_member` stores each device, agent, or
+companion identity with the membership epoch it was activated at, its status,
+and a `record_version` used as a compare-and-set fence. `mesh_public_identity`
+stores only public key material plus its digest; private device keys never reach
+AstralPlane. `mesh_enrollment_challenge` and `mesh_enrollment_invitation` store
+opaque SHA-256 digests of the possession secret and the invitation secret, never
+the secrets themselves, with host-supplied BIGINT issue/expiry windows. The
+invitation state machine (`pending` → `consumed` → `confirmed`, plus `expired`
+and `revoked`) uses fenced `UPDATE ... RETURNING` statements. Confirmation and
+member activation share a mesh-first lock and a savepoint, with current mesh,
+member, invitation and host-time fences; a losing transition leaves no partial
+confirmation or epoch advance. Concurrent consumers or confirmations admit one
+winner. `mesh_member_revocation` records each revocation with its own epoch and
+reason. Possession proof, IAM, QR/network handling, and admission policy remain
+with the host; the host computes every digest it stores.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep the new tables and the exact
+`089.002` revision/digest intact. Epoch counters are monotonic by design and must
+never be rewritten. A matching qualified application may stop enrolling meshes
+through its governed product policy; doing so does not erase membership or
+revocation evidence. An `089.001` binary is not compatible merely because these
+tables are additive.
+
+Prefer a reviewed forward repair through the guarded migration registry. If the
+previous composition must be restored, close admission and quiesce every writer,
+then restore the verified pre-upgrade PostgreSQL backup and all paired durable
+roots together, with the exact prior application and unchanged credential/audit
+keys. Retire restored sessions through the governed recovery contract and
+reconcile uncertain effects before reopening admission. Rehearse this paired
+restore and re-upgrade on an isolated copy first. Never drop these tables,
+rewrite revision/digest markers, or execute ad-hoc downgrade SQL.
 
 ### `088.008` framework credentials and recovery
 
@@ -381,7 +454,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.001` must carry its own pinned historical registry digest. A current `089.002` marker and
+`089.003` must carry its own pinned historical registry digest. A current `089.004` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -484,8 +557,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, and `089.001` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.002` state must carry the exact current
+   `088.007`, `088.008`, `089.001`, `089.002`, and `089.003` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.004` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

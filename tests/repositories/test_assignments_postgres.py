@@ -928,6 +928,8 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             "astralplane-088-scheduler-policy",
             "astralplane-088-framework-credentials",
             "astralplane-089-typesafe-credentials",
+            "astralplane-089-mesh-enrollment-records",
+            "astralplane-owner-stop-epochs",
             "astralplane-089-completion-wake",
         )
         assert runner.run(

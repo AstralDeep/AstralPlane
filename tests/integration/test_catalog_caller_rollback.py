@@ -666,6 +666,24 @@ def _write_identity(catalog: api.RepositoryCatalog, transaction: Transaction) ->
     )
 
 
+def _write_stop_epochs(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.stop_epochs.engage(
+        transaction, owner_id=_OWNER, expected_revision=0, reason="synthetic rollback",
+        actor_id=_OWNER, at=_NOW,
+    )
+
+
+def _write_mesh_enrollment(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.mesh_enrollment.bootstrap_mesh(
+        transaction,
+        mesh_id="11111111-1111-4111-8111-111111110075",
+        owner_id=_OWNER,
+        display_name="rollback mesh",
+        bootstrap_member_id="22222222-2222-4222-8222-222222220075",
+        bootstrap_member_kind="device",
+    )
+
+
 def _write_knowledge(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.knowledge.interactions.record_for_owner(
         transaction,
@@ -1008,6 +1026,22 @@ def _write_work_admission(catalog: api.RepositoryCatalog, transaction: Transacti
     )
 
 
+def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.completion_wake.register_subscription(
+        transaction,
+        owner_id=_OWNER,
+        waiter_operation_id="11111111-1111-4111-8111-111111110077",
+        waiter_owner_id=_OWNER,
+        source_operation_id="11111111-1111-4111-8111-111111110078",
+        source_owner_id=_OWNER,
+        terminal_condition="completed",
+        source_revision=1,
+        current_revision_fence=1,
+        created_at=1,
+        subscription_id="11111111-1111-4111-8111-111111110076",
+    )
+
+
 def _write_workspaces(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.workspaces.canvas.create(
         transaction,
@@ -1163,6 +1197,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "mesh_enrollment",
+        _write_mesh_enrollment,
+        _count("mesh_record", "mesh_id", "11111111-1111-4111-8111-111111110075"),
+        1,
+        0,
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1252,6 +1293,9 @@ ROLLBACK_CASES = (
         "share_grants", _write_share_grants, _count("share_grant", "token_sha256", _DIGEST_B), 1, 0
     ),
     RollbackCase(
+        "stop_epochs", _write_stop_epochs, _count("owner_stop_epoch", "owner_id", _OWNER), 1, 0
+    ),
+    RollbackCase(
         "tool_policy_state",
         _write_tool_policy_state,
         _count("user_preferences", "user_id", _OWNER),
@@ -1289,6 +1333,17 @@ ROLLBACK_CASES = (
         1,
         0,
     ),
+    RollbackCase(
+        "completion_wake",
+        _write_completion_wake,
+        _count(
+            "completion_subscription",
+            "subscription_id",
+            "11111111-1111-4111-8111-111111110076",
+        ),
+        1,
+        0,
+    ),
 )
 
 
@@ -1296,7 +1351,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 39
+    assert len(applicable_keys) == len(set(applicable_keys)) == 42
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

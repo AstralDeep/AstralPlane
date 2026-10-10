@@ -1,6 +1,7 @@
 """Tests for scripts/check_changed_coverage.py against real git repositories and real
 diff-cover reports of BASE_SHA..HEAD: pass, fail and not-applicable decisions with the SHAs and
-paths they record, and fail-closed refusal of bad base SHAs and malformed or mismatched reports.
+paths they record, fail-closed refusal of bad base SHAs and malformed or mismatched reports, and
+working-tree-included reports accepted only on a clean repository.
 """
 
 from __future__ import annotations
@@ -304,23 +305,46 @@ def test_tag_object_is_not_accepted_as_the_base_commit(
 
 
 @pytest.mark.parametrize(
-    ("report_base", "options"),
+    ("report_base", "options", "uncommitted", "message"),
     (
-        ("base", ("--ignore-staged", "--ignore-unstaged")),
-        ("base", ("--diff-range-notation", "..")),
-        ("previous", CI_OPTIONS),
+        pytest.param(
+            "base",
+            ("--ignore-staged", "--ignore-unstaged"),
+            False,
+            "not '{base}..HEAD' with staged and unstaged changes ignored",
+            id="three-dot-range",
+        ),
+        pytest.param(
+            "base",
+            ("--diff-range-notation", ".."),
+            True,
+            "while the repository has staged, unstaged, or untracked changes",
+            id="uncommitted-working-tree",
+        ),
+        pytest.param(
+            "previous",
+            CI_OPTIONS,
+            False,
+            "not '{base}..HEAD' with staged and unstaged changes ignored",
+            id="different-base",
+        ),
     ),
-    ids=("three-dot-range", "working-tree-included", "different-base"),
 )
 def test_report_must_describe_the_same_committed_range(
     repository: Repository,
     report_base: str,
     options: tuple[str, ...],
+    uncommitted: bool,
+    message: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     base = repository.git("rev-parse", "HEAD")
     previous = repository.commit({"README.md": "Revised.\n"}, "Revise documentation")
     repository.commit({"docs/guide.md": "Guide.\n"}, "Add guide")
+    if uncommitted:
+        (repository.root / "docs" / "guide.md").write_text(
+            "Uncommitted edit.\n", encoding="utf-8"
+        )
     report = repository.diff_cover(
         {1: 1, 2: 1}, {"base": base, "previous": previous}[report_base], options
     )
@@ -328,7 +352,28 @@ def test_report_must_describe_the_same_committed_range(
     assert checker.main(_arguments(report, base)) == 2
 
     error = capsys.readouterr().err
-    assert f"not '{base}..HEAD' with staged and unstaged changes ignored" in error
+    assert message.format(base=base, previous=previous) in error
+
+
+def test_working_tree_included_report_on_a_clean_repository_is_accepted(
+    repository: Repository,
+    summary: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base = repository.git("rev-parse", "HEAD")
+    candidate = repository.commit({MODULE: EXTENDED_MODULE}, "Extend module")
+    report = repository.diff_cover(_extended_hits((12,)), base, ("--diff-range-notation", ".."))
+
+    assert checker.main(_arguments(report, base)) == 0
+
+    decision = json.loads(capsys.readouterr().out)
+    assert (decision["status"], decision["base_sha"], decision["candidate_sha"]) == (
+        "pass",
+        base,
+        candidate,
+    )
+    assert decision["measured_paths"] == [MODULE]
+    assert decision["covered_percent"] == "90.00"
 
 
 def _replace(*keys: str, value: object) -> Callable[[dict[str, Any]], object]:

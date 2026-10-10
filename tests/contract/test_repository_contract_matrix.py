@@ -150,6 +150,30 @@ def _maintenance(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
     )
 
 
+def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.mesh_enrollment.get_mesh(
+        transaction,
+        owner_id=_OWNER,
+        mesh_id="mesh-1",
+    )
+
+
+def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.stop_epochs.get(transaction, owner_id=_OWNER)
+
+
+def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.completion_wake.accept_wake_receipt(
+        transaction,
+        owner_id=_OWNER,
+        subscription_id=_UUID4,
+        idempotency_key="contract-key",
+        observed_terminal="completed",
+        observed_revision=1,
+        accepted_at=1,
+    )
+
+
 def _offline_grants(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.offline_grants.get_grant(
         transaction,
@@ -633,6 +657,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError"),
     ),
     RepositoryContract(
+        "mesh_enrollment",
+        api.create_mesh_enrollment_repository,
+        "src/astralplane/repositories/mesh_enrollment.py",
+        _mesh_enrollment,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "record_version = %s", "membership_epoch"),
+        ("ON CONFLICT", "replay changed"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -777,6 +813,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryDataError"),
     ),
     RepositoryContract(
+        "stop_epochs",
+        api.create_stop_epoch_repository,
+        "src/astralplane/repositories/stop_epochs.py",
+        _stop_epochs,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "revision = %s", "epoch = %s"),
+        ("ON CONFLICT", "replay changed immutable"),
+        None,
+        ("RepositoryConflictError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "tool_policy_state",
         api.create_tool_policy_state_repository,
         "src/astralplane/repositories/tool_policy.py",
@@ -847,6 +895,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("idempotency identity",),
         None,
         ("RepositoryConflictError", "RepositoryDataError"),
+    ),
+    RepositoryContract(
+        "completion_wake",
+        api.create_completion_wake_repository,
+        "src/astralplane/repositories/completion_wake.py",
+        _completion_wake,
+        _UUID4,
+        "subscription_id",
+        ("revoked_at IS NULL", "rowcount"),
+        ("idempotency_key", "replay"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
 )
 
@@ -1032,6 +1092,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_maintenance:test_owner_read_rejects_foreign_driver_row_and_pending_query_is_bounded",
     ),
     BehavioralEvidence(
+        "mesh_enrollment",
+        "tests.repositories.test_mesh_enrollment_postgres:test_bootstrap_is_atomic_owner_scoped_and_replay_safe",
+        "tests.repositories.test_mesh_enrollment_postgres:test_invitation_lifecycle_is_atomic_and_single_use",
+        "tests.repositories.test_mesh_enrollment_postgres:test_concurrent_invitation_consumption_admits_exactly_one",
+        "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
+    ),
+    BehavioralEvidence(
         "offline_grants",
         "tests.repositories.test_offline_grants:test_owner_get_and_exchange_lookup_use_owner_and_live_predicates",
         "tests.repositories.test_offline_grants:test_create_grant_accepts_exact_replay_after_lifecycle_change",
@@ -1117,6 +1184,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_share_grants:test_record_open_rechecks_digest_revocation_and_expiry_atomically",
     ),
     BehavioralEvidence(
+        "stop_epochs",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_owner_isolation",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_exact_replay",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_first_engagement_race",
+        "tests.repositories.test_stop_epochs_postgres:test_stop_caller_failure_rolls_back",
+    ),
+    BehavioralEvidence(
         "tool_policy_state",
         "tests.repositories.test_tool_policy:test_scope_and_override_state_is_owner_scoped_and_neutral",
         "tests.repositories.test_tool_policy:test_legacy_override_backfill_never_overwrites_an_existing_choice",
@@ -1157,6 +1231,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_workspaces:test_publication_commit_at_head_is_atomic_and_replay_safe",
         "tests.repositories.test_workspaces:test_canvas_replace_distinguishes_missing_conflict_and_bad_fence",
         "tests.repositories.test_workspaces:test_canvas_create_distinguishes_owner_missing_scope_and_semantic_conflict",
+    ),
+    BehavioralEvidence(
+        "completion_wake",
+        "tests.test_completion_wake_089_004:test_delete_is_owner_fenced",
+        "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
+        "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
+        "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
     ),
 )
 

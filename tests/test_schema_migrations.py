@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-6] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -697,7 +697,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
     assert set(accepted) >= {"088.005", "088.006", "088.007"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.002")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
 
 
 def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_registry() -> None:
@@ -707,7 +707,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,16 +732,16 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
-    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "b781f4e021a073f9f699e45799b196dcc6facf7c794a9c646d6c6b0cc777ce6d"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.004"
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
+        "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('framework_credential')" in query_tables
     accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
-    assert set(accepted) >= {"088.006", "088.007"}
+    assert set(accepted) >= {"088.006", "088.007", "089.001"}
     with pytest.raises(SchemaRevisionError):
-        canonical._verify_predecessor_plane_schema(_NoStructure(), "089.002")
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
 
 
 def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registry() -> None:
@@ -751,7 +751,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     )
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
@@ -787,30 +787,35 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     assert "('user_data_sharing_acknowledgment')" in query_tables
 
 
-def test_089_002_completion_wake_edge_is_pinned_to_the_exact_089_001_registry() -> None:
+def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() -> None:
     import astralplane.database.migrations as canonical
-    from astralplane.database.completion_wake_schema import (
-        COMPLETION_WAKE_SCHEMA_STATEMENTS,
-    )
+    from astralplane.database.mesh_schema import MESH_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_089_002_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
-    assert edge.name == "astralplane-089-completion-wake"
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert edge.name == "astralplane-089-mesh-enrollment-records"
     assert edge.source_revisions == ("089.001",)
     assert edge.target_revision == "089.002"
-    assert edge.checksum == canonical._statements_checksum(
-        COMPLETION_WAKE_SCHEMA_STATEMENTS
-    )
+    assert edge.checksum == canonical._statements_checksum(MESH_SCHEMA_STATEMENTS)
 
-    ddl = "\n".join(COMPLETION_WAKE_SCHEMA_STATEMENTS)
-    assert "CREATE TABLE completion_subscription" in ddl
-    assert "CREATE TABLE wake_receipt" in ddl
-    assert "terminal_condition TEXT NOT NULL CHECK(" in ddl
-    assert "terminal_condition IN (" in ddl
-    assert "wake_receipt_idempotent UNIQUE(subscription_id, idempotency_key)" in ddl
+    ddl = "\n".join(MESH_SCHEMA_STATEMENTS)
+    for table in (
+        "mesh_record",
+        "mesh_member",
+        "mesh_public_identity",
+        "mesh_enrollment_challenge",
+        "mesh_enrollment_invitation",
+        "mesh_member_revocation",
+    ):
+        assert f"CREATE TABLE {table}" in ddl
+    assert "member_kind TEXT NOT NULL CHECK(member_kind IN ('device','agent','companion'))" in ddl
+    assert "membership_epoch BIGINT NOT NULL CHECK(membership_epoch >= 1)" in ddl
+    assert "key_fingerprint TEXT NOT NULL CHECK(key_fingerprint ~ '^[0-9a-f]{64}$')" in ddl
+    assert "REFERENCES mesh_member(mesh_id, member_id)" in ddl
+    assert "issued_at BIGINT NOT NULL" in ddl
+    assert "CHECK(expires_at > issued_at)" in ddl
     assert "ALTER TABLE" not in ddl
     assert "IF NOT EXISTS" not in ddl
-    assert "wait-state" not in ddl
 
     assert canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST == (
         "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
@@ -821,13 +826,56 @@ def test_089_002_completion_wake_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.004"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "b781f4e021a073f9f699e45799b196dcc6facf7c794a9c646d6c6b0cc777ce6d"
+        "4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
-    assert "('completion_subscription')" in query_tables
-    assert "('wake_receipt')" in query_tables
+    for table in (
+        "mesh_record",
+        "mesh_member",
+        "mesh_public_identity",
+        "mesh_enrollment_challenge",
+        "mesh_enrollment_invitation",
+        "mesh_member_revocation",
+    ):
+        assert f"('{table}')" in query_tables
+    accepted = dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)
+    assert set(accepted) >= {"088.008", "089.001"}
+    with pytest.raises(SchemaRevisionError):
+        canonical._verify_predecessor_plane_schema(_NoStructure(), "999.999")
+
+
+def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.completion_wake_schema import COMPLETION_WAKE_SCHEMA_STATEMENTS
+
+    edge = canonical.PLANE_SCHEMA_089_004_MIGRATION
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert edge.name == "astralplane-089-completion-wake"
+    assert edge.source_revisions == ("089.003",)
+    assert edge.target_revision == "089.004"
+    assert edge.checksum == canonical._statements_checksum(COMPLETION_WAKE_SCHEMA_STATEMENTS)
+
+    ddl = "\n".join(COMPLETION_WAKE_SCHEMA_STATEMENTS)
+    for table in ("completion_subscription", "wake_receipt"):
+        assert f"CREATE TABLE {table}" in ddl
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+
+    assert canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST == (
+        "f8eb92d256c8afd006832fc6f8b37f4d482ad017e08a9a022fa54b842a87ba83"
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
+        canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.004"
+    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
+        "4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22"
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    for table in ("completion_subscription", "wake_receipt"):
+        assert f"('{table}')" in query_tables
 
 
 class _NoStructure:

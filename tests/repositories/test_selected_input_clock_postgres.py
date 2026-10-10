@@ -97,7 +97,8 @@ def test_cutoff_normalizes_offset_and_accepts_completion_counters(tx, repo):
         repo.assert_guidance_current(tx, **counters(record), authority_valid_until=now)
 
 
-def test_custom_timezone_is_detached_before_owner_lock(database, repo):
+@pytest.mark.parametrize("database_timezone", ["UTC", "America/New_York"])
+def test_custom_timezone_is_detached_before_owner_lock(database, repo, database_timezone):
     class MutableZone(tzinfo):
         offset = timedelta(0)
 
@@ -108,12 +109,13 @@ def test_custom_timezone_is_detached_before_owner_lock(database, repo):
             return timedelta(0)
 
     with database.transaction() as tx:
+        tx.execute("SET LOCAL TIME ZONE %s", (database_timezone,))
         tx.execute("DELETE FROM assignment_operation_receipt")
         tx.execute("DELETE FROM persistent_assignment")
         record = create_operation(repo, tx)
         now = tx.fetch_one("SELECT clock_timestamp() AS now")["now"]
     zone = MutableZone()
-    cutoff = (now + timedelta(hours=1)).replace(tzinfo=zone)
+    cutoff = (now.astimezone(UTC) + timedelta(hours=1)).replace(tzinfo=zone)
     result = during_owner_wait(
         database,
         "owner",

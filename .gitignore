@@ -20,6 +20,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.pi-evidence/
+.pi-cache/
 *.db
 *.db-journal
 *.db-shm

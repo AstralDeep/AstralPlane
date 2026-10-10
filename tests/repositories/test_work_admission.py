@@ -242,12 +242,39 @@ def test_accepted_submission_replay_returns_original_without_inserting() -> None
 
     assert isinstance(result, AcceptedAdmission)
     assert result.operation_id == operation_id
+    assert result.created is False
     assert all("INSERT INTO" not in statement for statement, _ in transaction.calls)
     assert all(
         "pg_advisory_xact_lock(%s)" in transaction.calls[index][0]
         for index in (1, 2)
     )
     assert all("?" not in statement for statement, _ in transaction.calls)
+
+
+@pytest.mark.parametrize("preselected", [True, False])
+def test_peek_next_detaches_owner_and_identity_without_locks_or_mutation(preselected) -> None:
+    operation = _running_row()
+    if not preselected:
+        operation = operation | {"state": "queued"}
+    transaction = _Transaction(
+        ([_Result()] if not preselected else []) + [_Result(returned_records=(operation,))]
+    )
+    result = WorkAdmissionRepository().peek_next(transaction, AdmissionClass.INTERACTIVE)
+    assert result.operation_id == operation["operation_id"]
+    assert result.owner_user_id == "owner-a"
+    assert result.state is (OperationState.RUNNING if preselected else OperationState.QUEUED)
+    assert len(transaction.calls) == (1 if preselected else 2)
+    for statement, parameters in transaction.calls:
+        assert "FOR UPDATE" not in statement and "pg_advisory" not in statement
+        assert "INSERT" not in statement and "UPDATE" not in statement
+        assert "ORDER BY" in statement
+        assert parameters == (AdmissionClass.INTERACTIVE.value,)
+
+
+def test_peek_next_empty_class_has_no_side_effect() -> None:
+    transaction = _Transaction()
+    assert WorkAdmissionRepository().peek_next(transaction, AdmissionClass.INTERACTIVE) is None
+    assert len(transaction.calls) == 2
 
 
 def test_stale_fence_is_a_typed_compare_and_set_error() -> None:

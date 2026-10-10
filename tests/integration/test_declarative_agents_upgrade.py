@@ -213,6 +213,8 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-088-scheduler-policy",
         "astralplane-088-framework-credentials",
         "astralplane-089-typesafe-credentials",
+        "astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
     )
     with db.transaction() as tx:

@@ -128,6 +128,7 @@ from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
+from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -142,6 +143,13 @@ from astralplane.repositories.secrets import (
     EncryptedTypeSafeCredentialRepository,
 )
 from astralplane.repositories.share_grants import ShareGrantRepository
+from astralplane.repositories.stop_epochs import (
+    OwnerStoppedError,
+    OwnerStopRecord,
+    PeerStopAcknowledgment,
+    StopEpochConflictError,
+    StopEpochRepository,
+)
 from astralplane.repositories.tool_policy import ToolPolicyStateRepository
 from astralplane.repositories.tracked_jobs import TrackedJobRepository
 from astralplane.repositories.tutorials import TutorialRepository
@@ -207,6 +215,14 @@ def create_credential_repository() -> CredentialRepository:
 
 def create_offline_grant_repository() -> OfflineGrantRepository:
     return OfflineGrantRepository()
+
+
+def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
+    return MeshEnrollmentRepository()
+
+
+def create_stop_epoch_repository() -> StopEpochRepository:
+    return StopEpochRepository()
 
 
 def create_framework_credential_repository() -> FrameworkCredentialRepository:
@@ -398,6 +414,8 @@ class RepositoryCatalog:
     background_tasks: BackgroundTaskRepository
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
+    mesh_enrollment: MeshEnrollmentRepository
+    stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
     harness_cleanup: HarnessCleanupRepository
@@ -439,6 +457,7 @@ class RepositoryCatalog:
                 "identity": self.identity,
                 "knowledge": self.knowledge,
                 "maintenance": self.maintenance,
+                "mesh_enrollment": self.mesh_enrollment,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -451,6 +470,7 @@ class RepositoryCatalog:
                 "saved_components": self.saved_components,
                 "scheduler": self.scheduler,
                 "share_grants": self.share_grants,
+                "stop_epochs": self.stop_epochs,
                 "tool_policy_state": self.tool_policy_state,
                 "tracked_jobs": self.tracked_jobs,
                 "tutorials": self.tutorials,
@@ -497,6 +517,8 @@ def create_repository_catalog() -> RepositoryCatalog:
         background_tasks=create_background_task_repository(),
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
+        mesh_enrollment=create_mesh_enrollment_repository(),
+        stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
         harness_cleanup=create_harness_cleanup_repository(),
@@ -751,6 +773,9 @@ __all__ = (
     "OperationRequest",
     "OperationState",
     "OwnerScope",
+    "OwnerStopRecord",
+    "OwnerStoppedError",
+    "PeerStopAcknowledgment",
     "PlaneHealth",
     "PlaneRuntime",
     "PublishedBundle",
@@ -760,6 +785,8 @@ __all__ = (
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
+    "StopEpochConflictError",
+    "StopEpochRepository",
     "canonical_bundle_digest",
     "canonical_generated_agent_manifest_digest",
     "create_agent_management_repository",
@@ -800,6 +827,7 @@ __all__ = (
     "create_saved_component_repository",
     "create_scheduler_repository",
     "create_share_grant_repository",
+    "create_stop_epoch_repository",
     "create_streaming_blob_store",
     "create_tool_policy_state_repository",
     "create_tracked_job_repository",

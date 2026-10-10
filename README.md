@@ -10,10 +10,10 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.002`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.004`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  and `089.001`
+  `089.001`, `089.002`, and `089.003`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
@@ -21,11 +21,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.001`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.003`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.002` database must carry the exact current
+before the first migration write. A current `089.004` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -48,16 +48,16 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 40 members, in
+`create_repository_catalog()` returns the stable repository catalog. Its 43 members, in
 `RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
 `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
 `chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
 `generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`,
 `framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`,
-`offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`, `quality_audit`,
-`remote`, `remote_operation_proposals`, `revocations`, `saved_components`, `scheduler`,
-`share_grants`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`, `work_admission`, and
-`workspaces`.
+`mesh_enrollment`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`,
+`quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`,
+`scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
+`work_admission`, `workspaces`, and `completion_wake`.
 
 The stable repository catalog includes four explicit stores for the first identity/agent
 cutover slice:
@@ -75,6 +75,22 @@ Use the matching `create_identity_repository()`, `create_agent_repository()`,
 `create_draft_agent_repository()`, and `create_tool_policy_state_repository()` factories when a
 composition does not need the full catalog. See `docs/identity-agent-state.md` for transaction and
 owner-isolation rules.
+
+The catalog also includes `mesh_enrollment` for neutral personal-mesh membership, enrollment, and
+revocation state: owner-scoped mesh/member/public-identity/challenge/invitation records with
+monotonic membership and revocation epochs, atomic single-use invitation
+expiry/consumption/confirmation, and current-revision fences. Private device keys never reach
+Plane; possession proof, IAM, QR/network handling, and admission policy remain in Deep. See
+[mesh enrollment records](docs/mesh-enrollment-records.md).
+
+Schema `089.003` adds durable owner stop epochs, bounded immutable peer receipts and
+operation epoch bindings through `stop_epochs`. Admission and publication locks remain held
+through the host's audit transaction. See [owner stop epochs](docs/owner-stop-epochs.md).
+
+Schema `089.004` adds completion wake automation: owner-scoped `completion_subscription` rows
+with live-state/terminal-coverage guards plus immutable `wake_receipt` rows. Accept and revoke
+are fenced to owner/live rows with terminal coverage enforced, so revocation races fail closed.
+See [migration and recovery](docs/migration-and-recovery.md#089004-completion-subscriptions-and-wake-receipts).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -158,6 +174,12 @@ silently rewritten. Tutorial content/revisions, remote-operation proposals, feed
 deduplication, personalization mutation, external-identity linking, and the other extended-state
 facades are likewise available only through named typed catalog members.
 
+Repository writes using the shared canonical JSON encoder require string keys in every mapping,
+including mappings nested inside lists and tuples. Non-string keys raise `RepositoryValidationError` before SQL rather
+than being converted to strings and colliding with existing string keys. Callers that supplied
+non-string keys must update their inputs. Valid canonical JSON bytes remain unchanged; this
+validation does not rewrite existing stored payloads, digests, or schema metadata.
+
 Revision `075.001` adds the immutable `voice_session.speech_backend` discriminator. Historical
 sessions backfill to `llm_factory`; new `client_local` rows carry no remote room, participant,
 worker, or media-grant metadata. Voice-turn persistence remains unchanged, and Plane adds no audio,
@@ -183,8 +205,6 @@ The revisions after `079.001`:
   `docs/credentials-and-grants.md`.
 - `089.001` adds owner-keyed TypeSafe credential ciphertext and third-party data-sharing
   acknowledgments.
-- `089.002` adds owner-scoped completion subscriptions with idempotency-keyed wake receipts;
-  see `docs/persistent-assignment-contracts.md`.
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md).

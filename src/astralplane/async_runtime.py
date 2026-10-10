@@ -62,6 +62,8 @@ class AsyncPlaneRuntime:
         self._admission_timeout_seconds = timeout
         self._semaphore = asyncio.Semaphore(maximum_concurrency)
         self._active = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -103,6 +105,7 @@ class AsyncPlaneRuntime:
             raise AsyncPlaneClosedError("AstralPlane async adapter is closed")
 
         self._active += 1
+        self._idle.clear()
         worker = asyncio.create_task(
             asyncio.to_thread(self._run_sync, callback, isolation),
             name="astralplane-transaction",
@@ -116,6 +119,8 @@ class AsyncPlaneRuntime:
             released = True
             self._active -= 1
             self._semaphore.release()
+            if self._active == 0:
+                self._idle.set()
             if completed.cancelled():
                 return
             completed.exception()
@@ -125,6 +130,19 @@ class AsyncPlaneRuntime:
 
     def close(self) -> None:
         self._closed = True
+
+    async def drain(self, timeout: float = 5.0) -> bool:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be numeric")
+        if not 0.01 <= timeout <= 300.0:
+            raise ValueError("timeout must be between 0.01 and 300 seconds")
+        self._bind_loop(asyncio.get_running_loop())
+        self.close()
+        try:
+            await asyncio.wait_for(self._idle.wait(), timeout=float(timeout))
+            return True
+        except TimeoutError:
+            return False
 
     def _bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         if self._loop is None:

@@ -1,4 +1,4 @@
-"""089.002 review follow-ups: real 089.001 predecessor pins, fenced
+"""089.004 review follow-ups: real 089.001 predecessor pins, fenced
 completion-wake mutations, facade exposure. Answers upstream review on PR #77.
 """
 

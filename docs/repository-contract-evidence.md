@@ -1,6 +1,6 @@
 # Public repository contract evidence
 
-AstralPlane's stable catalog currently contains 40 repository members. The contract matrix in
+AstralPlane's stable catalog currently contains 42 repository members. The contract matrix in
 `tests/contract/test_repository_contract_matrix.py` is ordered against `RepositoryCatalog.as_mapping()`
 and fails whenever a public member is added, removed, or reordered without evidence.
 
@@ -17,14 +17,14 @@ commit or roll back the caller's transaction. The static no-commit/no-rollback s
 as an additional packaging guard.
 
 `tests/integration/test_catalog_caller_rollback.py` supplies the corresponding live PostgreSQL
-proof. It exactly classifies all 40 catalog members, performs one successful write for each of the
-39 write-capable members, confirms the mutation is visible inside the caller's transaction, forces
+proof. It exactly classifies all 42 catalog members, performs one successful write for each of the
+41 write-capable members, confirms the mutation is visible inside the caller's transaction, forces
 the caller to abort, then re-reads persistence in a new transaction. Insert/update writes disappear,
 and the fixed-manifest cleanup deletion is restored. The one non-write member,
 `agent_management`, exposes only the bounded `get_list_context()` and `get_detail_context()` read
 projections, so caller rollback is genuinely inapplicable rather than silently omitted.
 
-Serial isolated-PostgreSQL evidence covers the 39-member rollback matrix plus locking-sensitive
+Serial isolated-PostgreSQL evidence covers the 41-member rollback matrix plus locking-sensitive
 seams that a scripted transaction cannot prove: audit JSON detachment, WorkAdmission
 replay/fence/rollback, concurrent qualification review serialization, concurrent policy
 reconciliation, active authority-binding uniqueness, and claim/outbox savepoint rollback.
@@ -36,6 +36,6 @@ Assignments additionally exercise real concurrent claim, shared-budget reservati
 ordering, remote-proposal creation/link rollback, and account retirement. Its behavioral matrix entry
 executes the same isolated PostgreSQL owner/replay/claim cases used by the dedicated assignment suite.
 
-This evidence uses repositories against the current `089.002` schema. A future catalog addition
+This evidence uses repositories against the current `089.004` schema. A future catalog addition
 must add both a failure/attribution probe and executable behavioral evidence before the
 exact-catalog assertion can pass.
