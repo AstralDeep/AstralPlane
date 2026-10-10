@@ -627,7 +627,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "8dbf52888a1876e398f2c6e93be2a13bd0045fe43fbfa41fe7083486023404dd"
+          "sha256": "bef60699cd01a76b13f7369d6c4720be13678924e4c850f00fbaa24c741ca125"
         },
         {
           "path": "src/astralplane/database/pool.py",

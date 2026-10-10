@@ -3674,7 +3674,7 @@ schema_shapes AS (
     FROM pg_namespace AS namespace_record
     WHERE namespace_record.nspname = current_schema()
 ),
-catalog_dependencies AS (
+catalog_dependencies AS NOT MATERIALIZED (
     SELECT
         dependency.classid AS object_class,
         dependency.objid AS object_id,
