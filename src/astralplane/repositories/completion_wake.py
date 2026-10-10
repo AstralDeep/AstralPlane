@@ -88,6 +88,25 @@ class WakeReceipt:
     replay_of: str | None
 
 
+class CompletionWakeRepository:
+    """Typed bounded facade over the completion-wake subscription store."""
+
+    def register_subscription(self, tx: Any, **kwargs: Any) -> CompletionSubscription:
+        return register_subscription(tx, **kwargs)
+
+    def revoke_subscription(self, tx: Any, **kwargs: Any) -> CompletionSubscription:
+        return revoke_subscription(tx, **kwargs)
+
+    def delete_subscription(self, tx: Any, **kwargs: Any) -> None:
+        delete_subscription(tx, **kwargs)
+
+    def accept_wake_receipt(self, tx: Any, **kwargs: Any) -> WakeReceipt:
+        return accept_wake_receipt(tx, **kwargs)
+
+    def replay_wake_receipt(self, tx: Any, **kwargs: Any) -> WakeReceipt:
+        return replay_wake_receipt(tx, **kwargs)
+
+
 def register_subscription(
     tx: Any,
     *,
@@ -173,9 +192,15 @@ def revoke_subscription(
         raise RepositoryConflictError("completion subscription already revoked")
     if at < row["created_at"]:
         raise RepositoryDataError("revoked_at precedes created_at")
-    tx.execute(
-        "UPDATE completion_subscription SET revoked_at=%s WHERE subscription_id=%s", (at, sub_id)
+    # Ownership + live-state fence inside the mutation: a concurrent revoke
+    # between the read above and this write must not silently win or lose.
+    result = tx.execute(
+        "UPDATE completion_subscription SET revoked_at=%s"
+        " WHERE subscription_id=%s AND owner_id=%s AND revoked_at IS NULL",
+        (at, sub_id, owner),
     )
+    if getattr(result, "rowcount", 1) != 1:
+        raise RepositoryConflictError("completion subscription already revoked")
     return CompletionSubscription(**{**dict(row), "revoked_at": at})
 
 
@@ -188,7 +213,14 @@ def delete_subscription(tx: Any, *, owner_id: str, subscription_id: str) -> None
     )
     if row is None or row["owner_id"] != owner:
         raise RepositoryNotFoundError("completion subscription not found")
-    tx.execute("DELETE FROM completion_subscription WHERE subscription_id=%s", (sub_id,))
+    # Owner predicate inside the mutation: a concurrent owner change or delete
+    # between the read and this write must not remove another owner's row.
+    result = tx.execute(
+        "DELETE FROM completion_subscription WHERE subscription_id=%s AND owner_id=%s",
+        (sub_id, owner),
+    )
+    if getattr(result, "rowcount", 1) != 1:
+        raise RepositoryNotFoundError("completion subscription not found")
 
 
 def _covers(condition: str, observed: str) -> bool:
@@ -231,15 +263,37 @@ def accept_wake_receipt(
     if existing is not None:
         return WakeReceipt(**dict(existing))
     rid = str(uuid.uuid4()) if receipt_id is None else _required_uuid(receipt_id, "receipt_id")
+    # Atomic admission: ownership, live state, terminal coverage, and the
+    # revision fence are re-checked inside the single INSERT..SELECT so a
+    # revocation that commits between the reads above and this write cannot
+    # slip a receipt through. Zero inserted rows mean the fence moved.
     try:
-        tx.execute(
+        result = tx.execute(
             "INSERT INTO wake_receipt (receipt_id, subscription_id, owner_id,"
             " idempotency_key, observed_terminal, observed_revision, accepted_at)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (rid, sub_id, owner, idempotency_key, observed_terminal, revision, accepted),
+            " SELECT %s,%s,%s,%s,%s,%s,%s WHERE EXISTS (SELECT 1"
+            " FROM completion_subscription WHERE subscription_id=%s"
+            " AND owner_id=%s AND revoked_at IS NULL"
+            " AND (terminal_condition='any_terminal' OR terminal_condition=%s)"
+            " AND source_revision<=%s AND %s<=current_revision_fence)",
+            (rid, sub_id, owner, idempotency_key, observed_terminal, revision,
+             accepted, sub_id, owner, observed_terminal, revision, revision),
         )
-    except Exception as exc:
-        raise RepositoryConflictError("wake receipt already accepted") from exc
+    except Exception:
+        # A concurrent acceptance of the same key wins; return its receipt.
+        raced = tx.fetch_one(
+            "SELECT * FROM wake_receipt WHERE subscription_id=%s AND idempotency_key=%s",
+            (sub_id, idempotency_key),
+        )
+        if raced is not None:
+            return WakeReceipt(**dict(raced))
+        raise RepositoryConflictError(
+            "subscription revoked or fence moved during acceptance"
+        )
+    if getattr(result, "rowcount", 1) != 1:
+        raise RepositoryConflictError(
+            "subscription revoked or fence moved during acceptance"
+        )
     return WakeReceipt(
         rid, sub_id, owner, idempotency_key, observed_terminal, revision, accepted, None
     )

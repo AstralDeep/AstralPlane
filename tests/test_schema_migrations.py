@@ -813,7 +813,7 @@ def test_089_002_completion_wake_edge_is_pinned_to_the_exact_089_001_registry() 
     assert "wait-state" not in ddl
 
     assert canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST == (
-        "ae3b77d9067dec56503f738216faa4c1bc2ed9523c57f7ce3957830846ec43b0"
+        "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
     )
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",

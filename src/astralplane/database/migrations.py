@@ -5064,8 +5064,17 @@ PLANE_SCHEMA_089_001_MIGRATION: Final = Migration(
     checksum=_statements_checksum(TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_089_001,
 )
+# Pinned historical value; recomputing would hide drift.
+# Real predecessor values from upstream main (review 2026-10-10): the 089.001
+# registry digest is 35741bd0 only with the current 089.001 verifier checksums.
+PLANE_SCHEMA_089_001_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "7123aabb64906d6bb6875921f597f88cbcba5df9393c57786afe830044280016"
+)
+PLANE_SCHEMA_089_001_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "bff0d85f218b82544c953134e59524552745032890cf5de0ad3814951aeef4f8"
+)
 PLANE_SCHEMA_089_001_REGISTRY_DIGEST: Final = (
-    "ae3b77d9067dec56503f738216faa4c1bc2ed9523c57f7ce3957830846ec43b0"
+    "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
 )
 if (
     MigrationRegistry(
@@ -5088,10 +5097,10 @@ if (
             PLANE_SCHEMA_089_001_MIGRATION,
         ),
         current_schema_verifier=_verify_current_plane_schema,
-        current_schema_verifier_checksum=(PLANE_SCHEMA_088_008_SCHEMA_VERIFIER_CHECKSUM),
+        current_schema_verifier_checksum=(PLANE_SCHEMA_089_001_SCHEMA_VERIFIER_CHECKSUM),
         predecessor_schema_verifier=_verify_predecessor_plane_schema,
         predecessor_schema_verifier_checksum=(
-            PLANE_SCHEMA_088_008_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+            PLANE_SCHEMA_089_001_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
         ),
     ).digest
     != PLANE_SCHEMA_089_001_REGISTRY_DIGEST

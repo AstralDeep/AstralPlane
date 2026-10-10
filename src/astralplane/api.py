@@ -157,6 +157,7 @@ from astralplane.repositories.work_admission import (
     WorkAdmissionRepository,
 )
 from astralplane.repositories.workspaces import WorkspaceRepository
+from astralplane.repositories.completion_wake import CompletionWakeRepository
 
 
 def create_history_repository() -> HistoryRepository:
@@ -230,6 +231,10 @@ def create_saved_component_repository() -> SavedComponentRepository:
 
 def create_workspace_repository() -> WorkspaceRepository:
     return WorkspaceRepository()
+
+
+def create_completion_wake_repository() -> CompletionWakeRepository:
+    return CompletionWakeRepository()
 
 
 def create_artifact_repository() -> ArtifactRepository:
@@ -383,6 +388,7 @@ class RepositoryCatalog:
     saved_components: SavedComponentRepository
     history: HistoryRepository
     workspaces: WorkspaceRepository
+    completion_wake: CompletionWakeRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -451,6 +457,7 @@ class RepositoryCatalog:
                 "voice": self.voice,
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
+                "completion_wake": self.completion_wake,
             }
         )
 
@@ -480,6 +487,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         saved_components=create_saved_component_repository(),
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
+        completion_wake=create_completion_wake_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
