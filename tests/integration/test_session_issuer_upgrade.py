@@ -162,6 +162,7 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(p
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
+        "astralplane-089-completion-wake",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)
@@ -269,4 +270,5 @@ def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(predec
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
+        "astralplane-089-completion-wake",
     )

@@ -310,6 +310,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "voice",
         "work_admission",
         "workspaces",
+        "completion_wake",
     )
     assert first.history is not second.history
     assert first.generated_agent_publications is not second.generated_agent_publications

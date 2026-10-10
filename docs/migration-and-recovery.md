@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -279,6 +279,28 @@ recovery facade, restart all application caches, obtain fresh IAM authority and
 reconcile stop state before admission. Restored stop/receipt observations remain
 historical; the host must not claim that a remote peer has resumed from them.
 
+### `089.004` completion subscriptions and wake receipts
+
+This additive edge requires the exact `089.003` registry and catalog. It adds
+two independent owner-scoped tables and alters nothing that exists.
+
+`completion_subscription` binds a waiter operation to a source operation with a
+terminal condition and a source-revision fence. `wake_receipt` records exactly
+one acceptance per subscription idempotency key and points replays at the
+original receipt. The tables stand alone: no foreign keys into operation state
+and no writes into wait-state JSON, so subscriptions never smuggle data into
+current wait state and survive independent lifecycle changes. Ownership, live
+state, terminal coverage and the revision fence are enforced inside the
+mutation statements with rowcount checks, so an acceptance racing a revocation
+fails closed instead of slipping a receipt through.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
+rollback checks described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.004` revision/digest intact. An `089.003` binary is not compatible merely
+because these tables are additive.
+
 ### `089.002` mesh enrollment records and recovery
 
 This additive edge requires the exact `089.001` registry and catalog. It adds
@@ -432,7 +454,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.002` must carry its own pinned historical registry digest. A current `089.003` marker and
+`089.003` must carry its own pinned historical registry digest. A current `089.004` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -535,8 +557,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, and `089.002` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.003` state must carry the exact current
+   `088.007`, `088.008`, `089.001`, `089.002`, and `089.003` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.004` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

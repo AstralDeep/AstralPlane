@@ -88,7 +88,9 @@ def test_populated_089_001_upgrade_keeps_rows_and_adds_only_mesh_tables(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
     )
     assert report.applied_steps == (
-        "astralplane-089-mesh-enrollment-records", "astralplane-owner-stop-epochs"
+"astralplane-089-mesh-enrollment-records",
+        "astralplane-owner-stop-epochs",
+        "astralplane-089-completion-wake",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

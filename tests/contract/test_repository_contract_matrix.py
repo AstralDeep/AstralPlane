@@ -162,6 +162,18 @@ def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
     catalog.stop_epochs.get(transaction, owner_id=_OWNER)
 
 
+def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.completion_wake.accept_wake_receipt(
+        transaction,
+        owner_id=_OWNER,
+        subscription_id=_UUID4,
+        idempotency_key="contract-key",
+        observed_terminal="completed",
+        observed_revision=1,
+        accepted_at=1,
+    )
+
+
 def _offline_grants(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.offline_grants.get_grant(
         transaction,
@@ -884,6 +896,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         None,
         ("RepositoryConflictError", "RepositoryDataError"),
     ),
+    RepositoryContract(
+        "completion_wake",
+        api.create_completion_wake_repository,
+        "src/astralplane/repositories/completion_wake.py",
+        _completion_wake,
+        _UUID4,
+        "subscription_id",
+        ("revoked_at IS NULL", "rowcount"),
+        ("idempotency_key", "replay"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
 )
 
 
@@ -1207,6 +1231,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_workspaces:test_publication_commit_at_head_is_atomic_and_replay_safe",
         "tests.repositories.test_workspaces:test_canvas_replace_distinguishes_missing_conflict_and_bad_fence",
         "tests.repositories.test_workspaces:test_canvas_create_distinguishes_owner_missing_scope_and_semantic_conflict",
+    ),
+    BehavioralEvidence(
+        "completion_wake",
+        "tests.test_completion_wake_089_004:test_delete_is_owner_fenced",
+        "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
+        "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
+        "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
     ),
 )
 
