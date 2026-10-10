@@ -150,6 +150,14 @@ def _maintenance(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
     )
 
 
+def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.mesh_enrollment.get_mesh(
+        transaction,
+        owner_id=_OWNER,
+        mesh_id="mesh-1",
+    )
+
+
 def _offline_grants(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.offline_grants.get_grant(
         transaction,
@@ -633,6 +641,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError"),
     ),
     RepositoryContract(
+        "mesh_enrollment",
+        api.create_mesh_enrollment_repository,
+        "src/astralplane/repositories/mesh_enrollment.py",
+        _mesh_enrollment,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "record_version = %s", "membership_epoch"),
+        ("ON CONFLICT", "replay changed"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -1030,6 +1050,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_maintenance:test_create_unit_replay_reuses_stable_identity_and_rejects_changed_inputs",
         "tests.repositories.test_maintenance:test_bind_and_renew_are_exact_lease_generation_revision_cas",
         "tests.repositories.test_maintenance:test_owner_read_rejects_foreign_driver_row_and_pending_query_is_bounded",
+    ),
+    BehavioralEvidence(
+        "mesh_enrollment",
+        "tests.repositories.test_mesh_enrollment_postgres:test_bootstrap_is_atomic_owner_scoped_and_replay_safe",
+        "tests.repositories.test_mesh_enrollment_postgres:test_invitation_lifecycle_is_atomic_and_single_use",
+        "tests.repositories.test_mesh_enrollment_postgres:test_concurrent_invitation_consumption_admits_exactly_one",
+        "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
     ),
     BehavioralEvidence(
         "offline_grants",

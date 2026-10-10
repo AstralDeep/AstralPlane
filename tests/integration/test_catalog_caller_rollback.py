@@ -666,6 +666,17 @@ def _write_identity(catalog: api.RepositoryCatalog, transaction: Transaction) ->
     )
 
 
+def _write_mesh_enrollment(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.mesh_enrollment.bootstrap_mesh(
+        transaction,
+        mesh_id="11111111-1111-4111-8111-111111110075",
+        owner_id=_OWNER,
+        display_name="rollback mesh",
+        bootstrap_member_id="22222222-2222-4222-8222-222222220075",
+        bootstrap_member_kind="device",
+    )
+
+
 def _write_knowledge(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.knowledge.interactions.record_for_owner(
         transaction,
@@ -1163,6 +1174,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "mesh_enrollment",
+        _write_mesh_enrollment,
+        _count("mesh_record", "mesh_id", "11111111-1111-4111-8111-111111110075"),
+        1,
+        0,
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1296,7 +1314,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 39
+    assert len(applicable_keys) == len(set(applicable_keys)) == 40
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name
