@@ -619,6 +619,52 @@ class MeshEnrollmentRepository:
         )
         return tuple(_member(row) for row in rows)
 
+    def assert_current_member(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        mesh_id: str,
+        member_id: str,
+        expected_membership_epoch: int | None = None,
+        expected_revocation_epoch: int | None = None,
+        expected_member_version: int | None = None,
+    ) -> tuple[MeshRecord, MeshMemberRecord]:
+        owner = _required_id(owner_id, "owner_id", maximum=_MAX_OWNER)
+        mesh = _required_id(mesh_id, "mesh_id", maximum=_MAX_ID)
+        member = _required_id(member_id, "member_id", maximum=_MAX_ID)
+        expected = (expected_membership_epoch, expected_revocation_epoch, expected_member_version)
+        if any(value is not None and (type(value) is not int or not 0 <= value <= 2**63 - 1)
+               for value in expected):
+            raise RepositoryValidationError("current member fences must be bounded integers")
+        mesh_row = transaction.fetch_one(
+            f"SELECT {_MESH_FIELDS} FROM mesh_record WHERE owner_id = %s "
+            "AND mesh_id = %s FOR UPDATE", (owner, mesh),
+        )
+        if mesh_row is None:
+            raise RepositoryNotFoundError("mesh not found for this owner")
+        member_row = transaction.fetch_one(
+            f"SELECT {_MEMBER_FIELDS} FROM mesh_member WHERE owner_id = %s "
+            "AND mesh_id = %s AND member_id = %s FOR UPDATE", (owner, mesh, member),
+        )
+        if member_row is None:
+            raise RepositoryNotFoundError("member not found for this owner")
+        if member_row["member_status"] != "active":
+            raise RepositoryConflictError("member is not active")
+        if expected_membership_epoch is not None and (
+            mesh_row["membership_epoch"] != expected_membership_epoch
+        ):
+            raise MeshMembershipEpochConflictError("mesh membership epoch changed")
+        if expected_revocation_epoch is not None and (
+            mesh_row["revocation_epoch"] != expected_revocation_epoch
+        ):
+            raise MeshRevocationEpochConflictError("mesh revocation epoch changed")
+        if expected_member_version is not None and (
+            member_row["record_version"] != expected_member_version
+        ):
+            raise RepositoryConflictError("member record version changed")
+        return _mesh(mesh_row), _member(member_row)
+
     def retire_member(
         self,
         transaction: Transaction,

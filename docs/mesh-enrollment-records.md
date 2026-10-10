@@ -49,12 +49,21 @@ compose ownership, audit, outbox, and authority writes into one atomic unit.
   cannot gain another bootstrap member; later enrollment uses explicit current-revision fences.
 - Transition fences (`record_version`, state predicates) raise typed conflicts on stale writes.
 
+`assert_current_member(tx, owner_id=..., mesh_id=..., member_id=...,
+expected_membership_epoch=None, expected_revocation_epoch=None,
+expected_member_version=None)` locks the mesh first, then the member, and returns
+a detached `(MeshRecord, MeshMemberRecord)` tuple. It always requires active
+member status; optional expectations compare the global mesh membership and
+revocation epochs and the member record version. Rejected assertions change no
+record or epoch. The caller retains both locks through credential CAS, audit or
+dispatch; concurrent revocation must wait for that caller transaction.
+
 ## Compatibility behavior
 
 The slice is purely additive over the `089.001` catalog: no existing table, column, or function
-changes, and no edge in this slice uses `IF NOT EXISTS`. The owner/version repair changes only
-this unmerged repository API: its guarded DDL, schema revision, migration digest, and component
-pins stay unchanged. An older Plane binary cannot run against the newer schema. Recovery uses
+changes, and no edge in this slice uses `IF NOT EXISTS`. The current-member assertion changes only the repository API; its mesh DDL and
+historical `089.002` edge remain unchanged. The separate owner-stop slice advances
+the current catalog to `089.003`. An older Plane binary cannot run against the newer schema. Recovery uses
 a qualified forward repair or the coordinated PostgreSQL/blob restore in the `089.002` section
 of [migration and recovery](migration-and-recovery.md), with the matching prior composition.
 Epoch counters are monotonic by design and are never rewritten.

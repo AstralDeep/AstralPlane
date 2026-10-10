@@ -666,6 +666,13 @@ def _write_identity(catalog: api.RepositoryCatalog, transaction: Transaction) ->
     )
 
 
+def _write_stop_epochs(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.stop_epochs.engage(
+        transaction, owner_id=_OWNER, expected_revision=0, reason="synthetic rollback",
+        actor_id=_OWNER, at=_NOW,
+    )
+
+
 def _write_mesh_enrollment(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.mesh_enrollment.bootstrap_mesh(
         transaction,
@@ -1270,6 +1277,9 @@ ROLLBACK_CASES = (
         "share_grants", _write_share_grants, _count("share_grant", "token_sha256", _DIGEST_B), 1, 0
     ),
     RollbackCase(
+        "stop_epochs", _write_stop_epochs, _count("owner_stop_epoch", "owner_id", _OWNER), 1, 0
+    ),
+    RollbackCase(
         "tool_policy_state",
         _write_tool_policy_state,
         _count("user_preferences", "user_id", _OWNER),
@@ -1314,7 +1324,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 40
+    assert len(applicable_keys) == len(set(applicable_keys)) == 41
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

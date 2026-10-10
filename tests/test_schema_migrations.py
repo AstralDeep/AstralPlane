@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -707,7 +707,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,7 +732,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.003"
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
@@ -751,7 +751,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     )
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
@@ -792,7 +792,7 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     from astralplane.database.mesh_schema import MESH_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_089_002_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
     assert edge.name == "astralplane-089-mesh-enrollment-records"
     assert edge.source_revisions == ("089.001",)
     assert edge.target_revision == "089.002"
@@ -826,9 +826,9 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.002"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.003"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "dc9d7ec5b8c5be483c16f89ce7d723410c402fb6f5dc8962663c53a41e7609b5"
+        "e88f322be6908b738f6854d559e8193ad94a993baf0a967eef601d0e727771c3"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (

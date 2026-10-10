@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -251,6 +251,34 @@ key resolution, the routing adapter's behavior, or the enforcement of
 acknowledgment before a credential save. Those are product concerns verified
 outside this repository.
 
+### `089.003` owner stop epochs and recovery
+
+The guarded `089.002 -> 089.003` edge requires predecessor registry digest
+`8570c65182f5c90f12319435f9b2614d6ebfff0d1404e4650df6f2bd34962565`
+and its full catalog. It adds neutral owner stop anchors/epochs and immutable
+peer acknowledgment rows plus immutable operation epoch bindings, without rewriting mesh, IAM, audit, operation, grant,
+credential, accounting or blob records. Current catalog digest is
+`3441e750601f9b78fa7057d36e0b0c51bed6a912450baca6a30db7aa33fcae22`.
+Partial DDL or stamp failure rolls back together; a repeat verifies the complete
+current catalog and performs no write. Unknown/same-name tables are refused.
+
+Quiesce host admission and writers, retain the matching old composition and
+verify a joint PostgreSQL/durable-root backup before adopting the new pin. Run
+the matched registry through normal host initialization; verify repeat startup,
+retained representative state and the new host stop/admission transactions
+before reopening. An old binary is not compatible merely because its rows
+remain present. Host authorization, audit, peer verification and control effects
+are independently qualified; schema completion does not establish them.
+
+On failure, preserve failed state and keep admission closed. Retry only from
+the exact qualified predecessor/current catalog, or restore the verified paired
+pre-upgrade database/durable roots and matching composition. Do not drop tables,
+alter revision markers or reset stop epochs to simulate downgrade. After a
+joint restore, explicitly retire restored sessions through the matching Plane
+recovery facade, restart all application caches, obtain fresh IAM authority and
+reconcile stop state before admission. Restored stop/receipt observations remain
+historical; the host must not claim that a remote peer has resumed from them.
+
 ### `089.002` mesh enrollment records and recovery
 
 This additive edge requires the exact `089.001` registry and catalog. It adds
@@ -404,7 +432,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.001` must carry its own pinned historical registry digest. A current `089.002` marker and
+`089.002` must carry its own pinned historical registry digest. A current `089.003` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -507,8 +535,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, and `089.001` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.002` state must carry the exact current
+   `088.007`, `088.008`, `089.001`, and `089.002` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.003` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

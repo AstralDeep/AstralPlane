@@ -143,6 +143,13 @@ from astralplane.repositories.secrets import (
     EncryptedTypeSafeCredentialRepository,
 )
 from astralplane.repositories.share_grants import ShareGrantRepository
+from astralplane.repositories.stop_epochs import (
+    OwnerStoppedError,
+    OwnerStopRecord,
+    PeerStopAcknowledgment,
+    StopEpochConflictError,
+    StopEpochRepository,
+)
 from astralplane.repositories.tool_policy import ToolPolicyStateRepository
 from astralplane.repositories.tracked_jobs import TrackedJobRepository
 from astralplane.repositories.tutorials import TutorialRepository
@@ -211,6 +218,10 @@ def create_offline_grant_repository() -> OfflineGrantRepository:
 
 def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
     return MeshEnrollmentRepository()
+
+
+def create_stop_epoch_repository() -> StopEpochRepository:
+    return StopEpochRepository()
 
 
 def create_framework_credential_repository() -> FrameworkCredentialRepository:
@@ -398,6 +409,7 @@ class RepositoryCatalog:
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
+    stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
     harness_cleanup: HarnessCleanupRepository
@@ -452,6 +464,7 @@ class RepositoryCatalog:
                 "saved_components": self.saved_components,
                 "scheduler": self.scheduler,
                 "share_grants": self.share_grants,
+                "stop_epochs": self.stop_epochs,
                 "tool_policy_state": self.tool_policy_state,
                 "tracked_jobs": self.tracked_jobs,
                 "tutorials": self.tutorials,
@@ -497,6 +510,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
+        stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
         harness_cleanup=create_harness_cleanup_repository(),
@@ -751,6 +765,9 @@ __all__ = (
     "OperationRequest",
     "OperationState",
     "OwnerScope",
+    "OwnerStopRecord",
+    "OwnerStoppedError",
+    "PeerStopAcknowledgment",
     "PlaneHealth",
     "PlaneRuntime",
     "PublishedBundle",
@@ -760,6 +777,8 @@ __all__ = (
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
+    "StopEpochConflictError",
+    "StopEpochRepository",
     "canonical_bundle_digest",
     "canonical_generated_agent_manifest_digest",
     "create_agent_management_repository",
@@ -800,6 +819,7 @@ __all__ = (
     "create_saved_component_repository",
     "create_scheduler_repository",
     "create_share_grant_repository",
+    "create_stop_epoch_repository",
     "create_streaming_blob_store",
     "create_tool_policy_state_repository",
     "create_tracked_job_repository",

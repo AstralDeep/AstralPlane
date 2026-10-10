@@ -303,6 +303,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "saved_components",
         "scheduler",
         "share_grants",
+        "stop_epochs",
         "tool_policy_state",
         "tracked_jobs",
         "tutorials",

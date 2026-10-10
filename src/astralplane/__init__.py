@@ -60,6 +60,7 @@ from astralplane.api import (
     create_saved_component_repository,
     create_scheduler_repository,
     create_share_grant_repository,
+    create_stop_epoch_repository,
     create_streaming_blob_store,
     create_tool_policy_state_repository,
     create_tracked_job_repository,
@@ -176,6 +177,13 @@ from astralplane.repositories.generated_agent_publications import (
     generated_agent_publication_paths,
     generated_agent_publication_recovery_operation_binding,
 )
+from astralplane.repositories.stop_epochs import (
+    OwnerStoppedError,
+    OwnerStopRecord,
+    PeerStopAcknowledgment,
+    StopEpochConflictError,
+    StopEpochRepository,
+)
 from astralplane.repositories.work_admission import (
     AdmissionClass,
     ExecutionFence,
@@ -268,6 +276,9 @@ __all__ = (
     "OperationRequest",
     "OperationState",
     "OwnerScope",
+    "OwnerStopRecord",
+    "OwnerStoppedError",
+    "PeerStopAcknowledgment",
     "PlaneDatabase",
     "PlaneHealth",
     "PlaneRuntime",
@@ -291,6 +302,8 @@ __all__ = (
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
+    "StopEpochConflictError",
+    "StopEpochRepository",
     "StreamingBlobStore",
     "Transaction",
     "__version__",
@@ -335,6 +348,7 @@ __all__ = (
     "create_saved_component_repository",
     "create_scheduler_repository",
     "create_share_grant_repository",
+    "create_stop_epoch_repository",
     "create_streaming_blob_store",
     "create_tool_policy_state_repository",
     "create_tracked_job_repository",
