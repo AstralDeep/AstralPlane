@@ -149,7 +149,10 @@ explicitly named administrative surfaces prevent a caller from accidentally trea
 as ordinary user state.
 
 `AsyncPlaneRuntime` is a bounded event-loop adapter over whole caller-owned synchronous
-transactions. It does not provide async raw-SQL helpers or connection access. See
+transactions. It does not provide async raw-SQL helpers or connection access. Awaitable callbacks
+are rejected with the typed `async_plane_callback_type` error: coroutine functions before
+admission, and awaitable results inside the transaction, which then rolls back instead of
+committing. See
 `docs/knowledge-scheduler-and-async-contracts.md` for the exact lifecycle and cancellation rules.
 
 The public `work_admission` catalog member owns durable operation admission, finite hierarchical
