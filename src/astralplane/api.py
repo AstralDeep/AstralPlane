@@ -549,7 +549,13 @@ class PlaneHealth:
         return {
             "boot_status": self.boot_status.value,
             "compatibility": self.compatibility.to_dict(),
-            "pool": {"borrowed": self.pool.borrowed, "closed": self.pool.closed},
+            "pool": {
+                "borrowed": self.pool.borrowed,
+                "closed": self.pool.closed,
+                "cleanup_complete": self.pool.cleanup_complete,
+                "cleanup_failed": self.pool.cleanup_failed,
+                "cleanup_attempts": self.pool.cleanup_attempts,
+            },
             "ready": self.ready,
         }
 
