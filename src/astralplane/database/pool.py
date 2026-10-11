@@ -1,6 +1,10 @@
 """Explicit, driver-neutral pooled connection scopes: ConnectionPool wraps a DriverPool
-(psycopg2 or an injectable test pool) and always rolls back a borrowed connection
-before returning it, so implicit reads never leak to the next borrower.
+(psycopg2 or an injectable test pool) and always rolls back a borrowed connection before
+returning it, so implicit reads never leak to the next borrower. Close closes admission
+from its first attempt, serializes driver cleanup so concurrent callers neither duplicate
+it nor report success before it finishes, and raises the typed PoolShutdownError on driver
+failure with the attempt count so callers can bound retries and escalate persistent
+failures to the host while the pool stays closed to new checkouts.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from astralplane.errors import (
     PoolClosedError,
     PoolInUseError,
     PoolReleaseError,
+    PoolShutdownError,
 )
 
 
@@ -31,19 +36,32 @@ class DriverPool(Protocol):
 class PoolSnapshot:
     borrowed: int
     closed: bool
+    cleanup_complete: bool = False
+    cleanup_failed: bool = False
+    cleanup_attempts: int = 0
 
 
 class ConnectionPool:
     def __init__(self, driver_pool: DriverPool) -> None:
         self._driver_pool = driver_pool
         self._state_lock = threading.Lock()
+        self._cleanup_lock = threading.Lock()
         self._borrowed = 0
         self._closed = False
+        self._cleanup_complete = False
+        self._cleanup_failed = False
+        self._cleanup_attempts = 0
 
     @property
     def snapshot(self) -> PoolSnapshot:
         with self._state_lock:
-            return PoolSnapshot(borrowed=self._borrowed, closed=self._closed)
+            return PoolSnapshot(
+                borrowed=self._borrowed,
+                closed=self._closed,
+                cleanup_complete=self._cleanup_complete,
+                cleanup_failed=self._cleanup_failed,
+                cleanup_attempts=self._cleanup_attempts,
+            )
 
     def _borrow(self) -> Any:
         with self._state_lock:
@@ -99,7 +117,7 @@ class ConnectionPool:
 
     def close(self) -> None:
         with self._state_lock:
-            if self._closed:
+            if self._cleanup_complete:
                 return
             if self._borrowed:
                 raise PoolInUseError(
@@ -107,7 +125,27 @@ class ConnectionPool:
                     metadata={"borrowed": self._borrowed},
                 )
             self._closed = True
-        self._driver_pool.closeall()
+        with self._cleanup_lock:
+            with self._state_lock:
+                if self._cleanup_complete:
+                    return
+                self._cleanup_attempts += 1
+            try:
+                self._driver_pool.closeall()
+            except BaseException as exc:
+                with self._state_lock:
+                    self._cleanup_failed = True
+                    attempts = self._cleanup_attempts
+                if not isinstance(exc, Exception):
+                    raise
+                raise PoolShutdownError(
+                    "driver pool cleanup failed; admission stays closed and a later"
+                    " close call retries cleanup once per call",
+                    metadata={"attempts": attempts},
+                ) from exc
+            with self._state_lock:
+                self._cleanup_complete = True
+                self._cleanup_failed = False
 
 
 __all__ = ("ConnectionPool", "DriverPool", "PoolSnapshot")
