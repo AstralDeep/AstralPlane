@@ -10,7 +10,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -22,6 +22,10 @@ from astralplane.audit_delivery import (
 )
 from astralplane.contracts import ClaimedOutboxEntry, OutboxEntry, ReclaimedOutboxEntry
 from astralplane.errors import PlaneError, SQLContractError
+from astralplane.repositories import (
+    CANONICAL_JSON_MAX_BYTES,
+    CANONICAL_JSON_MAX_NODES,
+)
 
 NOW = datetime(2026, 8, 13, 21, tzinfo=UTC)
 
@@ -317,6 +321,87 @@ def test_canonical_payload_is_stable_and_rejects_credential_fields() -> None:
         canonical_audit_payload([])  # type: ignore[arg-type]
 
 
+def _nested_event(levels: int) -> dict[str, object]:
+    value: object = "leaf"
+    for _ in range(levels):
+        value = {"nested": [value]}
+    return cast(dict[str, object], value)
+
+
+def test_cyclic_structures_are_bounded_typed_rejections() -> None:
+    cyclic: dict[str, object] = {"action": "loop"}
+    cyclic["next"] = cyclic
+    with pytest.raises(SQLContractError, match="cyclic") as failure:
+        canonical_audit_payload(cyclic)
+    assert failure.value.code == "sql_contract"
+    assert failure.value.metadata == (("path", "$.next"),)
+    walk: list[object] = ["step"]
+    walk.append(walk)
+    with pytest.raises(SQLContractError, match="cyclic") as failure:
+        canonical_audit_payload({"walk": walk})
+    assert failure.value.code == "sql_contract"
+    assert failure.value.metadata == (("path", "$.walk[]"),)
+
+
+def test_depth_limit_admits_just_below_and_rejects_just_above() -> None:
+    expected = '{"nested":[' * 64 + '"leaf"' + "]}" * 64
+    assert canonical_audit_payload(_nested_event(64)) == expected.encode("utf-8")
+    with pytest.raises(SQLContractError, match="structural bounds") as failure:
+        canonical_audit_payload(_nested_event(65))
+    assert failure.value.code == "sql_contract"
+    assert dict(failure.value.metadata)["depth"] == "129"
+    assert all(len(value) <= 256 for key, value in failure.value.metadata if key == "path")
+
+
+def test_node_and_byte_bounds_stop_traversal_before_encoding() -> None:
+    just_below = {f"key-{index}": index for index in range(CANONICAL_JSON_MAX_NODES - 1)}
+    assert canonical_audit_payload(just_below).startswith(b"{")
+    just_above = {f"key-{index}": index for index in range(CANONICAL_JSON_MAX_NODES)}
+    with pytest.raises(SQLContractError, match="structural bounds") as failure:
+        canonical_audit_payload(just_above)
+    assert dict(failure.value.metadata)["nodes"] == "4097"
+    within = {"blob": "x" * (CANONICAL_JSON_MAX_BYTES - 12)}
+    assert len(canonical_audit_payload(within)) == CANONICAL_JSON_MAX_BYTES - 1
+    with pytest.raises(SQLContractError, match="byte bound") as failure:
+        canonical_audit_payload({"blob": "x" * CANONICAL_JSON_MAX_BYTES})
+    assert dict(failure.value.metadata)["maximum"] == str(CANONICAL_JSON_MAX_BYTES)
+
+
+def test_shared_subtrees_and_surrogates_preserve_or_refuse_bytes() -> None:
+    shared = {"token_count": 12}
+    event = {"sequence": 7, "action": "created", "nested": {"a": shared, "b": [shared]}}
+    assert canonical_audit_payload(event) == (
+        b'{"action":"created","nested":{"a":{"token_count":12},'
+        b'"b":[{"token_count":12}]},"sequence":7}'
+    )
+    assert canonical_audit_payload({"emoji": "\U0001f600"}) == '{"emoji":"\U0001f600"}'.encode(
+        "utf-8"
+    )
+    with pytest.raises(SQLContractError, match="surrogate") as failure:
+        canonical_audit_payload({"x": "\ud800"})
+    assert failure.value.code == "sql_contract"
+    assert failure.value.metadata == (("path", "$.x"),)
+    with pytest.raises(SQLContractError, match="surrogate"):
+        canonical_audit_payload({"nested": {"text": ["ok", "\udfff"]}})
+
+
+def test_surrogate_keys_and_hostile_sort_order_are_bounded_typed_rejections() -> None:
+    with pytest.raises(SQLContractError, match="surrogate") as failure:
+        canonical_audit_payload({"x\ud800": 1})
+    assert failure.value.code == "sql_contract"
+    assert dict(failure.value.metadata)["path"].startswith("$.x")
+
+    class HostileOrder(str):
+        def __lt__(self, other: object) -> bool:
+            raise ValueError("unorderable key")
+
+        def __gt__(self, other: object) -> bool:
+            raise ValueError("unorderable key")
+
+    with pytest.raises(SQLContractError, match="not canonical-JSON compatible"):
+        canonical_audit_payload({HostileOrder("a"): 1, "b": 2})
+
+
 def test_enqueue_is_transactional_idempotent_and_contains_no_sink_configuration() -> None:
     database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink()
     delivery = service(database, outbox, sink)
@@ -390,8 +475,12 @@ def test_retry_delay_saturates_without_overflow_or_rounding(
 ) -> None:
     database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
     delivery = service(
-        database, outbox, sink, max_attempts=40,
-        base_retry_delay=base_delay, max_retry_delay=max_delay,
+        database,
+        outbox,
+        sink,
+        max_attempts=40,
+        base_retry_delay=base_delay,
+        max_retry_delay=max_delay,
     )
     queue_event(delivery, database)
     database.rows["audit:event-1"]["attempt"] = attempt - 1
@@ -443,8 +532,12 @@ def test_retry_timestamp_limit_is_exact_and_failure_preserves_the_claim(
 def test_failure_settlement_requires_its_fence_and_commit(attempt: int, failure: str) -> None:
     database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
     delivery = service(
-        database, outbox, sink, max_attempts=40,
-        base_retry_delay=timedelta(days=2), max_retry_delay=timedelta(days=2),
+        database,
+        outbox,
+        sink,
+        max_attempts=40,
+        base_retry_delay=timedelta(days=2),
+        max_retry_delay=timedelta(days=2),
     )
     queue_event(delivery, database)
     database.rows["audit:event-1"]["attempt"] = attempt - 1
@@ -471,8 +564,11 @@ def test_failure_settlement_requires_its_fence_and_commit(attempt: int, failure:
 def test_default_terminal_attempt_needs_no_representable_retry_time() -> None:
     database, outbox, sink = MemoryDatabase(), MemoryOutbox(), RecordingSink(failures=1)
     delivery = service(
-        database, outbox, sink,
-        base_retry_delay=timedelta.max, max_retry_delay=timedelta.max,
+        database,
+        outbox,
+        sink,
+        base_retry_delay=timedelta.max,
+        max_retry_delay=timedelta.max,
     )
     queue_event(delivery, database)
     database.rows["audit:event-1"]["attempt"] = 7
