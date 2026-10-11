@@ -6,6 +6,8 @@ callers cannot create an unbounded executor backlog.
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
@@ -25,6 +27,22 @@ class AsyncPlaneCapacityError(PlaneError):
 
 class AsyncPlaneClosedError(PlaneError):
     default_code = "async_plane_closed"
+
+
+class AsyncPlaneCallbackTypeError(PlaneError):
+    default_code = "async_plane_callback_type"
+
+
+def _callback_is_coroutine(callback: object) -> bool:
+    candidate: object = callback
+    while isinstance(candidate, functools.partial):
+        candidate = candidate.func
+    if inspect.iscoroutinefunction(candidate):
+        return True
+    try:
+        return inspect.iscoroutinefunction(candidate.__call__)
+    except AttributeError:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +104,12 @@ class AsyncPlaneRuntime:
     ) -> T:
         if not callable(callback):
             raise TypeError("callback must be callable")
+        if _callback_is_coroutine(callback):
+            raise AsyncPlaneCallbackTypeError(
+                "AsyncPlaneRuntime callbacks must complete synchronously; an awaitable"
+                " callback would leave the transaction without its result",
+                metadata={"reason": "coroutine_callback"},
+            )
         loop = asyncio.get_running_loop()
         self._bind_loop(loop)
         if self._closed:
@@ -156,10 +180,20 @@ class AsyncPlaneRuntime:
         isolation: IsolationLevel | None,
     ) -> T:
         with self._runtime.transaction(isolation=isolation) as transaction:
-            return callback(transaction)
+            result = callback(transaction)
+            if inspect.isawaitable(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise AsyncPlaneCallbackTypeError(
+                    "AsyncPlaneRuntime callbacks must return a synchronous result;"
+                    " the transaction rolled back instead of committing an awaitable",
+                    metadata={"reason": "awaitable_result"},
+                )
+            return result
 
 
 __all__ = (
+    "AsyncPlaneCallbackTypeError",
     "AsyncPlaneCapacityError",
     "AsyncPlaneClosedError",
     "AsyncPlaneRuntime",

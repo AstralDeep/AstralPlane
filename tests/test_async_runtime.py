@@ -5,13 +5,17 @@ admission, cancellation, and event-driven shutdown, with a PostgreSQL pool-close
 from __future__ import annotations
 
 import asyncio
+import functools
 import threading
+import warnings
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from types import SimpleNamespace
+from types import CoroutineType, SimpleNamespace
 
 import pytest
 
 from astralplane.async_runtime import (
+    AsyncPlaneCallbackTypeError,
     AsyncPlaneCapacityError,
     AsyncPlaneClosedError,
     AsyncPlaneRuntime,
@@ -22,17 +26,56 @@ from astralplane.errors import PoolInUseError
 from tests.fixtures.migrated_template import MigratedDatabase
 
 
+async def _async_function(_transaction: object) -> str:
+    return "never"
+
+
+class _AsyncCallObject:
+    async def __call__(self, _transaction: object) -> str:
+        return "never"
+
+
+class _HiddenCallObject:
+    async def __call__(self, _transaction: object) -> str:
+        return "never"
+
+    def __getattribute__(self, name: str) -> object:
+        if name == "__call__":
+            raise AttributeError("__call__ is withheld")
+        return object.__getattribute__(self, name)
+
+
+class _AsyncMethodHost:
+    async def method(self, _transaction: object) -> str:
+        return "never"
+
+
+class _AwaitableResult:
+    def __await__(self) -> Iterator[None]:
+        if False:
+            yield None
+
+
 class RuntimeStub:
     def __init__(self) -> None:
         self.repositories = object()
         self.isolations: list[IsolationLevel | None] = []
         self.threads: list[int] = []
+        self.transactions_entered = 0
+        self.outcomes: list[str] = []
 
     @contextmanager
     def transaction(self, *, isolation: IsolationLevel | None = None):
+        self.transactions_entered += 1
         self.isolations.append(isolation)
         self.threads.append(threading.get_ident())
-        yield SimpleNamespace(marker="transaction")
+        try:
+            yield SimpleNamespace(marker="transaction")
+        except BaseException:
+            self.outcomes.append("rolled_back")
+            raise
+        else:
+            self.outcomes.append("committed")
 
 
 def test_transaction_runs_off_loop_with_exact_isolation_and_catalog() -> None:
@@ -65,6 +108,148 @@ def test_callback_failure_propagates_and_releases_capacity() -> None:
         assert adapter.snapshot().active == 0
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "build_callback",
+    [
+        pytest.param(lambda: _async_function, id="coroutine_function"),
+        pytest.param(
+            lambda: functools.partial(_async_function),
+            id="partial_of_coroutine_function",
+        ),
+        pytest.param(_AsyncCallObject, id="callable_object_with_async_call"),
+        pytest.param(lambda: _AsyncMethodHost().method, id="bound_async_method"),
+    ],
+)
+def test_coroutine_callback_kinds_are_rejected_before_any_transaction(
+    build_callback: Callable[[], object],
+) -> None:
+    runtime = RuntimeStub()
+    adapter = AsyncPlaneRuntime(runtime)  # type: ignore[arg-type]
+
+    with pytest.raises(AsyncPlaneCallbackTypeError) as caught:
+        asyncio.run(adapter.run_in_transaction(build_callback()))  # type: ignore[arg-type]
+    assert caught.value.code == "async_plane_callback_type"
+    assert caught.value.metadata == (("reason", "coroutine_callback"),)
+    assert runtime.transactions_entered == 0
+    assert runtime.outcomes == []
+    assert runtime.isolations == []
+    assert adapter.snapshot().active == 0
+    assert asyncio.run(adapter.run_in_transaction(lambda _transaction: "sync")) == "sync"
+    assert runtime.outcomes == ["committed"]
+
+
+def test_callable_with_unreadable_call_attribute_falls_through_to_result_rejection() -> None:
+    runtime = RuntimeStub()
+    adapter = AsyncPlaneRuntime(runtime)  # type: ignore[arg-type]
+    callback = _HiddenCallObject()
+    assert callable(callback)
+
+    async def run() -> None:
+        with pytest.raises(AsyncPlaneCallbackTypeError) as raised:
+            await adapter.run_in_transaction(callback)
+        assert raised.value.metadata == (("reason", "awaitable_result"),)
+        assert adapter.snapshot().active == 0
+
+    asyncio.run(run())
+    assert runtime.transactions_entered == 1
+    assert runtime.outcomes == ["rolled_back"]
+
+
+def test_sync_callback_returning_coroutine_rolls_back_without_leaking() -> None:
+    runtime = RuntimeStub()
+    adapter = AsyncPlaneRuntime(runtime)  # type: ignore[arg-type]
+    produced: list[object] = []
+
+    def returns_coroutine(_transaction: object) -> object:
+        coroutine = _async_function(_transaction)
+        produced.append(coroutine)
+        return coroutine
+
+    async def run() -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(AsyncPlaneCallbackTypeError) as raised:
+                await adapter.run_in_transaction(returns_coroutine)
+        assert raised.value.code == "async_plane_callback_type"
+        assert raised.value.metadata == (("reason", "awaitable_result"),)
+        assert not [item for item in caught if issubclass(item.category, RuntimeWarning)]
+        assert adapter.snapshot().active == 0
+        assert await adapter.run_in_transaction(lambda _transaction: "after") == "after"
+
+    asyncio.run(run())
+    assert runtime.transactions_entered == 2
+    assert runtime.outcomes == ["rolled_back", "committed"]
+    assert isinstance(produced[0], CoroutineType)
+    assert produced[0].cr_frame is None
+
+
+def test_sync_callback_returning_non_coroutine_awaitable_rolls_back() -> None:
+    runtime = RuntimeStub()
+    adapter = AsyncPlaneRuntime(runtime)  # type: ignore[arg-type]
+
+    def returns_awaitable(_transaction: object) -> object:
+        return _AwaitableResult()
+
+    async def run() -> None:
+        with pytest.raises(AsyncPlaneCallbackTypeError) as raised:
+            await adapter.run_in_transaction(returns_awaitable)
+        assert raised.value.code == "async_plane_callback_type"
+        assert raised.value.metadata == (("reason", "awaitable_result"),)
+        assert adapter.snapshot().active == 0
+
+    asyncio.run(run())
+    assert runtime.transactions_entered == 1
+    assert runtime.outcomes == ["rolled_back"]
+
+
+def test_cancelled_requester_keeps_slot_until_worker_rejects_awaitable() -> None:
+    runtime = RuntimeStub()
+    adapter = AsyncPlaneRuntime(  # type: ignore[arg-type]
+        runtime,
+        maximum_concurrency=1,
+        admission_timeout_seconds=0.02,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    produced: list[object] = []
+
+    def returns_coroutine(_transaction: object) -> object:
+        entered.set()
+        assert release.wait(timeout=2)
+        coroutine = _async_function(_transaction)
+        produced.append(coroutine)
+        return coroutine
+
+    async def run() -> None:
+        loop = asyncio.get_running_loop()
+        unhandled: list[object] = []
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        requester = asyncio.create_task(adapter.run_in_transaction(returns_coroutine))
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(0)
+            requester.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await requester
+            assert adapter.snapshot().active == 1
+            with pytest.raises(AsyncPlaneCapacityError):
+                await adapter.run_in_transaction(lambda _transaction: "never")
+            release.set()
+            while adapter.snapshot().active:
+                await asyncio.sleep(0.001)
+            assert isinstance(produced[0], CoroutineType)
+            assert produced[0].cr_frame is None
+            assert await adapter.run_in_transaction(lambda _transaction: 7) == 7
+            assert not unhandled
+        finally:
+            release.set()
+            await asyncio.gather(requester, return_exceptions=True)
+
+    asyncio.run(run())
+    assert runtime.transactions_entered == 2
+    assert runtime.outcomes == ["rolled_back", "committed"]
 
 
 def test_admission_timeout_bounds_worker_backlog() -> None:

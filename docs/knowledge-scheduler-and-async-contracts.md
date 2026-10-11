@@ -120,6 +120,15 @@ one worker thread. It deliberately does not expose `afetch_one`, `afetch_all`, `
 connections, or commits. Admission has a bounded wait and raises
 `async_plane_capacity_unavailable` rather than growing an unbounded executor queue.
 
+The callback must complete synchronously inside its one caller-owned transaction. Coroutine
+functions, `functools.partial` wrappers around them, and callable objects with an async
+`__call__` are rejected with the typed `async_plane_callback_type` error before admission, so no
+event loop is bound and no transaction starts. A synchronous callable that returns an awaitable
+closes any coroutine it produced and fails with the same typed error inside the transaction, which
+rolls back instead of committing an empty result; the capacity slot is released exactly as for
+other worker failures, and cancellation behavior is unchanged. Regular synchronous results remain
+supported.
+
 Python cannot cancel a worker thread already inside PostgreSQL. If an awaiting coroutine is
 cancelled, the adapter retains that capacity slot until the transaction finishes and consumes any
 worker failure. Retryable product callbacks must therefore use the repositories' idempotency and
