@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from _support import ScriptedTransaction
@@ -14,6 +15,7 @@ from _support import ScriptedTransaction
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
+    RepositoryNotFoundError,
     RepositoryValidationError,
 )
 from astralplane.repositories.drafts import (
@@ -1121,4 +1123,81 @@ def test_create_replay_owner_conflict_and_draft_update_validation() -> None:
             expected_revision=0,
             expected_state="claimed",
             updates={"owner_user_id": "other"},
+        )
+
+
+class _TruncatingFence:
+    def __int__(self) -> int:
+        return int(1.9)
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [1.9, float("inf"), float("nan"), Decimal("1.9"), True, _TruncatingFence(), "1.9", -1],
+)
+def test_revision_fences_reject_malformed_values_before_sql(fence: object) -> None:
+    repository = DraftAgentRepository()
+
+    with pytest.raises(RepositoryValidationError, match="expected_revision"):
+        repository.compare_and_set_draft(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            draft_id="draft-1",
+            expected_revision=fence,
+            updates={"status": "analyzing"},
+            updated_at=2,
+        )
+    with pytest.raises(RepositoryValidationError, match="expected_revision"):
+        repository.bind_attachment_provenance(
+            ScriptedTransaction(),
+            owner_id="owner-1",
+            draft_id="draft-1",
+            expected_revision=fence,
+            source_chat_id="chat-1",
+            gap_fingerprint="gap-1",
+            source_attachment_id="attachment-1",
+            updated_at=2,
+        )
+
+
+def test_revision_fences_pass_exact_integer_values_to_the_owner_scoped_statement() -> None:
+    repository = DraftAgentRepository()
+
+    for fence in (2, 2.0, Decimal("2.00"), "2"):
+        transaction = ScriptedTransaction(one=[draft_row(state_revision=3)])
+        updated = repository.compare_and_set_draft(
+            transaction,
+            owner_id="owner-1",
+            draft_id="draft-1",
+            expected_revision=fence,
+            updates={"status": "analyzing"},
+            updated_at=2,
+        )
+        assert updated.state_revision == 3
+        assert transaction.calls[0][2][-2:] == ("owner-1", 2)
+        assert "user_id = %s AND state_revision = %s" in transaction.calls[0][1]
+
+
+def test_draft_cas_owner_mismatch_is_not_found_without_cross_owner_disclosure() -> None:
+    repository = DraftAgentRepository()
+
+    with pytest.raises(RepositoryNotFoundError, match="owner-scoped draft"):
+        repository.compare_and_set_draft(
+            ScriptedTransaction(one=[None, None]),
+            owner_id="other-owner",
+            draft_id="draft-1",
+            expected_revision=0,
+            updates={"status": "analyzing"},
+            updated_at=2,
+        )
+    with pytest.raises(RepositoryNotFoundError, match="owner-scoped draft"):
+        repository.bind_attachment_provenance(
+            ScriptedTransaction(one=[None, None]),
+            owner_id="other-owner",
+            draft_id="draft-1",
+            expected_revision=0,
+            source_chat_id="chat-1",
+            gap_fingerprint="gap-1",
+            source_attachment_id="attachment-1",
+            updated_at=2,
         )

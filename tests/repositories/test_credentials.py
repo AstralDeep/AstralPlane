@@ -5,6 +5,8 @@ inventory.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from astralplane.repositories import (
@@ -336,6 +338,94 @@ def test_machine_cas_rejects_stale_or_nonadvancing_revision() -> None:
             credential_type="password",
             encrypted_secret="secret-ciphertext",
             encrypted_passphrase=None,
+            updated_at=200,
+        )
+
+
+class _TruncatingFence:
+    def __int__(self) -> int:
+        return int(1.9)
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [1.9, float("inf"), float("nan"), Decimal("1.9"), True, _TruncatingFence(), "1.9", -1],
+)
+def test_cas_fences_reject_malformed_revisions_before_sql(fence: object) -> None:
+    repository = CredentialRepository()
+
+    with pytest.raises(RepositoryValidationError, match="expected_updated_at"):
+        repository.compare_and_set_machine_credential(
+            ScriptedTransaction(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            machine_id="machine-1",
+            expected_updated_at=fence,
+            credential_type="password",
+            encrypted_secret="secret-ciphertext",
+            encrypted_passphrase=None,
+            updated_at=200,
+        )
+    with pytest.raises(RepositoryValidationError, match="expected_updated_at"):
+        repository.compare_and_set_ciphertext(
+            ScriptedTransaction(),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            agent_id="agent-1",
+            credential_key="api_key",
+            expected_updated_at=fence,
+            encrypted_value="ciphertext-2",
+            updated_at=200,
+        )
+
+
+def test_machine_cas_keeps_valid_stale_and_owner_misses_typed_and_owner_scoped() -> None:
+    repository = CredentialRepository()
+
+    advanced = repository.compare_and_set_machine_credential(
+        ScriptedTransaction(one=[_machine_row(cred_type="password", updated_at=200)]),  # type: ignore[arg-type]
+        owner_id="owner-1",
+        machine_id="machine-1",
+        expected_updated_at=100,
+        credential_type="password",
+        encrypted_secret="secret-ciphertext",
+        encrypted_passphrase=None,
+        updated_at=200,
+    )
+    assert advanced.updated_at == 200
+
+    with pytest.raises(RepositoryConflictError, match="stale"):
+        repository.compare_and_set_machine_credential(
+            ScriptedTransaction(one=[None]),  # type: ignore[arg-type]
+            owner_id="owner-1",
+            machine_id="machine-1",
+            expected_updated_at=50,
+            credential_type="password",
+            encrypted_secret="secret-ciphertext",
+            encrypted_passphrase=None,
+            updated_at=200,
+        )
+
+    with pytest.raises(RepositoryConflictError, match="stale"):
+        repository.compare_and_set_machine_credential(
+            ScriptedTransaction(one=[None]),  # type: ignore[arg-type]
+            owner_id="other-owner",
+            machine_id="machine-1",
+            expected_updated_at=100,
+            credential_type="password",
+            encrypted_secret="secret-ciphertext",
+            encrypted_passphrase=None,
+            updated_at=200,
+        )
+
+
+def test_user_cas_owner_mismatch_conflicts_without_disclosing_the_missing_row() -> None:
+    with pytest.raises(RepositoryConflictError, match="does not exist"):
+        CredentialRepository().compare_and_set_ciphertext(
+            ScriptedTransaction(one=[None, None]),  # type: ignore[arg-type]
+            owner_id="other-owner",
+            agent_id="agent-1",
+            credential_key="api_key",
+            expected_updated_at=100,
+            encrypted_value="ciphertext-2",
             updated_at=200,
         )
 

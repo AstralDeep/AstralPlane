@@ -6,7 +6,10 @@ callers can compose several repository operations into one atomic unit.
 from __future__ import annotations
 
 import json
+import math
+import re
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Final, NoReturn
 
@@ -82,13 +85,29 @@ def _bounded_limit(value: object, *, maximum: int = 200) -> int:
     return limit
 
 
+_CANONICAL_INTEGER_TEXT = re.compile(r"-?[0-9]+")
+
+
 def _non_negative_int(value: object, field: str) -> int:
     if isinstance(value, bool):
         raise RepositoryValidationError(f"{field} must be a non-negative integer")
-    try:
+    if isinstance(value, int):
+        integer: int = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise RepositoryValidationError(f"{field} must be a non-negative integer")
         integer = int(value)
-    except (TypeError, ValueError) as exc:
-        raise RepositoryValidationError(f"{field} must be a non-negative integer") from exc
+    elif isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            raise RepositoryValidationError(f"{field} must be a non-negative integer")
+        integer = int(value)
+    elif isinstance(value, str) and _CANONICAL_INTEGER_TEXT.fullmatch(value):
+        try:
+            integer = int(value)
+        except ValueError as exc:
+            raise RepositoryValidationError(f"{field} must be a non-negative integer") from exc
+    else:
+        raise RepositoryValidationError(f"{field} must be a non-negative integer")
     if integer < 0:
         raise RepositoryValidationError(f"{field} must be a non-negative integer")
     return integer
