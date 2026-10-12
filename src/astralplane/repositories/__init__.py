@@ -11,9 +11,13 @@ import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, NoReturn
+from typing import Any, Final, NoReturn
 
 from astralplane.errors import PlaneError
+
+CANONICAL_JSON_MAX_DEPTH: Final = 128
+CANONICAL_JSON_MAX_NODES: Final = 4096
+CANONICAL_JSON_MAX_BYTES: Final = 1_048_576
 
 
 class RepositoryError(PlaneError):
@@ -114,28 +118,95 @@ def _positive_int(value: object, field: str) -> int:
 
 
 def _canonical_json(value: object, field: str) -> str:
-    def json_ready(item: object) -> object:
+    active: set[int] = set()
+    nodes = 0
+
+    def json_ready(item: object, depth: int) -> object:
+        nonlocal nodes
+        nodes += 1
+        if depth > CANONICAL_JSON_MAX_DEPTH:
+            raise RepositoryValidationError(
+                f"{field} exceeds canonical JSON structural bounds",
+                metadata={"field": field, "depth": depth},
+            )
+        if nodes > CANONICAL_JSON_MAX_NODES:
+            raise RepositoryValidationError(
+                f"{field} exceeds canonical JSON structural bounds",
+                metadata={"field": field, "nodes": nodes},
+            )
         if isinstance(item, Mapping):
-            result = {}
-            for key, nested in item.items():
-                if not isinstance(key, str):
-                    raise TypeError(f"Dictionary keys must be strings, got {type(key).__name__}")
-                result[key] = json_ready(nested)
+            identity = id(item)
+            if identity in active:
+                raise RepositoryValidationError(
+                    f"{field} contains a cyclic reference",
+                    metadata={"field": field},
+                )
+            active.add(identity)
+            try:
+                result = {}
+                for key, nested in item.items():
+                    if not isinstance(key, str):
+                        raise TypeError(
+                            f"Dictionary keys must be strings, got {type(key).__name__}"
+                        )
+                    if not key.isascii():
+                        try:
+                            key.encode("utf-8")
+                        except UnicodeEncodeError as exc:
+                            raise RepositoryValidationError(
+                                f"{field} contains unpaired surrogate code points",
+                                metadata={"field": field},
+                            ) from exc
+                    result[key] = json_ready(nested, depth + 1)
+            finally:
+                active.discard(identity)
             return result
         if isinstance(item, (list, tuple)):
-            return [json_ready(nested) for nested in item]
+            identity = id(item)
+            if identity in active:
+                raise RepositoryValidationError(
+                    f"{field} contains a cyclic reference",
+                    metadata={"field": field},
+                )
+            active.add(identity)
+            try:
+                return [json_ready(nested, depth + 1) for nested in item]
+            finally:
+                active.discard(identity)
+        if isinstance(item, str) and not item.isascii():
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise RepositoryValidationError(
+                    f"{field} contains unpaired surrogate code points",
+                    metadata={"field": field},
+                ) from exc
         return item
 
     try:
-        return json.dumps(
-            json_ready(value),
+        normalized = json_ready(value, 0)
+    except RepositoryValidationError:
+        raise
+    # The walk raises ValueError subclasses; only foreign dumps errors take the generic message
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise RepositoryValidationError(f"{field} must be canonical JSON-compatible data") from exc
+    try:
+        encoded_text = json.dumps(
+            normalized,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
             sort_keys=True,
         )
-    except (TypeError, ValueError) as exc:
+        payload = encoded_text.encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
         raise RepositoryValidationError(f"{field} must be canonical JSON-compatible data") from exc
+    if len(payload) > CANONICAL_JSON_MAX_BYTES:
+        raise RepositoryValidationError(
+            f"{field} exceeds the canonical JSON byte bound",
+            metadata={"field": field, "maximum": CANONICAL_JSON_MAX_BYTES},
+        )
+    return encoded_text
 
 
 def _freeze(value: Any) -> Any:

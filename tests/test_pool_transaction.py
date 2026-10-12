@@ -5,6 +5,9 @@ recovery.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from astralplane.contracts import IsolationLevel
@@ -15,6 +18,7 @@ from astralplane.errors import (
     PoolClosedError,
     PoolInUseError,
     PoolReleaseError,
+    PoolShutdownError,
     TransactionCommitError,
     TransactionStateError,
 )
@@ -82,6 +86,13 @@ class DriverPool:
         self.close_calls = 0
         self.fail_release = False
         self.fail_borrow = False
+        self.fail_closeall = False
+        self.interrupt_closeall = False
+        self.close_gate: threading.Event | None = None
+        self.close_entered = threading.Event()
+        self.max_concurrent_close_calls = 0
+        self._open_close_calls = 0
+        self._close_accounting_lock = threading.Lock()
 
     def getconn(self) -> Connection:
         if self.fail_borrow:
@@ -94,7 +105,23 @@ class DriverPool:
         self.returned.append((connection, close))
 
     def closeall(self) -> None:
-        self.close_calls += 1
+        with self._close_accounting_lock:
+            self._open_close_calls += 1
+            self.close_calls += 1
+            self.max_concurrent_close_calls = max(
+                self.max_concurrent_close_calls, self._open_close_calls
+            )
+        try:
+            self.close_entered.set()
+            if self.interrupt_closeall:
+                raise KeyboardInterrupt
+            if self.fail_closeall:
+                raise RuntimeError("closeall failed")
+            if self.close_gate is not None and not self.close_gate.wait(timeout=10.0):
+                raise AssertionError("close gate was never released")
+        finally:
+            with self._close_accounting_lock:
+                self._open_close_calls -= 1
 
 
 def test_connection_scope_rolls_back_implicit_work_before_return() -> None:
@@ -139,6 +166,170 @@ def test_pool_close_is_idempotent_and_refuses_active_borrowers() -> None:
     assert pool.snapshot.closed
     with pytest.raises(PoolClosedError), pool.connection():
         pass
+
+
+def test_failed_close_keeps_admission_closed_until_an_explicit_close_succeeds() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.fail_closeall = True
+    pool = ConnectionPool(driver)
+
+    with pytest.raises(PoolShutdownError):
+        pool.close()
+    assert driver.close_calls == 1
+    assert pool.snapshot.closed
+    assert not pool.snapshot.cleanup_complete
+    assert pool.snapshot.cleanup_failed
+    assert pool.snapshot.cleanup_attempts == 1
+    with pytest.raises(PoolClosedError), pool.connection():
+        pass
+
+    driver.fail_closeall = False
+    pool.close()
+    assert driver.close_calls == 2
+    snapshot = pool.snapshot
+    assert snapshot.closed
+    assert snapshot.cleanup_complete
+    assert not snapshot.cleanup_failed
+    assert snapshot.cleanup_attempts == 2
+
+    pool.close()
+    assert driver.close_calls == 2
+    with pytest.raises(PoolClosedError), pool.connection():
+        pass
+
+
+def test_failed_close_raises_a_typed_non_sensitive_shutdown_failure() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.fail_closeall = True
+    pool = ConnectionPool(driver)
+
+    with pytest.raises(PoolShutdownError) as error:
+        pool.close()
+
+    assert error.value.code == "pool_shutdown_failed"
+    assert error.value.metadata == (("attempts", "1"),)
+    assert "closeall failed" not in str(error.value)
+    assert isinstance(error.value.__cause__, RuntimeError)
+
+
+def test_base_exception_interruptions_record_failed_cleanup_without_masking() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.interrupt_closeall = True
+    pool = ConnectionPool(driver)
+
+    with pytest.raises(KeyboardInterrupt):
+        pool.close()
+    assert pool.snapshot.closed
+    assert pool.snapshot.cleanup_failed
+    assert not pool.snapshot.cleanup_complete
+
+    driver.interrupt_closeall = False
+    pool.close()
+    assert pool.snapshot.cleanup_complete
+    assert driver.close_calls == 2
+
+
+def test_borrowed_refusal_survives_a_failed_cleanup_attempt() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.fail_closeall = True
+    pool = ConnectionPool(driver)
+
+    with pool.connection():
+        with pytest.raises(PoolInUseError) as error:
+            pool.close()
+        assert error.value.metadata == (("borrowed", "1"),)
+        assert not pool.snapshot.closed
+
+    with pytest.raises(PoolShutdownError):
+        pool.close()
+    assert pool.snapshot.cleanup_failed
+    with pytest.raises(PoolClosedError), pool.connection():
+        pass
+
+    driver.fail_closeall = False
+    pool.close()
+    assert pool.snapshot.cleanup_complete
+
+
+def test_concurrent_close_callers_share_one_cleanup_and_never_report_early_success() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.close_gate = threading.Event()
+    pool = ConnectionPool(driver)
+    outcomes: list[BaseException | None] = []
+
+    def close() -> None:
+        try:
+            pool.close()
+            outcomes.append(None)
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    first = threading.Thread(target=close)
+    first.start()
+    assert driver.close_entered.wait(timeout=10.0)
+    second = threading.Thread(target=close)
+    second.start()
+    deadline = time.monotonic() + 10.0
+    while not second.is_alive() and time.monotonic() < deadline:
+        second.join(timeout=0.05)
+    assert second.is_alive()
+    second.join(timeout=0.5)
+    assert second.is_alive(), "concurrent close finished while cleanup was still in flight"
+    assert driver.close_calls == 1
+
+    driver.close_gate.set()
+    first.join(timeout=10.0)
+    second.join(timeout=10.0)
+    assert not first.is_alive() and not second.is_alive()
+    assert len(outcomes) == 2 and all(outcome is None for outcome in outcomes)
+    assert driver.close_calls == 1
+    assert driver.max_concurrent_close_calls == 1
+    assert pool.snapshot.cleanup_complete
+    assert pool.snapshot.cleanup_attempts == 1
+
+
+def test_concurrent_close_callers_serialize_failed_attempts_and_each_reports_the_truth() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.fail_closeall = True
+    pool = ConnectionPool(driver)
+    failures: list[PoolShutdownError] = []
+
+    def close() -> None:
+        try:
+            pool.close()
+        except PoolShutdownError as exc:
+            failures.append(exc)
+
+    closers = [threading.Thread(target=close) for _ in range(3)]
+    for closer in closers:
+        closer.start()
+    for closer in closers:
+        closer.join(timeout=10.0)
+        assert not closer.is_alive()
+
+    assert len(failures) == 3
+    assert {failure.metadata for failure in failures} == {
+        (("attempts", "1"),),
+        (("attempts", "2"),),
+        (("attempts", "3"),),
+    }
+    assert driver.max_concurrent_close_calls == 1
+    assert driver.close_calls == 3
+    assert pool.snapshot.closed
+    assert pool.snapshot.cleanup_failed
+    assert not pool.snapshot.cleanup_complete
+    assert pool.snapshot.cleanup_attempts == 3
+
+    driver.fail_closeall = False
+    pool.close()
+    assert pool.snapshot.cleanup_complete
+    assert driver.close_calls == 4
 
 
 def test_reset_failure_discards_connection_and_is_visible() -> None:

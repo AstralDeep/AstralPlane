@@ -42,6 +42,10 @@ class PoolReleaseError(PlaneError):
     default_code = "pool_release_failed"
 
 
+class PoolShutdownError(PlaneError):
+    default_code = "pool_shutdown_failed"
+
+
 class TransactionStateError(PlaneError):
     default_code = "transaction_state"
 

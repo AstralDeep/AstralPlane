@@ -74,7 +74,7 @@ from astralplane.contracts import IsolationLevel, ReconciliationHookIdentity
 from astralplane.database.bootstrap import BootStatus
 from astralplane.database.pool import PoolSnapshot
 from astralplane.database.revision import SCHEMA_REVISION
-from astralplane.errors import InitializationError
+from astralplane.errors import InitializationError, PoolShutdownError
 from astralplane.outbox import PostgresOutboxStore
 from astralplane.purge import (
     DurablePurgeExecutor,
@@ -135,12 +135,26 @@ _DIGEST = "a" * 64
 class StubPool:
     def __init__(self) -> None:
         self.closed = False
+        self.cleanup_failed = False
+        self.fail_close = False
 
     @property
     def snapshot(self) -> PoolSnapshot:
-        return PoolSnapshot(borrowed=0, closed=self.closed)
+        return PoolSnapshot(
+            borrowed=0,
+            closed=self.closed,
+            cleanup_complete=self.closed and not self.cleanup_failed,
+            cleanup_failed=self.cleanup_failed,
+            cleanup_attempts=1 if self.closed else 0,
+        )
 
     def close(self) -> None:
+        if self.fail_close:
+            raise PoolShutdownError(
+                "driver pool cleanup failed; admission stays closed and a later"
+                " close call retries cleanup once per call",
+                metadata={"attempts": 1},
+            )
         self.closed = True
 
 
@@ -417,6 +431,38 @@ def test_health_reports_readiness_and_detached_shape() -> None:
     assert health.ready
     assert health.to_dict()["ready"] is True
     pool.close()
+    assert not runtime.health().ready
+
+
+def test_runtime_close_propagates_the_typed_shutdown_failure() -> None:
+    runtime, pool, _, _, _ = _runtime(status=BootStatus.READY)
+    pool.fail_close = True
+
+    with pytest.raises(PoolShutdownError) as error:
+        runtime.close()
+
+    assert error.value.code == "pool_shutdown_failed"
+    assert error.value.metadata == (("attempts", "1"),)
+
+
+def test_health_reports_pool_cleanup_state_truthfully() -> None:
+    runtime, pool, _, _, _ = _runtime(status=BootStatus.READY)
+
+    assert runtime.health().to_dict()["pool"] == {
+        "borrowed": 0,
+        "closed": False,
+        "cleanup_complete": False,
+        "cleanup_failed": False,
+        "cleanup_attempts": 0,
+    }
+
+    pool.closed = True
+    pool.cleanup_failed = True
+    reported = runtime.health().to_dict()["pool"]
+    assert reported["closed"] is True
+    assert reported["cleanup_complete"] is False
+    assert reported["cleanup_failed"] is True
+    assert reported["cleanup_attempts"] == 1
     assert not runtime.health().ready
 
 
