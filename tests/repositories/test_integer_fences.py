@@ -5,6 +5,7 @@ strings are accepted, and every malformed value fails with a typed validation er
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
 
 import pytest
@@ -111,3 +112,16 @@ def test_positive_variant_keeps_zero_rejection_and_lossless_coercion() -> None:
         _positive_int(1.9, "fence")
     with pytest.raises(RepositoryValidationError):
         _positive_int(True, "fence")
+
+
+@pytest.mark.parametrize("validator", [_non_negative_int, _positive_int])
+def test_integer_conversion_limit_produces_a_safe_typed_failure(validator) -> None:
+    previous_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        with pytest.raises(RepositoryValidationError) as raised:
+            validator("9" * 5000, "expected_revision")
+        assert raised.value.code == "repository_validation"
+        assert str(raised.value) == "expected_revision must be a non-negative integer"
+    finally:
+        sys.set_int_max_str_digits(previous_limit)

@@ -102,7 +102,10 @@ def _non_negative_int(value: object, field: str) -> int:
             raise RepositoryValidationError(f"{field} must be a non-negative integer")
         integer = int(value)
     elif isinstance(value, str) and _CANONICAL_INTEGER_TEXT.fullmatch(value):
-        integer = int(value)
+        try:
+            integer = int(value)
+        except ValueError as exc:
+            raise RepositoryValidationError(f"{field} must be a non-negative integer") from exc
     else:
         raise RepositoryValidationError(f"{field} must be a non-negative integer")
     if integer < 0:
