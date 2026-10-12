@@ -1,6 +1,4 @@
-"""089.004 review follow-ups: real 089.001 predecessor pins, fenced
-completion-wake mutations, facade exposure. Answers upstream review on PR #77.
-"""
+"""Completion-wake fence, ownership, and facade checks."""
 
 from __future__ import annotations
 
@@ -16,12 +14,8 @@ from astralplane.repositories import (
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from tests.repositories._support import Result, ScriptedTransaction
 
-REAL_089_001_REGISTRY_DIGEST = (
-    "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
-)
-STALE_089_001_REGISTRY_DIGEST = (
-    "ae3b77d9067dec56503f738216faa4c1bc2ed9523c57f7ce3957830846ec43b0"
-)
+REAL_089_001_REGISTRY_DIGEST = "35741bd0de148f836cd8b75b160531013836a61bd46b9e17e7790641412979d8"
+STALE_089_001_REGISTRY_DIGEST = "ae3b77d9067dec56503f738216faa4c1bc2ed9523c57f7ce3957830846ec43b0"
 
 
 def test_089_001_pins_match_upstream_main() -> None:
@@ -56,7 +50,7 @@ def _live_sub() -> dict[str, object]:
 def test_accept_loses_race_to_revoke() -> None:
     repo = CompletionWakeRepository()
     tx = ScriptedTransaction(
-        one=[_live_sub(), None],
+        one=[_live_sub(), None, None],
         execute=[Result(rowcount=0)],
     )
     with pytest.raises(RepositoryConflictError, match="revoked or fence moved"):
@@ -71,8 +65,10 @@ def test_accept_loses_race_to_revoke() -> None:
         )
     kinds = [c[0] for c in tx.calls]
     assert kinds[0] == "one"
-    assert "SELECT 1" in tx.calls[-1][1]
-    assert "revoked_at IS NULL" in tx.calls[-1][1]
+    writes = [c[1] for c in tx.calls if c[0] == "execute"]
+    assert "SELECT 1" in writes[-1]
+    assert "revoked_at IS NULL" in writes[-1]
+    assert "ON CONFLICT" in writes[-1]
 
 
 def test_accept_happy_path_inserts_fenced() -> None:
@@ -91,6 +87,35 @@ def test_accept_happy_path_inserts_fenced() -> None:
         accepted_at=200,
     )
     assert receipt.owner_id == "owner-1"
+
+
+def test_accept_duplicate_race_returns_winner() -> None:
+    repo = CompletionWakeRepository()
+    winner = {
+        "receipt_id": str(uuid.uuid4()),
+        "subscription_id": str(uuid.uuid4()),
+        "owner_id": "owner-1",
+        "idempotency_key": "k-1",
+        "observed_terminal": "completed",
+        "observed_revision": 5,
+        "accepted_at": 200,
+        "replay_of": None,
+    }
+    tx = ScriptedTransaction(
+        one=[_live_sub(), None, winner],
+        execute=[Result(rowcount=0)],
+    )
+    receipt = repo.accept_wake_receipt(
+        tx,
+        owner_id="owner-1",
+        subscription_id=winner["subscription_id"],
+        idempotency_key="k-1",
+        observed_terminal="completed",
+        observed_revision=5,
+        accepted_at=201,
+    )
+    assert receipt.receipt_id == winner["receipt_id"]
+    assert "AND owner_id=" in tx.calls[-1][1]
 
 
 def test_revoke_loses_race_to_concurrent_revoke() -> None:
@@ -116,9 +141,7 @@ def test_delete_is_owner_fenced() -> None:
         one=[{"owner_id": "owner-1"}],
         execute=[Result(rowcount=1)],
     )
-    repo.delete_subscription(
-        tx, owner_id="owner-1", subscription_id=str(uuid.uuid4())
-    )
+    repo.delete_subscription(tx, owner_id="owner-1", subscription_id=str(uuid.uuid4()))
     assert "AND owner_id=" in tx.calls[-1][1]
 
 
@@ -129,18 +152,12 @@ def test_delete_missing_row_reports_not_found() -> None:
         execute=[Result(rowcount=0)],
     )
     with pytest.raises(RepositoryNotFoundError):
-        repo.delete_subscription(
-            tx, owner_id="owner-1", subscription_id=str(uuid.uuid4())
-        )
+        repo.delete_subscription(tx, owner_id="owner-1", subscription_id=str(uuid.uuid4()))
 
 
 def test_facade_exposes_completion_wake() -> None:
     from astralplane.api import create_repository_catalog
 
     catalog = create_repository_catalog()
-    assert isinstance(
-        catalog.completion_wake, CompletionWakeRepository
-    )
-    assert isinstance(
-        catalog.as_mapping()["completion_wake"], CompletionWakeRepository
-    )
+    assert isinstance(catalog.completion_wake, CompletionWakeRepository)
+    assert isinstance(catalog.as_mapping()["completion_wake"], CompletionWakeRepository)
