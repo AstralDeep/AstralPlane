@@ -210,7 +210,7 @@ Upgrade and recovery procedures for every revision are in
 ## Local verification
 
 AstralPlane owns qualification of its Python source, architecture boundary, PostgreSQL migration
-and repository behavior, and standalone package compatibility. Pull requests and `main` pushes run
+and repository behavior, and standalone package compatibility. Pull requests, merge groups, and `main` pushes run
 the repository-owned `.github/workflows/ci.yml` jobs `quality`, `postgresql`, and
 `package-compatibility`; the `gates` aggregate fails closed unless every owner job succeeds. The
 PostgreSQL lane runs the complete Python 3.11 suite against PostgreSQL 17 with a measured-baseline
@@ -224,6 +224,25 @@ to the candidate, or a report that does not describe that range fails closed. Pa
 compatibility builds and installs a clean wheel on Python 3.11 and 3.14; it does not replace the
 PostgreSQL production lane.
 
+The PostgreSQL lane first builds a populated synthetic database using only `src/` archived from
+the exact fetched `origin/main` SHA in an isolated interpreter. `scripts/qualify_main_upgrade.py`
+records that baseline's revision, migration digest, catalog digest, and source-tree identity;
+the candidate must admit its actual digest and preserve every historical migration edge, two
+owners, draft rows, and share snapshots through upgrade and repeat application. Existing
+pre-split and per-edge upgrade suites remain part of the complete suite.
+
+`tests/integration/test_lifecycle_acceptance.py` exercises real owner/version fences, duplicate
+generation claims, caller rollback and detached results, and both transaction orders for share
+open versus revocation. `scripts/check_acceptance_faults.py` runs five declared faults against
+these focused assertions in isolated source copies. A surviving fault, missing case, skip,
+unexpected failure, collection/import error, or watchdog expiration fails qualification;
+only the intended behavioral assertion counts as a kill. The full suite emits the required
+`acceptance-faults.json` receipt, and CI retains it with upgrade and coverage evidence.
+
+The quality lane retains `ci-review-diagnostics.json`, binding removed tests, added skips/xfails,
+swallowed test errors, and qualification-policy changes to the immutable base/head range.
+These warnings require maintainer scrutiny and do not themselves authorize or prevent merging.
+
 ```text
 uv lock --check
 uv sync --frozen --group ci
@@ -234,6 +253,8 @@ ASTRALPLANE_TEST_POSTGRES_DSN=postgresql://user:password@127.0.0.1:5432/isolated
   uv run --frozen --group ci pytest -q -p no:cacheprovider \
   --cov=astralplane --cov=scripts.check_changed_coverage \
   --cov=scripts.import_staging_fixture --cov=scripts.migrate_qualification_database \
+  --cov=scripts.qualify_main_upgrade --cov=scripts.check_acceptance_faults \
+  --cov=scripts.ci_review_diagnostics \
   --cov-branch --cov-report=xml --cov-fail-under=88.75
 BASE_SHA="$(git merge-base origin/main HEAD)"
 uv run --frozen --group ci diff-cover coverage.xml --compare-branch "$BASE_SHA" \

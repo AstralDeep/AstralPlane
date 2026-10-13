@@ -1,7 +1,6 @@
-"""Tests for AstralPlane's GitHub Actions CI workflow: pinned action SHAs, forbidden
-unapproved actions, and that the quality, PostgreSQL, and packaging jobs gate the
-aggregate owner job. The PostgreSQL job must gate the event's BASE_SHA..HEAD range through
-scripts/check_changed_coverage.py, which records an unmeasurable change as not applicable.
+"""Checks pinned, read-only CI qualification and aggregate owner gates.
+The PostgreSQL job binds upgrade, fault effectiveness, and changed-line coverage
+evidence to the immutable event range through scripts/check_changed_coverage.py.
 """
 
 from __future__ import annotations
@@ -17,21 +16,22 @@ from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
-BUILD_REQUIREMENTS_PATH = (
-    REPOSITORY_ROOT / "tooling" / "python-ci" / "build-requirements.lock.txt"
-)
+BUILD_REQUIREMENTS_PATH = REPOSITORY_ROOT / "tooling" / "python-ci" / "build-requirements.lock.txt"
 
 CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 WRONG_CHECKOUT_ACTION = "actions/checkout@1111111111111111111111111111111111111111"
 UNAPPROVED_ACTION = "example/unapproved-action@1111111111111111111111111111111111111111"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 SETUP_UV_VERSION = "0.11.26"
 POSTGRES_IMAGE = (
-    "postgres:17-alpine@"
-    "sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4"
+    "postgres:17-alpine@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4"
 )
 DEEP_COMMIT = "fc113c4f99121b2053bb71523835c5c4743f1f56"
-BASE_SHA_ENVIRONMENT = "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}"
+BASE_SHA_ENVIRONMENT = (
+    "BASE_SHA: ${{ github.event.pull_request.base.sha || "
+    "github.event.merge_group.base_sha || github.event.before }}"
+)
 BASE_SHA_GUARD = (
     'if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || '
     '"$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then '
@@ -151,6 +151,7 @@ def test_owner_workflow_is_active_pinned_and_read_only() -> None:
         {
             CHECKOUT_ACTION: 4,
             SETUP_UV_ACTION: len(OWNER_JOBS),
+            UPLOAD_ARTIFACT_ACTION: 2,
         }
     )
     setup_uv_uses = [action for action in uses if action.startswith("astral-sh/setup-uv@")]
@@ -320,11 +321,24 @@ def test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage(
     assert "pytest -q -p no:cacheprovider" in pytest_command
     assert "--cov=astralplane" in pytest_command
     assert "--cov=scripts.check_changed_coverage" in pytest_command
+    assert "--cov=scripts.qualify_main_upgrade" in pytest_command
+    assert "--cov=scripts.check_acceptance_faults" in pytest_command
+    assert "--cov=scripts.ci_review_diagnostics" in pytest_command
     assert "--cov-branch" in pytest_command
     assert "--cov-report=xml" in pytest_command
     assert "--cov-fail-under=88.75" in pytest_command
     assert "tests/" not in pytest_command
     assert not re.search(r"--ignore(?:=|\s)", pytest_command)
+    upgrades = [command for command in commands if "scripts/qualify_main_upgrade.py" in command]
+    assert len(upgrades) == 1 and commands.index(upgrades[0]) < commands.index(pytest_command)
+    assert "git fetch --no-tags origin main" in upgrades[0]
+    assert "git rev-parse refs/remotes/origin/main" in upgrades[0]
+    assert '--baseline-sha "$MAIN_SHA" --report main-upgrade.json' in upgrades[0]
+    assert "ASTRALPLANE_FAULT_REPORT: acceptance-faults.json" in job
+    assert any(
+        "acceptance-faults.json" in command and "all(f['status']=='killed'" in command
+        for command in commands
+    )
 
     assert "fetch-depth: 0" in job
     assert BASE_SHA_ENVIRONMENT in job
@@ -397,8 +411,7 @@ def test_package_compatibility_builds_and_smokes_a_clean_wheel() -> None:
     assert "uv lock --check" in commands
     assert (
         "uv build --build-constraints tooling/python-ci/build-requirements.lock.txt "
-        "--require-hashes"
-        in commands
+        "--require-hashes" in commands
     )
     assert not any(command.startswith("uv build --frozen") for command in commands)
     assert any("uv venv" in command and "--seed" in command for command in commands)
@@ -426,9 +439,7 @@ def test_aggregate_fails_closed_over_every_owner_job() -> None:
     assert "needs: [quality, postgresql, package-compatibility]" in job
     for owner_job in OWNER_JOBS:
         result_expression = (
-            f"needs.{owner_job}.result"
-            if "-" not in owner_job
-            else f"needs['{owner_job}'].result"
+            f"needs.{owner_job}.result" if "-" not in owner_job else f"needs['{owner_job}'].result"
         )
         assert result_expression in job
         assert re.search(
