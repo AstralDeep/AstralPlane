@@ -171,6 +171,12 @@ limit, so they cannot starve later supported rows. A safe stop preserves unknown
 nested metadata and retires the known outer fence. Invalid identities, malformed
 versions or inconsistent indexed fields remain data errors, not compatibility cases.
 
+`get_operation(..., lock=True)` locks the owner-scoped operation row until the caller's
+transaction ends. Use it before checking a completion source and registering a waiter in
+that same transaction, so terminal transitions serialize with registration and a read
+after a committed transition observes the current disposition. The default remains a
+nonlocking read; `lock` accepts only a boolean.
+
 These are repository/controller contracts. The Deep operation service, external
 owner-command adapters and current-authority stream delivery still require their
 separate integration work; they are not installed

@@ -1586,8 +1586,12 @@ class AssignmentRepository:
         data = self._load(query, owner_id, assignment_id, required=False, allow_unknown=True)
         return _record(data) if data else None
 
-    def get_operation(self, query, *, owner_id, assignment_id):
-        data = self._load(query, owner_id, assignment_id, required=False, allow_unknown=True)
+    def get_operation(self, query, *, owner_id, assignment_id, lock: bool = False):
+        if not isinstance(lock, bool):
+            raise RepositoryValidationError("lock must be a boolean")
+        data = self._load(
+            query, owner_id, assignment_id, lock=lock, required=False, allow_unknown=True
+        )
         if data is None or data.get("execution_profile") != "one_shot":
             return None
         return self._operation_read(data)
