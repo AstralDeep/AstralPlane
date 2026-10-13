@@ -1,10 +1,5 @@
-"""Real-PostgreSQL tests for completion subscriptions and wake receipts (#61).
-
-Deterministic success, edge, denial, failure, and recovery coverage against a
-live migrated schema: registration-versus-completion races, receipt
-deduplication, replay, deletion, and restart, plus guarded migration and
-recovery evidence. Nothing here substitutes for session authority and nothing
-touches wait-state JSON.
+"""Tests completion subscriptions and wake receipts against a real migrated PostgreSQL schema.
+The assignment test fixtures provide caller-owned transactions for denial, replay and rollback.
 """
 
 from __future__ import annotations

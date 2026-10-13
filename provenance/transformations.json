@@ -11,7 +11,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/audit_delivery.py",
-          "sha256": "78490369a998cf296bf01ae5ffc0826e9bb04640aec8765a261f818e18c2ca80"
+          "sha256": "859d5f8e1141f0dfb867c551de74280cb7999482adecf1a9bc0d32d1398f41c3"
         },
         {
           "path": "src/astralplane/outbox.py",
@@ -117,11 +117,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/audit_delivery.py",
-          "sha256": "78490369a998cf296bf01ae5ffc0826e9bb04640aec8765a261f818e18c2ca80"
+          "sha256": "859d5f8e1141f0dfb867c551de74280cb7999482adecf1a9bc0d32d1398f41c3"
         },
         {
           "path": "tests/test_audit_delivery.py",
-          "sha256": "1d4c044eb2a2db3552d43d40bf15e887031982dd11a94fd464bbbb28bfb7acea"
+          "sha256": "55d8f6b185abd70214a68d47753b14f85c0ce795ba231e26488e0434b8e66f93"
         }
       ],
       "task": "T090/T091",
@@ -135,8 +135,20 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/knowledge.py",
+          "sha256": "5c4edf9adeb90822dfa2b4f2aaed427eb7fd195ffdfab32964fe5f76b73c4368"
+        },
+        {
           "path": "src/astralplane/repositories/preferences.py",
           "sha256": "ae578298905a7c6fca0d0adbf8db93176e8aac091a2b39512aa192e1c803c37f"
+        },
+        {
+          "path": "tests/repositories/test_knowledge.py",
+          "sha256": "b406224f394ef33cf0e07030bc906dbf7c1384ce4b8a851bf12fa505fb2f44bf"
+        },
+        {
+          "path": "tests/repositories/test_knowledge_proposals_postgres.py",
+          "sha256": "45c5c8b0541b695695aa61b66ebb11199214cfec4feec57170c95b8daacafd22"
         },
         {
           "path": "tests/repositories/test_preferences.py",
@@ -144,7 +156,7 @@
         }
       ],
       "task": "T081",
-      "reason": "Absorbed feedback persistence into the neutral owner-scoped preferences repository."
+      "reason": "Absorbed feedback persistence into neutral owner-scoped preferences and administrative knowledge repositories."
     },
     {
       "sourcePath": "backend/llm_config/tests/test_user_store.py",
@@ -627,11 +639,11 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "0eac2f128455e78f9952c1a1a13f3fe263a01429d2955188d59f203414984f88"
+          "sha256": "63076d6fc392a1f1e9bd3fe2d00a74cea09764d5ab5ba865c0ac96107bbbb1f6"
         },
         {
           "path": "src/astralplane/database/pool.py",
-          "sha256": "fd97aa30fa6ff008ffe505486aecf6696790ac97b970cf6fdc826d4beb056b98"
+          "sha256": "ee121da3aee6cd58a5fc9e8c76a16a1271861ada94c7bf9813ca572af182b59a"
         },
         {
           "path": "src/astralplane/database/transaction.py",
@@ -767,11 +779,11 @@
       "resultPaths": [
         {
           "path": "tests/test_pool_transaction.py",
-          "sha256": "dd860cea1a0ed65c7e7b1c210081574fca3b618d6110c6d949f4bfd75541f0df"
+          "sha256": "6166f881d3f1355c640d4ac289a10515907c909ba8993ad6206a0330dd47341c"
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "83956957187edc6c4191727441f267c98ec487e34101b071b9420bfc4d9b7021"
+          "sha256": "0ceba240f7fe4ff62566a3f857e5d51304645139fa9e5e6d8307c5986a310978"
         },
         {
           "path": "tests/test_sql_parameters.py",

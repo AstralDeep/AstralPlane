@@ -225,7 +225,8 @@ def accept_wake_receipt(
     revision = _required_revision(observed_revision, "observed_revision")
     accepted = _required_millis(accepted_at, "accepted_at")
     sub = tx.fetch_one(
-        "SELECT * FROM completion_subscription WHERE subscription_id=%s AND owner_id=%s",
+        "SELECT * FROM completion_subscription WHERE subscription_id=%s AND owner_id=%s"
+        " FOR UPDATE",
         (sub_id, owner),
     )
     if sub is None:

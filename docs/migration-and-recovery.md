@@ -281,7 +281,9 @@ historical; the host must not claim that a remote peer has resumed from them.
 
 ### `089.004` completion subscriptions and wake receipts
 
-This additive edge requires the exact `089.003` registry and catalog. It adds
+This additive edge requires the exact `089.003` registry digest
+`773f574efc9657de7692d6ae27352edbb07ef93ed967f4d5ca121ab5c0e1ac7e`
+and its catalog. It adds
 two independent owner-scoped tables and alters nothing that exists.
 
 `completion_subscription` binds a waiter operation to a source operation with a
@@ -290,9 +292,10 @@ one acceptance per subscription idempotency key and points replays at the
 original receipt. The tables stand alone: no foreign keys into operation state
 and no writes into wait-state JSON, so subscriptions never smuggle data into
 current wait state and survive independent lifecycle changes. Ownership, live
-state, terminal coverage and the revision fence are enforced inside the
-mutation statements with rowcount checks, so an acceptance racing a revocation
-fails closed instead of slipping a receipt through.
+state, terminal coverage and the revision fence are enforced inside the mutation statements
+with rowcount checks. Acceptance first locks the owner-scoped subscription until the caller's
+transaction ends. A committed revocation or deletion prevents a new acceptance; acceptance
+that holds the lock first commits or rolls back before revocation or deletion proceeds.
 
 Follow the same closed-admission backup, guarded upgrade, catalog, repeat and
 rollback checks described above. Failed DDL rolls back with registry metadata.

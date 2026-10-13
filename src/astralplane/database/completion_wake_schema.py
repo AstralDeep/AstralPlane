@@ -1,11 +1,5 @@
-"""Additive completion-subscription and deduplicated wake-receipt tables.
-
-A completion subscription is an owner-scoped, durable continuation request:
-"wake this waiter when that source reaches a terminal condition". Wake
-receipts are idempotency-keyed so registration-versus-completion races,
-restarts, and replays never double-deliver. Tables are standalone (no
-foreign keys into operation state) so subscriptions never smuggle data into
-current wait-state JSON and survive independent lifecycle changes.
+"""Defines owner-scoped completion subscriptions and idempotency-keyed wake receipt tables.
+The guarded migration registry installs these independent of operation state and wait-state JSON.
 """
 
 COMPLETION_WAKE_SCHEMA_STATEMENTS = (

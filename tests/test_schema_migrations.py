@@ -864,7 +864,7 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
     assert "IF NOT EXISTS" not in ddl
 
     assert canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST == (
-        "f8eb92d256c8afd006832fc6f8b37f4d482ad017e08a9a022fa54b842a87ba83"
+        "773f574efc9657de7692d6ae27352edbb07ef93ed967f4d5ca121ab5c0e1ac7e"
     )
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
         canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST

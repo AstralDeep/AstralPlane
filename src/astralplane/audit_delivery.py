@@ -23,6 +23,11 @@ from astralplane.contracts import (
     Transaction,
 )
 from astralplane.errors import PlaneError, SQLContractError
+from astralplane.repositories import (
+    CANONICAL_JSON_MAX_BYTES,
+    CANONICAL_JSON_MAX_DEPTH,
+    CANONICAL_JSON_MAX_NODES,
+)
 
 AUDIT_OUTBOX_TOPIC = "audit.publish"
 _SENSITIVE_KEYS = frozenset(
@@ -80,42 +85,107 @@ class AuditDeliveryResult:
 
 
 def _safe_json_value(value: object, *, path: str = "$") -> object:
-    if isinstance(value, Mapping):
-        sanitized: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise SQLContractError("audit payload keys must be non-empty strings")
-            normalized_key = key.casefold().replace("-", "_")
-            if normalized_key in _SENSITIVE_KEYS or normalized_key.endswith(_SENSITIVE_SUFFIXES):
+    active: set[int] = set()
+    nodes = 0
+
+    def visit(item: object, path: str, depth: int) -> object:
+        nonlocal nodes
+        nodes += 1
+        if depth > CANONICAL_JSON_MAX_DEPTH:
+            raise SQLContractError(
+                "audit payload exceeds canonical JSON structural bounds",
+                metadata={"path": path[:256], "depth": depth},
+            )
+        if nodes > CANONICAL_JSON_MAX_NODES:
+            raise SQLContractError(
+                "audit payload exceeds canonical JSON structural bounds",
+                metadata={"path": path[:256], "nodes": nodes},
+            )
+        if isinstance(item, Mapping):
+            identity = id(item)
+            if identity in active:
                 raise SQLContractError(
-                    "audit payload contains a credential-bearing field",
-                    metadata={"path": f"{path}.{key}"},
+                    "audit payload contains a cyclic reference",
+                    metadata={"path": path[:256]},
                 )
-            sanitized[key] = _safe_json_value(item, path=f"{path}.{key}")
-        return sanitized
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
-        return [_safe_json_value(item, path=f"{path}[]") for item in value]
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float) and math.isfinite(value):
-        return value
-    raise SQLContractError(
-        "audit payload contains a value that is not canonical-JSON compatible",
-        metadata={"path": path},
-    )
+            active.add(identity)
+            try:
+                sanitized: dict[str, object] = {}
+                for key, nested in item.items():
+                    if not isinstance(key, str) or not key:
+                        raise SQLContractError("audit payload keys must be non-empty strings")
+                    if not key.isascii():
+                        try:
+                            key.encode("utf-8")
+                        except UnicodeEncodeError as exc:
+                            raise SQLContractError(
+                                "audit payload contains unpaired surrogate code points",
+                                metadata={"path": f"{path}.{key}"[:256]},
+                            ) from exc
+                    normalized_key = key.casefold().replace("-", "_")
+                    if normalized_key in _SENSITIVE_KEYS or normalized_key.endswith(
+                        _SENSITIVE_SUFFIXES
+                    ):
+                        raise SQLContractError(
+                            "audit payload contains a credential-bearing field",
+                            metadata={"path": f"{path}.{key}"},
+                        )
+                    sanitized[key] = visit(nested, f"{path}.{key}", depth + 1)
+            finally:
+                active.discard(identity)
+            return sanitized
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray, memoryview)):
+            identity = id(item)
+            if identity in active:
+                raise SQLContractError(
+                    "audit payload contains a cyclic reference",
+                    metadata={"path": path[:256]},
+                )
+            active.add(identity)
+            try:
+                return [visit(nested, f"{path}[]", depth + 1) for nested in item]
+            finally:
+                active.discard(identity)
+        if isinstance(item, str) and not item.isascii():
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise SQLContractError(
+                    "audit payload contains unpaired surrogate code points",
+                    metadata={"path": path[:256]},
+                ) from exc
+        if item is None or isinstance(item, (str, bool, int)):
+            return item
+        if isinstance(item, float) and math.isfinite(item):
+            return item
+        raise SQLContractError(
+            "audit payload contains a value that is not canonical-JSON compatible",
+            metadata={"path": path},
+        )
+
+    return visit(value, path, 0)
 
 
 def canonical_audit_payload(event: Mapping[str, object]) -> bytes:
     if not isinstance(event, Mapping):
         raise SQLContractError("audit event must be a mapping")
     sanitized = _safe_json_value(event)
-    return json.dumps(
-        sanitized,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    try:
+        encoded = json.dumps(
+            sanitized,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise SQLContractError("audit payload is not canonical-JSON compatible") from exc
+    if len(encoded) > CANONICAL_JSON_MAX_BYTES:
+        raise SQLContractError(
+            "audit payload exceeds the canonical JSON byte bound",
+            metadata={"maximum": CANONICAL_JSON_MAX_BYTES},
+        )
+    return encoded
 
 
 def _aware_utc(value: datetime) -> datetime:

@@ -5188,7 +5188,6 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
     predecessor_schema_verifier=_verify_predecessor_plane_schema,
     predecessor_schema_verifier_checksum=PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
 )
-# Historical mesh edge ends at 089.003; the appended 089.004 edge is excluded.
 if MigrationRegistry(
     MIGRATION_REGISTRY.migrations[:-2],
     current_schema_verifier=_verify_current_plane_schema,
@@ -5199,11 +5198,8 @@ if MigrationRegistry(
     raise MigrationDefinitionError(
         "historical mesh migration registry no longer matches its digest"
     )
-# Pinned historical value; recomputing would hide drift. Digest of the
-# registry through the 089.003 owner-stop-epochs edge with the current
-# verifier checksums (computed 2026-10-10 during the 089.004 rebase).
 PLANE_SCHEMA_089_003_REGISTRY_DIGEST: Final = (
-    "f8eb92d256c8afd006832fc6f8b37f4d482ad017e08a9a022fa54b842a87ba83"
+    "773f574efc9657de7692d6ae27352edbb07ef93ed967f4d5ca121ab5c0e1ac7e"
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(

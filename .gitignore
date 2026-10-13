@@ -12,6 +12,9 @@ dist/
 .coverage.*
 coverage.xml
 changed-coverage.json
+ci-review-diagnostics.json
+main-upgrade.json
+acceptance-faults.json
 htmlcov/
 .pytest_cache/
 .ruff_cache/
