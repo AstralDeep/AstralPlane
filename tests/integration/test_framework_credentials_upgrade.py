@@ -84,6 +84,7 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_post
         "astralplane-089-typesafe-credentials",
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
+        "astralplane-089-completion-wake",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

@@ -1026,6 +1026,22 @@ def _write_work_admission(catalog: api.RepositoryCatalog, transaction: Transacti
     )
 
 
+def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.completion_wake.register_subscription(
+        transaction,
+        owner_id=_OWNER,
+        waiter_operation_id="11111111-1111-4111-8111-111111110077",
+        waiter_owner_id=_OWNER,
+        source_operation_id="11111111-1111-4111-8111-111111110078",
+        source_owner_id=_OWNER,
+        terminal_condition="completed",
+        source_revision=1,
+        current_revision_fence=1,
+        created_at=1,
+        subscription_id="11111111-1111-4111-8111-111111110076",
+    )
+
+
 def _write_workspaces(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.workspaces.canvas.create(
         transaction,
@@ -1317,6 +1333,17 @@ ROLLBACK_CASES = (
         1,
         0,
     ),
+    RollbackCase(
+        "completion_wake",
+        _write_completion_wake,
+        _count(
+            "completion_subscription",
+            "subscription_id",
+            "11111111-1111-4111-8111-111111110076",
+        ),
+        1,
+        0,
+    ),
 )
 
 
@@ -1324,7 +1351,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 41
+    assert len(applicable_keys) == len(set(applicable_keys)) == 42
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

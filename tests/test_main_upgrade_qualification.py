@@ -76,12 +76,15 @@ def actual_main(tmp_path_factory):
 def test_future_candidate_cannot_invent_main_predecessor_digest(actual_main):
     _, _, baseline = actual_main
     original = probe.CURRENT_DATA_PLANE_REVISION
+    retained = tuple(
+        pair for pair in original.accepted_predecessor_digests if pair[0] != baseline["revision"]
+    )
     future = replace(
         original,
         schema_revision="999.001",
         read_compatible_from=(*original.read_compatible_from, original.schema_revision),
         accepted_predecessor_digests=(
-            *original.accepted_predecessor_digests,
+            *retained,
             (baseline["revision"], "0" * 64),
         ),
     )
@@ -90,7 +93,7 @@ def test_future_candidate_cannot_invent_main_predecessor_digest(actual_main):
     corrected = replace(
         future,
         accepted_predecessor_digests=(
-            *original.accepted_predecessor_digests,
+            *retained,
             (baseline["revision"], baseline["digest"]),
         ),
     )
@@ -100,13 +103,14 @@ def test_future_candidate_cannot_invent_main_predecessor_digest(actual_main):
 def test_candidate_cannot_rewrite_historical_edge(actual_main):
     _, _, baseline = actual_main
     registry = probe.MIGRATION_REGISTRY
+    historical_name = baseline["migrations"][-1]["name"]
     damaged = type(
         "DamagedRegistry",
         (),
         {
             "migrations": (
-                *registry.migrations[:-1],
-                replace(registry.migrations[-1], checksum="0" * 64),
+                replace(item, checksum="0" * 64) if item.name == historical_name else item
+                for item in registry.migrations
             )
         },
     )()

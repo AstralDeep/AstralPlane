@@ -94,6 +94,20 @@ retained operation lifetime. Capacity refuses new events while retaining inspect
 and cancellation. The control envelope is at most 64 KiB and the complete assignment
 remains at most 256 KiB. This uses existing private JSON; no migration bytes change.
 
+### Durable completion subscriptions and wake receipts (089.004)
+
+`completion_subscription` is a neutral bounded waiter-to-source binding: an owner, a waiter
+operation, a source operation, a terminal condition (`completed`, `failed`, `cancelled`, or
+`any_terminal`), and a source-revision fence. `wake_receipt` records exactly one acceptance per
+`(subscription_id, idempotency_key)` with the observed terminal and revision; a replay references
+the original receipt and never creates a new delivery. Receipts are accepted only for live
+(non-revoked) subscriptions whose condition covers the observed terminal and whose fence admits
+the observed revision. Acceptance locks the owner-scoped subscription until the caller's
+transaction ends, so concurrent revocation or deletion serializes with receipt creation.
+Registration-versus-completion races resolve to one row, restarts keep
+receipts, and deletion cascades. A subscription never schedules work, never encodes IAM policy,
+and never substitutes for original session authority; nothing is written into wait-state JSON.
+
 One-shot `apply_control` requires strict `expected_state_version` in addition to the
 instruction/control vector. Persistent callers and their receipt signatures retain
 their existing contract. Replays of foundation one-shot receipts also remain valid.
@@ -156,6 +170,13 @@ readable but non-dispatchable; claim selection excludes them before applying its
 limit, so they cannot starve later supported rows. A safe stop preserves unknown
 nested metadata and retires the known outer fence. Invalid identities, malformed
 versions or inconsistent indexed fields remain data errors, not compatibility cases.
+
+`get_operation(..., lock=True)` takes the owner guard before locking the owner-scoped
+operation row until the caller's transaction ends, matching the owner-wait lock order.
+Callers own that transaction and must establish a consistent order for any credential,
+authorization, or other domain locks before using this option. The default remains a
+nonlocking read; `lock` accepts only a boolean. Inspection remains available for retired
+owners; the getter does not apply an admission decision or qualify a host integration.
 
 These are repository/controller contracts. The Deep operation service, external
 owner-command adapters and current-authority stream delivery still require their
