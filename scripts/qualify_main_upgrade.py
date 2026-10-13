@@ -185,13 +185,29 @@ def fixture_snapshot(database: PlaneDatabase) -> dict:
         return {"drafts": rows, "owners": owners, "shares": shares}
 
 
-def qualify(*, root: Path, baseline_sha: str, administrator_dsn: str) -> dict:
+def baseline_input(root: Path = ROOT) -> tuple[Path, str]:
+    supplied_root = os.environ.get("ASTRALPLANE_UPGRADE_BASELINE_ROOT")
+    supplied_sha = os.environ.get("ASTRALPLANE_UPGRADE_BASELINE_SHA")
+    if bool(supplied_root) != bool(supplied_sha):
+        raise ValueError("external baseline source root and SHA must be supplied together")
+    if supplied_root and supplied_sha:
+        return Path(supplied_root).resolve(), supplied_sha
+    return root, git(root, "rev-parse", "refs/remotes/origin/main").decode().strip()
+
+
+def qualify(
+    *,
+    root: Path,
+    baseline_sha: str,
+    administrator_dsn: str,
+    baseline_source_root: Path | None = None,
+) -> dict:
     if not administrator_dsn:
         raise ValueError("real PostgreSQL DSN is required")
     name = "plane_upgrade_" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="plane-main-upgrade-") as directory:
         snapshot = Path(directory)
-        source_tree = archive_source(root, baseline_sha, snapshot)
+        source_tree = archive_source(baseline_source_root or root, baseline_sha, snapshot)
         administrator = psycopg2.connect(administrator_dsn)
         administrator.autocommit = True
         try:
@@ -267,6 +283,7 @@ def qualify(*, root: Path, baseline_sha: str, administrator_dsn: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Qualify a populated upgrade from exact main.")
     parser.add_argument("--baseline-sha", required=True)
+    parser.add_argument("--baseline-source-root", type=Path, default=ROOT)
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -274,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             root=ROOT,
             baseline_sha=args.baseline_sha,
             administrator_dsn=os.environ.get(DATABASE_ENV, ""),
+            baseline_source_root=args.baseline_source_root,
         )
     except Exception:
         report = {

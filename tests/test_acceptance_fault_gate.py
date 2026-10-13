@@ -43,7 +43,8 @@ def test_fault_cli_missing_database_records_failure(tmp_path):
     (
         (
             1,
-            '<testcase name="target"><failure>assert 2 == 1</failure></testcase>',
+            '<testcase name="target"><failure type="AssertionError" message="assert 2 == 1">'
+            "assert 2 == 1</failure></testcase>",
             "target",
             "assert 2 == 1",
             "killed",
@@ -102,6 +103,18 @@ def test_mutation_refuses_changed_guard_bytes(tmp_path):
         gate.apply_fault(ROOT, tmp_path, fault)
 
 
+def test_traceback_source_marker_cannot_turn_an_unrelated_error_into_a_kill(tmp_path):
+    report = tmp_path / "result.xml"
+    marker = "valid proposal rejected by a NUL advisory lock key"
+    report.write_text(
+        '<testsuites><testsuite><testcase name="target">'
+        '<failure type="ValueError" message="ValueError: unrelated">'
+        f"Traceback source contains pytest.fail('{marker}')\nValueError: unrelated"
+        "</failure></testcase></testsuite></testsuites>",
+    )
+    assert gate.classify(1, report, case="target", marker=marker) == "invalid"
+
+
 @pytest.mark.parametrize(
     "error",
     (
@@ -142,5 +155,5 @@ def test_real_postgresql_control_and_all_declared_faults(postgres_administrator_
     assert gate.main(["--report", str(output)]) == 0
     report = json.loads(output.read_text())
     assert report["control"] == "passed"
-    assert len(report["faults"]) == 5
+    assert len(report["faults"]) == 6
     assert {fault["status"] for fault in report["faults"]} == {"killed"}

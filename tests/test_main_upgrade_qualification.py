@@ -22,13 +22,18 @@ SCRIPT = ROOT / "scripts" / "qualify_main_upgrade.py"
 
 def test_cli_refuses_missing_database_and_records_failed_evidence(tmp_path):
     report = tmp_path / "upgrade.json"
-    baseline = subprocess.check_output(
-        ["git", "rev-parse", "origin/main"],
-        cwd=ROOT,
-        text=True,
-    ).strip()
+    source_root, baseline = probe.baseline_input()
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--baseline-sha", baseline, "--report", str(report)],
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--baseline-sha",
+            baseline,
+            "--baseline-source-root",
+            str(source_root),
+            "--report",
+            str(report),
+        ],
         cwd=ROOT,
         env={
             key: value
@@ -47,8 +52,8 @@ def test_cli_refuses_missing_database_and_records_failed_evidence(tmp_path):
 @pytest.fixture(scope="module")
 def actual_main(tmp_path_factory):
     target = tmp_path_factory.mktemp("main-source")
-    sha = probe.git(ROOT, "rev-parse", "origin/main").decode().strip()
-    probe.archive_source(ROOT, sha, target)
+    source_root, sha = probe.baseline_input()
+    probe.archive_source(source_root, sha, target)
     code = (
         "import sys,json; sys.path.insert(0,sys.argv[1]); "
         "from astralplane.database.migrations import CURRENT_DATA_PLANE_REVISION as r, "
@@ -65,11 +70,11 @@ def actual_main(tmp_path_factory):
         text=True,
         check=True,
     )
-    return sha, json.loads(completed.stdout)
+    return source_root, sha, json.loads(completed.stdout)
 
 
 def test_future_candidate_cannot_invent_main_predecessor_digest(actual_main):
-    _, baseline = actual_main
+    _, _, baseline = actual_main
     original = probe.CURRENT_DATA_PLANE_REVISION
     future = replace(
         original,
@@ -93,7 +98,7 @@ def test_future_candidate_cannot_invent_main_predecessor_digest(actual_main):
 
 
 def test_candidate_cannot_rewrite_historical_edge(actual_main):
-    _, baseline = actual_main
+    _, _, baseline = actual_main
     registry = probe.MIGRATION_REGISTRY
     damaged = type(
         "DamagedRegistry",
@@ -110,25 +115,28 @@ def test_candidate_cannot_rewrite_historical_edge(actual_main):
 
 
 def test_baseline_markers_must_match_its_own_registry(actual_main):
-    _, baseline = actual_main
+    _, _, baseline = actual_main
     changed = {**baseline, "metadata": {"revision": baseline["revision"]}}
     with pytest.raises(ValueError, match="baseline markers"):
         probe.validate_lineage(changed)
 
 
 def test_archive_refuses_non_main_and_non_sha_inputs(tmp_path, actual_main):
-    sha, _ = actual_main
+    source_root, sha, _ = actual_main
     with pytest.raises(ValueError, match="exact commit"):
-        probe.archive_source(ROOT, "main", tmp_path)
+        probe.archive_source(source_root, "main", tmp_path)
     with pytest.raises(ValueError, match="fetched origin/main"):
-        probe.archive_source(ROOT, "0" * 40, tmp_path)
+        probe.archive_source(source_root, "0" * 40, tmp_path)
     assert len(sha) == 40
 
 
 def test_exact_main_populated_upgrade_and_repeat(postgres_administrator_dsn, actual_main):
-    sha, baseline = actual_main
+    source_root, sha, baseline = actual_main
     report = probe.qualify(
-        root=ROOT, baseline_sha=sha, administrator_dsn=postgres_administrator_dsn
+        root=ROOT,
+        baseline_sha=sha,
+        administrator_dsn=postgres_administrator_dsn,
+        baseline_source_root=source_root,
     )
     assert report["status"] == "passed"
     assert report["baseline_sha"] == sha
@@ -139,6 +147,15 @@ def test_exact_main_populated_upgrade_and_repeat(postgres_administrator_dsn, act
     assert report["populated_draft_count"] == 2
     assert report["populated_share_count"] == 2
     assert report["release_authorized"] is False
+
+
+def test_explicit_owner_baseline_inputs_are_required_as_a_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASTRALPLANE_UPGRADE_BASELINE_ROOT", str(tmp_path))
+    monkeypatch.delenv("ASTRALPLANE_UPGRADE_BASELINE_SHA", raising=False)
+    with pytest.raises(ValueError, match="supplied together"):
+        probe.baseline_input()
+    monkeypatch.setenv("ASTRALPLANE_UPGRADE_BASELINE_SHA", "a" * 40)
+    assert probe.baseline_input() == (tmp_path.resolve(), "a" * 40)
 
 
 def test_main_outputs_passed_evidence(tmp_path, monkeypatch, capsys):

@@ -1,4 +1,4 @@
-"""Runs five bounded guard mutations against real PostgreSQL lifecycle acceptance
+"""Runs bounded guard mutations against real PostgreSQL lifecycle acceptance
 in isolated source copies. Only the declared behavioral assertion counts as a kill;
 survivors, skips, import failures, and collection errors fail qualification.
 """
@@ -31,6 +31,7 @@ class Fault:
     after: str
     case: str
     failure_marker: str
+    test_path: str = ACCEPTANCE
 
 
 FAULTS = (
@@ -78,6 +79,20 @@ FAULTS = (
         "is None",
     ),
     Fault(
+        "proposal-nul-lock",
+        "repositories/knowledge.py",
+        "class KnowledgeProposalRepository:",
+        "    def get_for_administration(",
+        "lock_key = _canonical_json(\n"
+        '            ("knowledge-proposal", proposal.agent_id, proposal.tool_name), '
+        '"proposal_lock"\n'
+        "        )",
+        'lock_key = f"knowledge-proposal\\0{proposal.agent_id}\\0{proposal.tool_name}"',
+        "test_valid_proposal_persists_and_replays_exact_bytes[ascii]",
+        "valid proposal rejected by a NUL advisory lock key",
+        "tests/repositories/test_knowledge_proposals_postgres.py",
+    ),
+    Fault(
         "revocation-recheck",
         "repositories/share_grants.py",
         "    def record_open(",
@@ -91,7 +106,9 @@ FAULTS = (
 
 
 def apply_fault(root: Path, target: Path, fault: Fault) -> str:
-    shutil.copytree(root / "src", target / "src")
+    shutil.copytree(
+        root / "src", target / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
     path = target / "src" / "astralplane" / fault.path
     text = path.read_text(encoding="utf-8")
     start = text.index(fault.start)
@@ -123,11 +140,28 @@ def classify(returncode: int, report: Path, *, case: str | None, marker: str = "
     if returncode != 1 or len(failures) != 1:
         return "invalid"
     failure = failures[0].find("failure")
-    return "killed" if marker in (failure.text or "") else "invalid"
+    message, kind = failure.get("message", ""), failure.get("type", "")
+    if kind and kind not in {"AssertionError", "Failed", "_pytest.outcomes.Failed"}:
+        return "invalid"
+    if not kind and not message.startswith(
+        ("assert ", "AssertionError", "Failed: ", "DID NOT RAISE")
+    ):
+        return "invalid"
+    return (
+        "killed" if marker and marker in message and marker in (failure.text or "") else "invalid"
+    )
 
 
-def run_case(root: Path, source: Path, output: Path, *, case: str | None, marker: str = "") -> str:
-    selector = ACCEPTANCE + (f"::{case}" if case is not None else "")
+def run_case(
+    root: Path,
+    source: Path,
+    output: Path,
+    *,
+    case: str | None,
+    marker: str = "",
+    test_path: str = ACCEPTANCE,
+) -> str:
+    selector = test_path + (f"::{case}" if case is not None else "")
     try:
         completed = subprocess.run(
             [
@@ -171,6 +205,7 @@ def check(*, root: Path = ROOT) -> dict:
                 temporary / f"{fault.name}.xml",
                 case=fault.case,
                 marker=fault.failure_marker,
+                test_path=fault.test_path,
             )
             results.append(
                 {

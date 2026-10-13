@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from threading import Barrier, Event
+from time import monotonic
 
 import pytest
 from psycopg2.extensions import make_dsn
@@ -69,6 +70,25 @@ def grant(tx):
         snapshot_json={"type": "text", "value": "Synthetic"},
         expires_at=None,
     )
+
+
+def wait_for_blocked_statement(database, waiting_pid, blocking_pid):
+    deadline = monotonic() + 30
+    with database.transaction() as observer:
+        while monotonic() < deadline:
+            observer.fetch_one("SELECT pg_stat_clear_snapshot()")
+            row = observer.fetch_one(
+                "SELECT wait_event_type, pg_blocking_pids(pid) AS blockers "
+                "FROM pg_stat_activity WHERE pid=%s",
+                (waiting_pid,),
+            )
+            if (
+                row is not None
+                and row["wait_event_type"] == "Lock"
+                and blocking_pid in row["blockers"]
+            ):
+                return
+    pytest.fail("competing SQL did not block on the exact held row transaction")
 
 
 def test_owner_predicate_blocks_foreign_read_and_write(migrated_clone):
@@ -177,9 +197,11 @@ def test_share_open_rechecks_revocation_after_row_lock(migrated_clone, first):
     with migrated_clone.database.transaction() as tx:
         original = grant(tx)
     entered = Event()
+    state = {}
 
     def competing(database):
         with database.transaction() as tx:
+            state["pid"] = tx.fetch_one("SELECT pg_backend_pid() AS pid")["pid"]
             if first == "revoke":
                 assert repo.resolve_active_by_digest(tx, token_sha256=DIGEST, as_of=NOW) == original
                 entered.set()
@@ -202,6 +224,7 @@ def test_share_open_rechecks_revocation_after_row_lock(migrated_clone, first):
         ThreadPoolExecutor(max_workers=1) as workers,
     ):
         with migrated_clone.database.transaction() as tx:
+            blocking_pid = tx.fetch_one("SELECT pg_backend_pid() AS pid")["pid"]
             if first == "revoke":
                 assert (
                     repo.revoke_grant(
@@ -224,6 +247,7 @@ def test_share_open_rechecks_revocation_after_row_lock(migrated_clone, first):
                 )
             pending = workers.submit(competing, database)
             assert entered.wait(timeout=30)
+            wait_for_blocked_statement(database, state["pid"], blocking_pid)
         result = pending.result(timeout=30)
     if first == "revoke":
         assert result is None

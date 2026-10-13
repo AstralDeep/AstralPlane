@@ -231,13 +231,25 @@ the candidate must admit its actual digest and preserve every historical migrati
 owners, draft rows, and share snapshots through upgrade and repeat application. Existing
 pre-split and per-edge upgrade suites remain part of the complete suite.
 
+Consumers that rerun the Plane suite from a pinned component checkout can supply
+`ASTRALPLANE_UPGRADE_BASELINE_ROOT` and `ASTRALPLANE_UPGRADE_BASELINE_SHA` together, pointing
+to a separately qualified owner checkout and its exact fetched `origin/main` SHA. The probe's
+`--baseline-source-root` option accepts the same source checkout; archive admission still
+refuses any SHA that differs from that checkout's fetched main. Missing owner evidence fails
+qualification instead of skipping the upgrade tests.
+
 `tests/integration/test_lifecycle_acceptance.py` exercises real owner/version fences, duplicate
 generation claims, caller rollback and detached results, and both transaction orders for share
 open versus revocation. `scripts/check_acceptance_faults.py` runs five declared faults against
-these focused assertions in isolated source copies. A surviving fault, missing case, skip,
+these focused assertions in isolated source copies, plus a NUL-bearing proposal lock fault against
+real proposal persistence. A surviving fault, missing case, skip,
 unexpected failure, collection/import error, or watchdog expiration fails qualification;
 only the intended behavioral assertion counts as a kill. The full suite emits the required
 `acceptance-faults.json` receipt, and CI retains it with upgrade and coverage evidence.
+
+Knowledge proposal creation encodes the advisory-lock namespace, agent, and tool as a canonical
+JSON tuple without NUL delimiters, preserving independent pairs and PostgreSQL text admission.
+Real database tests cover exact payload replay, supersession, concurrent proposals, and rollback.
 
 The quality lane retains `ci-review-diagnostics.json`, binding removed tests, added skips/xfails,
 swallowed test errors, and qualification-policy changes to the immutable base/head range.

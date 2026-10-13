@@ -93,7 +93,7 @@ jobs:
             --cov-branch --cov-report=xml --cov-fail-under=88.75
       - name: Require the PostgreSQL acceptance fault receipt
         run: |
-          uv run --frozen --group ci python -c "import json; r=json.load(open('acceptance-faults.json')); assert r['status']=='passed' and r['control']=='passed' and len(r['faults'])==5 and all(f['status']=='killed' for f in r['faults'])"
+          uv run --frozen --group ci python -c "import json; r=json.load(open('acceptance-faults.json')); assert r['status']=='passed' and r['control']=='passed' and len(r['faults'])==6 and all(f['status']=='killed' for f in r['faults'])"
       - name: Decide changed-line coverage for BASE_SHA..HEAD
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
