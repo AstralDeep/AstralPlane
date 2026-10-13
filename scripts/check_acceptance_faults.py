@@ -163,6 +163,7 @@ def run_case(
 ) -> str:
     selector = test_path + (f"::{case}" if case is not None else "")
     try:
+        output.unlink(missing_ok=True)
         completed = subprocess.run(
             [
                 sys.executable,

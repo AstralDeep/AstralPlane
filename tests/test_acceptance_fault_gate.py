@@ -115,6 +115,53 @@ def test_traceback_source_marker_cannot_turn_an_unrelated_error_into_a_kill(tmp_
     assert gate.classify(1, report, case="target", marker=marker) == "invalid"
 
 
+@pytest.mark.parametrize("control", (False, True), ids=("stale-kill", "stale-control"))
+def test_launch_without_pytest_cannot_reuse_a_previous_receipt(tmp_path, monkeypatch, control):
+    receipt = tmp_path / "result.xml"
+    body = (
+        '<testcase name="target"/>' * 6
+        if control
+        else '<testcase name="target"><failure type="AssertionError" message="assert 2 == 1">'
+        "assert 2 == 1</failure></testcase>"
+    )
+    receipt.write_text(f"<testsuites><testsuite>{body}</testsuite></testsuites>")
+    launcher = tmp_path / "python-before-pytest"
+    launcher.write_text(f"#!/bin/sh\nexit {0 if control else 1}\n")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(gate.sys, "executable", str(launcher))
+    result = gate.run_case(
+        ROOT,
+        ROOT,
+        receipt,
+        case=None if control else "target",
+        marker="assert 2 == 1",
+    )
+    assert result == "invalid"
+
+
+def test_actual_pytest_replaces_old_failure_with_current_survivor_receipt(tmp_path):
+    receipt = tmp_path / "result.xml"
+    receipt.write_text(
+        '<testsuites><testsuite><testcase name="test_target">'
+        '<failure type="AssertionError" message="assert 2 == 1">'
+        "assert 2 == 1</failure></testcase></testsuite></testsuites>",
+    )
+    (tmp_path / "test_current.py").write_text(
+        '"""Synthetic child test for current-launch receipt binding."""\n'
+        "def test_target():\n    assert True\n",
+    )
+    result = gate.run_case(
+        tmp_path,
+        tmp_path,
+        receipt,
+        case="test_target",
+        marker="assert 2 == 1",
+        test_path="test_current.py",
+    )
+    assert result == "survived"
+    assert not gate.ElementTree.parse(receipt).findall(".//failure")
+
+
 @pytest.mark.parametrize(
     "error",
     (
