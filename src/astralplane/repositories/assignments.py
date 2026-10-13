@@ -1589,6 +1589,8 @@ class AssignmentRepository:
     def get_operation(self, query, *, owner_id, assignment_id, lock: bool = False):
         if not isinstance(lock, bool):
             raise RepositoryValidationError("lock must be a boolean")
+        if lock:
+            self._lock_operation_owner(query, owner_id)
         data = self._load(
             query, owner_id, assignment_id, lock=lock, required=False, allow_unknown=True
         )
