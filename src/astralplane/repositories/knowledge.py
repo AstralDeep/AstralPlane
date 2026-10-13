@@ -763,7 +763,9 @@ class KnowledgeProposalRepository:
         record: KnowledgeProposalRecord,
     ) -> KnowledgeProposalRecord:
         proposal = _validated_proposal(record, new=True)
-        lock_key = f"knowledge-proposal\0{proposal.agent_id}\0{proposal.tool_name}"
+        lock_key = _canonical_json(
+            ("knowledge-proposal", proposal.agent_id, proposal.tool_name), "proposal_lock"
+        )
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,)
         )

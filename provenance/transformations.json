@@ -135,8 +135,20 @@
       "resultStatus": "absorbed",
       "resultPaths": [
         {
+          "path": "src/astralplane/repositories/knowledge.py",
+          "sha256": "5c4edf9adeb90822dfa2b4f2aaed427eb7fd195ffdfab32964fe5f76b73c4368"
+        },
+        {
           "path": "src/astralplane/repositories/preferences.py",
           "sha256": "ae578298905a7c6fca0d0adbf8db93176e8aac091a2b39512aa192e1c803c37f"
+        },
+        {
+          "path": "tests/repositories/test_knowledge.py",
+          "sha256": "b406224f394ef33cf0e07030bc906dbf7c1384ce4b8a851bf12fa505fb2f44bf"
+        },
+        {
+          "path": "tests/repositories/test_knowledge_proposals_postgres.py",
+          "sha256": "45c5c8b0541b695695aa61b66ebb11199214cfec4feec57170c95b8daacafd22"
         },
         {
           "path": "tests/repositories/test_preferences.py",
@@ -144,7 +156,7 @@
         }
       ],
       "task": "T081",
-      "reason": "Absorbed feedback persistence into the neutral owner-scoped preferences repository."
+      "reason": "Absorbed feedback persistence into neutral owner-scoped preferences and administrative knowledge repositories."
     },
     {
       "sourcePath": "backend/llm_config/tests/test_user_store.py",
