@@ -114,12 +114,17 @@ class TrackedJobRepository:
         *,
         owner_id: str,
         tracked_job_id: str,
+        lock: bool = False,
     ) -> TrackedJobRecord | None:
         owner = _required_id(owner_id, "owner_id")
         tracked = _required_id(tracked_job_id, "tracked_job_id")
+        if type(lock) is not bool:
+            raise RepositoryValidationError("lock must be a boolean")
+        if lock:
+            self._lock_owner(query, owner)
         row = query.fetch_one(
             f"SELECT {self._FIELDS} FROM tracked_job "
-            "WHERE tracked_job_id = %s AND owner_user_id = %s",
+            "WHERE tracked_job_id = %s AND owner_user_id = %s" + (" FOR UPDATE" if lock else ""),
             (tracked, owner),
         )
         return None if row is None else _owned(row, owner)
@@ -201,6 +206,7 @@ class TrackedJobRepository:
         )
         failures = _non_negative_int(fail_count, "fail_count")
         observed = _non_negative_int(polled_at, "polled_at")
+        self._lock_owner(transaction, owner)
         result = transaction.execute(
             f"""
             UPDATE tracked_job
@@ -233,6 +239,18 @@ class TrackedJobRepository:
         if existing is None:
             raise RepositoryNotFoundError("owner-scoped tracked job was not found")
         raise RepositoryConflictError("tracked job poll compare-and-set fence is stale")
+
+    @staticmethod
+    def _lock_owner(transaction: Transaction, owner_id: str) -> None:
+        transaction.fetch_one("SELECT pg_advisory_xact_lock(hashtextextended(%s,79))", (owner_id,))
+        retired = transaction.fetch_one(
+            "SELECT state FROM astralplane_blob_owner_state WHERE owner_id=%s FOR UPDATE",
+            (owner_id,),
+        )
+        if retired is not None and retired["state"] != "active":
+            raise RepositoryConflictError(
+                "tracked_job_owner_retired", code="tracked_job_owner_retired"
+            )
 
     def mark_notified(
         self,
