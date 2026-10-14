@@ -1670,6 +1670,43 @@ class AssignmentRepository:
             return _record(data)
         return None
 
+    def list_owner_event_waits(
+        self, query, *, owner_id, event_keys=None, event_key_prefix=None, limit=50, after_id=None,
+        include_terminal=True
+    ):
+        _text(owner_id)
+        _integer(limit, 1, 100)
+        if type(include_terminal) is not bool:
+            raise RepositoryValidationError("include_terminal must be a boolean")
+        if after_id is not None:
+            _uuid(after_id)
+        if (event_keys is None) == (event_key_prefix is None):
+            raise RepositoryValidationError("one explicit event filter is required")
+        if event_keys is not None:
+            if type(event_keys) is not tuple:
+                raise RepositoryValidationError("bounded event keys must be a tuple")
+            _integer(len(event_keys), 1, 64)
+            for key in event_keys:
+                _text(key, 128)
+            predicate = "data #>> '{operation,control,wait,event_key}' = ANY(%s)"
+            parameters = (list(event_keys),)
+        else:
+            _text(event_key_prefix, 128)
+            predicate = "left(data #>> '{operation,control,wait,event_key}',length(%s))=%s"
+            parameters = (event_key_prefix, event_key_prefix)
+        if not include_terminal:
+            predicate += " AND lifecycle IN ('active','paused')"
+        rows = query.fetch_all(
+            "SELECT * FROM persistent_assignment WHERE owner_user_id=%s "
+            "AND execution_profile='one_shot' AND " + predicate +
+            " AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
+            (owner_id, *parameters, after_id, after_id, limit),
+        )
+        return tuple(
+            self._operation_read(self._validated_assignment_row(row, owner_id, str(row["id"])))
+            for row in rows
+        )
+
     def list_assignments(self, query, *, owner_id, limit=50, after_id=None):
         _text(owner_id)
         _integer(limit, 1, 100)
