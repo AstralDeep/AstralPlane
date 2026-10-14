@@ -114,7 +114,9 @@ def test_poll_update_is_owner_fail_count_and_timestamp_cas() -> None:
         fail_count=0,
         last_polled_at=110,
     )
-    transaction = ScriptedTransaction(execute=[Result(returned_records=(updated,))])
+    transaction = ScriptedTransaction(
+        one=[None, None], execute=[Result(returned_records=(updated,))]
+    )
     record = TrackedJobRepository().apply_poll(
         transaction,  # type: ignore[arg-type]
         owner_id="owner-1",
@@ -128,13 +130,14 @@ def test_poll_update_is_owner_fail_count_and_timestamp_cas() -> None:
         polled_at=110,
     )
     assert record.state == "RUNNING"
-    statement = transaction.calls[0][1]
+    statement = transaction.calls[-1][1]
     assert "last_polled_at IS NOT DISTINCT FROM %s" in statement
     assert "owner_user_id = %s" in statement
 
 
 def test_terminal_poll_sets_stable_finished_timestamp() -> None:
     transaction = ScriptedTransaction(
+        one=[None, {"state": "active"}],
         execute=[
             Result(
                 returned_records=(
@@ -162,12 +165,12 @@ def test_terminal_poll_sets_stable_finished_timestamp() -> None:
         polled_at=120,
     )
     assert record.terminal and record.finished_at == 120
-    assert "COALESCE(finished_at, %s)" in transaction.calls[0][1]
+    assert "COALESCE(finished_at, %s)" in transaction.calls[-1][1]
 
 
 @pytest.mark.parametrize("existing", [_row(), None])
 def test_poll_miss_distinguishes_stale_fence_from_absent_owner(existing: object) -> None:
-    transaction = ScriptedTransaction(execute=[Result(rowcount=0)], one=[existing])  # type: ignore[list-item]
+    transaction = ScriptedTransaction(execute=[Result(rowcount=0)], one=[None, None, existing])  # type: ignore[list-item]
     error = RepositoryConflictError if existing else RepositoryNotFoundError
     with pytest.raises(error):
         TrackedJobRepository().apply_poll(
