@@ -213,6 +213,21 @@ The revisions after `079.001`:
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md).
 
+## Error diagnostics
+
+`PlaneError` retains at most 16 metadata entries, selected by lexicographic key order.
+Keys and codes are non-empty ASCII identifiers (`A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, `-`)
+starting with a letter or digit and limited to 64 characters. Invalid keys and codes are
+rejected. Values accept only exact built-in `str`, `bool`, `int`, `float`, or `None`;
+unsupported objects and scalar subclasses become `<unsupported>` without calling user
+serialization. Integers exceeding 1700 bits also become `<unsupported>`. Values are limited
+to 512 characters after C0, DEL and C1 controls are escaped as `\xNN`; processing long text
+is bounded before escaping. Metadata remains an immutable tuple of string pairs.
+
+Call sites use identifiers, counts, revisions and error categories instead of payloads.
+Plane does not detect arbitrary sensitive text. Hosts remain responsible for authorization
+and for redacting messages and scalar metadata before storing or emitting diagnostics.
+
 ## Local verification
 
 AstralPlane owns qualification of its Python source, architecture boundary, PostgreSQL migration

@@ -5,8 +5,61 @@ diagnostic metadata, raised across astralplane and its many AstralDeep callers.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from heapq import nsmallest
 from typing import Final
+
+MAX_METADATA_ENTRIES: Final = 16
+MAX_METADATA_KEY_LENGTH: Final = 64
+MAX_METADATA_VALUE_LENGTH: Final = 512
+MAX_CODE_LENGTH: Final = 64
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*", re.ASCII)
+_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_UNSUPPORTED = "<unsupported>"
+
+
+def _diagnostic_value(value: object) -> str:
+    if type(value) is str:
+        text = value[:MAX_METADATA_VALUE_LENGTH]
+    elif value is None or type(value) in (bool, int, float):
+        if type(value) is int and value.bit_length() > 1700:
+            return _UNSUPPORTED
+        text = str(value)
+    else:
+        return _UNSUPPORTED
+    return _CONTROLS.sub(lambda match: f"\\x{ord(match.group()):02x}", text)[
+        :MAX_METADATA_VALUE_LENGTH
+    ]
+
+
+def _bounded_metadata(metadata: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+    if metadata is None:
+        return ()
+    if not isinstance(metadata, Mapping):
+        raise TypeError("PlaneError metadata must be a Mapping or None")
+    for key in metadata:
+        if type(key) is not str:
+            raise TypeError("PlaneError metadata keys must be strings")
+        if len(key) > MAX_METADATA_KEY_LENGTH:
+            raise ValueError("PlaneError metadata key exceeds its maximum length")
+        if _IDENTIFIER.fullmatch(key) is None:
+            raise ValueError("PlaneError metadata key contains unsupported characters")
+    return tuple((key, _diagnostic_value(metadata[key]))
+                 for key in nsmallest(MAX_METADATA_ENTRIES, metadata))
+
+
+def _resolve_code(code: str | None, default: str) -> str:
+    if code is not None and type(code) is not str:
+        raise TypeError("PlaneError code must be a string")
+    selected = code or default
+    if type(selected) is not str:
+        raise TypeError("PlaneError code must be a string")
+    if len(selected) > MAX_CODE_LENGTH:
+        raise ValueError("PlaneError code exceeds its maximum length")
+    if _IDENTIFIER.fullmatch(selected) is None:
+        raise ValueError("PlaneError code contains unsupported characters")
+    return selected
 
 
 class PlaneError(RuntimeError):
@@ -20,10 +73,8 @@ class PlaneError(RuntimeError):
         metadata: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(message)
-        self.code = code or self.default_code
-        self.metadata = tuple(
-            sorted((str(key), str(value)) for key, value in (metadata or {}).items())
-        )
+        self.code = _resolve_code(code, self.default_code)
+        self.metadata = _bounded_metadata(metadata)
 
 
 class PoolClosedError(PlaneError):
