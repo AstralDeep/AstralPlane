@@ -324,3 +324,12 @@ An exhausted attempt dead-letters without calculating another retry time. Retry 
 dead-letter outcomes are reported only after their fenced state transition commits.
 
 See `docs/migration-and-recovery.md` before changing schema or durable roots.
+
+## External-host example
+
+`examples/external_host_example.py` is a standalone executable example that boots this package
+through the public facade only — guarded migrations, an explicit absolute blob root, owner-scoped
+caller-owned transactions, idempotent replay, compare-and-set fences, typed failures, and
+shutdown — without importing any other Astral product. `docs/external-host-example.md` maps each
+scenario to the public API stability boundary and explains where an MCP or A2A host maps its
+protocol identities to the neutral owner identifiers Plane receives.
