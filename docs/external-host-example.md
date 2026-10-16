@@ -31,6 +31,9 @@ python examples/external_host_example.py \
 The example prints one JSON report per scenario and a final summary line, and it exits nonzero on
 any unexpected typed failure. The qualification test creates both databases and the blob root
 outside the repository tree, removes them afterwards, and asserts the exact scenario outcomes.
+It also invokes the CLI entry point in-process to measure its successful output, relative-root
+refusal, typed boot failure, and resource cleanup through the required Python coverage gate;
+the separate standalone subprocess remains an executable smoke check.
 
 ## Public API stability boundary
 
@@ -38,6 +41,11 @@ The example exercises exactly the facade surface an external host may rely on ac
 contract revision. Plane's compatibility contract is its contract version, schema revision,
 read-compatible floor, migration registry digest, blob layout version, and recovery contract
 version; a host re-pins deliberately when any element moves.
+
+Each example runtime uses a fresh bounded boot identity because Plane shares readiness by identity
+within the host process. A new runtime must not inherit readiness or a prior failed boot from a
+different database. The reconciliation hook's durable name and version stay stable, so repeated
+boots still verify the same idempotent reconciliation plan.
 
 | Scenario | Facade entry points | Boundary demonstrated |
 | --- | --- | --- |

@@ -95,7 +95,7 @@ def _require(condition: bool, message: str) -> None:
 def boot(database_url: str) -> tuple[PlaneRuntime, RepositoryCatalog, ScenarioOutcome]:
     runtime = create_postgres_runtime(
         database_url,
-        identity=BOOT_IDENTITY,
+        identity=f"{BOOT_IDENTITY}-{uuid.uuid4().hex}",
         reconcilers=(HostReconciler(),),
         reconciliation_context={"example": BOOT_IDENTITY},
         application_name="external-host-example",
@@ -322,7 +322,7 @@ def demonstrate_boot_refusal(refusal_database_url: str) -> ScenarioOutcome:
     refusal: dict[str, object] = {}
     runtime = create_postgres_runtime(
         refusal_database_url,
-        identity=REFUSAL_IDENTITY,
+        identity=f"{REFUSAL_IDENTITY}-{uuid.uuid4().hex}",
         reconcilers=(HostReconciler(),),
         application_name="external-host-example-refusal",
     )

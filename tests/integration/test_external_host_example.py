@@ -84,6 +84,21 @@ def _load_example() -> ModuleType:
     return module
 
 
+@pytest.fixture
+def observed_example(monkeypatch: pytest.MonkeyPatch) -> tuple[ModuleType, list[Any]]:
+    example = _load_example()
+    create_runtime = example.create_postgres_runtime
+    runtimes: list[Any] = []
+
+    def capture_runtime(*args: Any, **kwargs: Any) -> Any:
+        runtime = create_runtime(*args, **kwargs)
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(example, "create_postgres_runtime", capture_runtime)
+    return example, runtimes
+
+
 def _assert_shared_shape(outcomes: list[Any], blob_root: Path) -> dict[str, Any]:
     by_name = {outcome.scenario: outcome.detail for outcome in outcomes}
     assert tuple(by_name) == SCENARIOS
@@ -188,3 +203,105 @@ def test_example_runs_as_a_standalone_executable(
     assert [report["scenario"] for report in reports[:-1]] == list(SCENARIOS)
     assert reports[0]["detail"]["ready"] is True
     assert reports[-2]["detail"]["pool_closed"] is True
+
+
+def test_example_cli_succeeds_without_optional_refusal_database(
+    external_host_databases: tuple[str, str],
+    observed_example: tuple[ModuleType, list[Any]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    application_dsn, _ = external_host_databases
+    example, runtimes = observed_example
+    blob_root = tmp_path / "cli-blobs"
+
+    result = example.main(["--database-url", application_dsn, "--blob-root", str(blob_root)])
+
+    captured = capsys.readouterr()
+    reports = [json.loads(line) for line in captured.out.splitlines()]
+    expected = [scenario for scenario in SCENARIOS if scenario != "boot_refusal"]
+    assert result == 0
+    assert captured.err == ""
+    assert reports[-1] == {"status": "passed", "scenarios": expected}
+    assert [report["scenario"] for report in reports[:-1]] == expected
+    assert reports[-2]["detail"]["pool_closed"] is True
+    assert blob_root.is_dir()
+    assert runtimes and all(runtime.health().pool.closed for runtime in runtimes)
+
+
+def test_example_cli_refuses_relative_root_before_connecting(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    example = _load_example()
+
+    result = example.main(
+        ["--database-url", "not-a-database-url", "--blob-root", "relative-blobs"]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "--blob-root must be an absolute path outside source trees: relative-blobs\n"
+    )
+
+
+def test_example_cli_reports_typed_boot_failure_and_releases_connections(
+    external_host_databases: tuple[str, str],
+    observed_example: tuple[ModuleType, list[Any]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, refusal_dsn = external_host_databases
+    example, runtimes = observed_example
+    blob_root = tmp_path / "failed-cli-blobs"
+
+    result = example.main(["--database-url", refusal_dsn, "--blob-root", str(blob_root)])
+
+    captured = capsys.readouterr()
+    failure = json.loads(captured.err)
+    assert result == 1
+    assert captured.out == ""
+    assert failure["status"] == "failed"
+    assert failure["error_type"] == "SchemaRevisionError"
+    assert failure["code"] == "schema_revision_incompatible"
+    assert "passed" not in captured.err
+    assert not blob_root.exists()
+    assert runtimes and all(runtime.health().pool.closed for runtime in runtimes)
+
+
+def test_example_closes_ready_runtime_when_blob_root_is_refused(
+    external_host_databases: tuple[str, str],
+    observed_example: tuple[ModuleType, list[Any]],
+) -> None:
+    application_dsn, _ = external_host_databases
+    example, runtimes = observed_example
+
+    with pytest.raises(example.SQLContractError) as raised:
+        example.run_example(application_dsn, "relative-blobs")
+
+    assert raised.value.code == "sql_contract"
+    assert runtimes and all(runtime.health().pool.closed for runtime in runtimes)
+
+
+def test_example_does_not_report_an_unmet_scenario_as_passed() -> None:
+    example = _load_example()
+
+    with pytest.raises(RuntimeError, match="scenario failed"):
+        example._require(False, "scenario failed")
+
+
+def test_example_repeated_boot_refusal_remains_typed_and_closes_each_pool(
+    external_host_databases: tuple[str, str],
+    observed_example: tuple[ModuleType, list[Any]],
+) -> None:
+    _, refusal_dsn = external_host_databases
+    example, runtimes = observed_example
+
+    for _ in range(2):
+        outcome = example.demonstrate_boot_refusal(refusal_dsn)
+        assert outcome.detail["error_type"] == "SchemaRevisionError"
+        assert outcome.detail["code"] == "schema_revision_incompatible"
+        assert outcome.detail["metadata"]["reason_codes"] == "schema_metadata_missing"
+
+    assert runtimes and all(runtime.health().pool.closed for runtime in runtimes)

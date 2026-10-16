@@ -85,7 +85,7 @@ jobs:
       - name: Run the complete Python suite against PostgreSQL
         run: |
           uv run --frozen --group ci pytest -q -p no:cacheprovider \
-            --cov=astralplane --cov=scripts.check_changed_coverage \
+            --cov=astralplane --cov=examples --cov=scripts.check_changed_coverage \
             --cov=scripts.import_staging_fixture \
             --cov=scripts.migrate_qualification_database \
             --cov=scripts.qualify_main_upgrade --cov=scripts.check_acceptance_faults \
