@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Final
 
 from astralplane.contracts import QueryExecutor, Transaction
@@ -241,6 +242,44 @@ class FrameworkCredentialRepository:
             ),
             now,
         )
+
+    def capture_execution_observation(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        credential_id: str,
+        token_hash: str,
+        scopes: tuple[str, ...] | None = None,
+    ) -> FrameworkCredentialObservation:
+        owner = _required_id(owner_id, "owner_id")
+        credential = _required_id(credential_id, "credential_id")
+        _validate_token_hash(token_hash)
+        requested = None if scopes is None else _validate_scopes(scopes)
+        started = transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
+        row = transaction.fetch_one(
+            f"SELECT {self._FIELDS} FROM framework_credential "
+            "WHERE id=%s AND owner_id=%s FOR UPDATE",
+            (credential, owner),
+        )
+        if row is None:
+            _framework_credential_unavailable()
+        record = _record(row)
+        granted = tuple(scope for scope in record.scopes if requested is None or scope in requested)
+        if not granted:
+            _framework_credential_unavailable()
+        observation = FrameworkCredentialObservation(
+            FrameworkCredentialFence(
+                owner_id=owner, credential_id=credential, token_hash=token_hash, scopes=granted,
+                max_admissions=record.max_admissions,
+                consumed_admissions=record.consumed_admissions,
+                created_at=record.created_at, expires_at=record.expires_at,
+                revoked_at=record.revoked_at,
+            ),
+            started, started + timedelta(seconds=15),
+        )
+        self.assert_current_execution(transaction, observation=observation)
+        return observation
 
     @staticmethod
     def _lock_issuer_owner(transaction: Transaction, owner_id: str) -> None:
