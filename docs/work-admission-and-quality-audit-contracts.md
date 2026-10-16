@@ -28,6 +28,28 @@ retention and lease durations, bounded snake-case codes, safe summaries, termina
 and purge limits before issuing SQL. `bind_request_generation` is NULL-only and execution-fenced;
 an exact replay returns the existing record, while a changed generation or stale fence is visible.
 
+## Retryable executor inventory
+
+`list_retryable_for_administration` reads retained retryable operations through a bounded,
+validated FIFO keyset cursor. The database rows remain the inventory; a caller may keep only
+an optional continuation hint and restart scanning from the beginning after restart. Held
+work and temporary read/admission failures are never consumed by a read. The optional handled
+namespace filter suppresses only an existing child with matching owner partition, parent,
+namespace, key, kind, admission class, chat, connection/request generation and present
+original digest. An admission refusal does not create such a child. Historical missing-digest
+rows stay visible for host verification.
+
+`get_idempotent_operation` is an owner-scoped, read-only lookup of the existing operation for a
+bounded namespace and key. It creates no submission or admission record. Hosts can verify
+legacy derived identities and report a conflict without repeatedly appending replay receipts.
+A host must retain its stop, cancellation, uncertainty, retention and recovery-depth policies;
+Plane does not decide whether an operation may execute. A reserved recovery namespace with a
+missing parent remains a host reconciliation condition, including after retention clears a
+parent link.
+
+These additive APIs and detached assignment recovery results ship in package `0.1.1` without
+changing schema `089.004`, its migration digest or the existing compatibility contract.
+
 ## Qualification audit
 
 Revision `074.002` owns `test_runs`, `test_case_results`, `test_evidence`, `audit_entries`, and
