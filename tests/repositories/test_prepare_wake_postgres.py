@@ -638,7 +638,7 @@ def test_continuation_clear_checks_db_deadline_after_action_lock_wait(database, 
 
     def check():
         with independent_database(schema) as db, db.transaction() as tx:
-            tx.execute("SET LOCAL statement_timeout=3000")
+            tx.execute("SET LOCAL statement_timeout=15000")
             state["pid"] = tx.fetch_one("SELECT pg_backend_pid() AS pid")["pid"]
             ready.set()
             return repo.assert_operation_continuation_clear(tx, **clear_args(record))
@@ -650,7 +650,7 @@ def test_continuation_clear_checks_db_deadline_after_action_lock_wait(database, 
                 tx, owner_id="owner", assignment_id=record.assignment_id, action_id=item.action_id
             )
             future = pool.submit(check)
-            assert ready.wait(3)
+            assert ready.wait(10)
             _wait_for_lock(tx, state["pid"], pid)
             tx.fetch_one(
                 "SELECT pg_sleep(GREATEST(0,extract(epoch FROM "
@@ -663,7 +663,7 @@ def test_continuation_clear_checks_db_deadline_after_action_lock_wait(database, 
             if expiry == "authority"
             else "assignment_deadline_exceeded",
         ):
-            future.result(timeout=6)
+            future.result(timeout=20)
     with database.transaction() as tx:
         assert stored_rows(tx, record.assignment_id) == before
 

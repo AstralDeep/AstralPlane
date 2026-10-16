@@ -320,6 +320,7 @@ def test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage(
     pytest_command = pytest_commands[0]
     assert "pytest -q -p no:cacheprovider" in pytest_command
     assert "--cov=astralplane" in pytest_command
+    assert "--cov=examples" in pytest_command
     assert "--cov=scripts.check_changed_coverage" in pytest_command
     assert "--cov=scripts.qualify_main_upgrade" in pytest_command
     assert "--cov=scripts.check_acceptance_faults" in pytest_command
@@ -366,6 +367,7 @@ def test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage(
         ("--diff-range-notation '..' ", ""),
         ("--ignore-staged --ignore-unstaged ", ""),
         ("--cov=scripts.check_changed_coverage ", ""),
+        ("--cov=examples ", ""),
         ("github.event.before", "github.sha"),
         ("github.event.pull_request.base.sha || ", ""),
         ('|| "$BASE_SHA" == 0000000000000000000000000000000000000000 ', ""),
@@ -378,6 +380,7 @@ def test_postgresql_job_runs_the_complete_suite_with_real_database_and_coverage(
         "three-dot-range",
         "working-tree-diff",
         "unmeasured-decision-script",
+        "unmeasured-executable-examples",
         "self-comparison-on-push",
         "no-pull-request-base",
         "zero-base-accepted",
