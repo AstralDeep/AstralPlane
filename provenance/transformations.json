@@ -140,7 +140,7 @@
         },
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "ae578298905a7c6fca0d0adbf8db93176e8aac091a2b39512aa192e1c803c37f"
+          "sha256": "83ed5902d3ced155d91d2673a3eb7d15c1c5a02f4dada374eac0d42afa0b6aa6"
         },
         {
           "path": "tests/repositories/test_knowledge.py",
@@ -201,7 +201,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "ae578298905a7c6fca0d0adbf8db93176e8aac091a2b39512aa192e1c803c37f"
+          "sha256": "83ed5902d3ced155d91d2673a3eb7d15c1c5a02f4dada374eac0d42afa0b6aa6"
         }
       ],
       "task": "T081",
@@ -529,7 +529,11 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "ae578298905a7c6fca0d0adbf8db93176e8aac091a2b39512aa192e1c803c37f"
+          "sha256": "83ed5902d3ced155d91d2673a3eb7d15c1c5a02f4dada374eac0d42afa0b6aa6"
+        },
+        {
+          "path": "tests/repositories/test_memory_envelope_page.py",
+          "sha256": "c2803c591275665823c549f5688f69c11511ebbdc38f7bba2c94b105cf03b122"
         }
       ],
       "task": "T081",

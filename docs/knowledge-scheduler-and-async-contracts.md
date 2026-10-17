@@ -27,6 +27,31 @@ owner-isolated short-term signals under immutable replay identities, and records
 consolidation results. Model synthesis, review policy, artifact publishing, and selection of which
 memories should be linked remain in AstralDeep.
 
+`preferences.personalization.list_memory_envelope_page` is a read-only, schema-neutral
+query over existing memory rows. Callers provide an owner, one exact project (or global
+`None`), and bounded format/kind identifiers. A named envelope header contract requires
+JSON object fields `format`, `kind`, `owner_id`, and `project_id`; format/kind must be
+strings, owner must exactly match the row owner, and project must exactly match the row
+project, including explicit JSON `null` for global rows. Missing, malformed, scalar,
+wrongly typed, superseded, or mismatched headers do not consume result slots. The row
+owner/project predicates remain authoritative and apply independently of the JSON.
+
+The existing owner/project and live-memory indexes narrow the authorized row scope.
+Within that scope PostgreSQL validates JSON before casting and filters headers before
+the limit. The query returns at most 1..100 detached records, reads at most one additional
+matching row, and returns a typed owner/project/format/kind-bound continuation ordered by
+`(created_at DESC, id DESC)`. It performs one query and no writes, offsets, or automatic
+overfetch loops. PostgreSQL may inspect additional owner-scoped rows to evaluate the
+filter; this does not promise constant physical scan cost or a new envelope index.
+
+Keyset iteration is not a snapshot: inserts newer than the cursor appear on a fresh
+listing, and deleted rows disappear. Creation keys supplied through the existing memory
+write contract are non-null and non-negative. The host validates its complete envelope,
+ciphertext binding and product policy after this query. This does not implement the
+separately proposed first-class Atlas page/revision/tombstone store, parse private bodies,
+adopt new namespaces, or migrate legacy content. Schema `089.004`, its digest, and existing
+stored bytes are unchanged.
+
 ## Scheduler-extended state
 
 `create_scheduler_repository()` is the complete typed scheduled-job/occurrence/run/effect-ledger

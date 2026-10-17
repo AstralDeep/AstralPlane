@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from astralplane.contracts import QueryExecutor, Transaction
 from astralplane.repositories import (
@@ -121,6 +122,22 @@ class MemoryRecord:
     recall_count: int
     last_recalled_at: int | None
     project_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEnvelopeCursor:
+    owner_id: str
+    project_id: str | None
+    envelope_format: str
+    envelope_kind: str
+    created_at: int
+    memory_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEnvelopePage:
+    records: tuple[MemoryRecord, ...]
+    next_cursor: MemoryEnvelopeCursor | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1146,6 +1163,73 @@ class PersonalizationRepository(ExplicitNotesRepository):
         )
         return tuple(_memory(row) for row in rows)
 
+    def list_memory_envelope_page(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        project_id: str | None,
+        envelope_format: str,
+        envelope_kind: str,
+        cursor: MemoryEnvelopeCursor | None = None,
+        limit: int = 50,
+    ) -> MemoryEnvelopePage:
+        owner_id = _required_id(owner_id, "owner_id")
+        project_id = _optional_id(project_id, "project_id")
+        envelope_format = _required_id(envelope_format, "envelope_format", maximum=128)
+        envelope_kind = _required_id(envelope_kind, "envelope_kind", maximum=128)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise RepositoryValidationError("envelope page limit must be between 1 and 100")
+        clauses = ["user_id=%s", "superseded_at IS NULL"]
+        parameters: list[object] = [owner_id]
+        if project_id is None:
+            clauses.append("project_id IS NULL")
+        else:
+            clauses.append("project_id=%s")
+            parameters.append(project_id)
+        clauses.append(
+            "CASE WHEN pg_input_is_valid(value,'jsonb') THEN "
+            "jsonb_typeof(value::jsonb)='object' "
+            "AND value::jsonb->'format'=to_jsonb(%s::text) "
+            "AND value::jsonb->'kind'=to_jsonb(%s::text) "
+            "AND value::jsonb->'owner_id'=to_jsonb(user_id) "
+            "AND value::jsonb->'project_id'=COALESCE(to_jsonb(project_id),'null'::jsonb) "
+            "ELSE FALSE END"
+        )
+        parameters.extend((envelope_format, envelope_kind))
+        if cursor is not None:
+            if (type(cursor) is not MemoryEnvelopeCursor
+                    or (cursor.owner_id, cursor.project_id,
+                        cursor.envelope_format, cursor.envelope_kind)
+                    != (owner_id, project_id, envelope_format, envelope_kind)
+                    or type(cursor.created_at) is not int
+                    or not 0 <= cursor.created_at < 2 ** 63):
+                raise RepositoryValidationError("envelope cursor is invalid for this scope")
+            try:
+                if (not isinstance(cursor.memory_id, str)
+                        or str(UUID(cursor.memory_id)) != cursor.memory_id):
+                    raise ValueError
+            except (ValueError, AttributeError):
+                raise RepositoryValidationError(
+                    "envelope cursor memory identity is invalid"
+                ) from None
+            clauses.append("(created_at,id)<(%s,%s::uuid)")
+            parameters.extend((cursor.created_at, cursor.memory_id))
+        parameters.append(limit + 1)
+        rows = query.fetch_all(
+            f"SELECT {self._MEMORY_FIELDS} FROM memory_item WHERE {' AND '.join(clauses)} "
+            "ORDER BY created_at DESC,id DESC LIMIT %s", tuple(parameters),
+        )
+        records = tuple(_memory(row) for row in rows[:limit])
+        continuation = None
+        if len(rows) > limit and records:
+            last = records[-1]
+            continuation = MemoryEnvelopeCursor(
+                owner_id, project_id, envelope_format, envelope_kind,
+                last.created_at, last.memory_id,
+            )
+        return MemoryEnvelopePage(records, continuation)
+
     def supersede_memory(
         self,
         transaction: Transaction,
@@ -1589,6 +1673,8 @@ __all__ = (
     "FeedbackPage",
     "FeedbackRecord",
     "FeedbackRepository",
+    "MemoryEnvelopeCursor",
+    "MemoryEnvelopePage",
     "MemoryRecord",
     "OnboardingRepository",
     "OnboardingStateRecord",
