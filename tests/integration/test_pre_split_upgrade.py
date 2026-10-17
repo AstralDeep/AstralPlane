@@ -132,8 +132,12 @@ def _representative_snapshot(connection: Any) -> dict[str, tuple[tuple[object, .
         "audit": _query_all(
             connection,
             """
-            SELECT event_id::text, actor_user_id, encode(prev_hash, 'hex'),
-                   encode(entry_hash, 'hex'), schema_version
+            SELECT event_id::text, actor_user_id, auth_principal, agent_id,
+                   event_class, action_type, description, conversation_id,
+                   correlation_id::text, outcome, outcome_detail, inputs_meta,
+                   outputs_meta, artifact_pointers, started_at, completed_at,
+                   recorded_at, encode(prev_hash, 'hex'),
+                   encode(entry_hash, 'hex'), key_id, schema_version
             FROM audit_events
             ORDER BY actor_user_id, recorded_at, event_id
             """,
@@ -254,6 +258,39 @@ def pre_split_postgres(tmp_path: Path) -> Iterator[_LoadedFixture]:
         if loaded or _schema_exists(connection, schema):
             drop_postgres_fixture(connection, schema=schema)
         connection.close()
+
+
+def test_pre_split_audit_classes_match_historical_product_contract(
+    pre_split_postgres: _LoadedFixture,
+) -> None:
+    fixture = pre_split_postgres
+    expected = (
+        ("00000000-0000-4000-8000-000000000401", "fixture-owner-a", "agent_tool_call"),
+        ("00000000-0000-4000-8000-000000000402", "fixture-owner-a", "agent_tool_call"),
+        ("00000000-0000-4000-8000-000000000403", "fixture-owner-b", "auth"),
+    )
+    statement = (
+        "SELECT event_id::text, actor_user_id, event_class "
+        "FROM audit_events ORDER BY event_id"
+    )
+    assert _query_all(fixture.connection, statement) == expected
+    inventory = json.loads(
+        (Path(__file__).parents[1] / "fixtures/pre_split/database.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert tuple(
+        (row["eventId"], row["ownerId"], row["eventClass"])
+        for row in inventory["records"]["audit"]
+    ) == expected
+    before = _representative_snapshot(fixture.connection)
+
+    _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
+
+    assert _query_all(fixture.connection, statement) == expected
+    assert _representative_snapshot(fixture.connection) == before
 
 
 def test_pre_split_upgrade_preserves_representative_database_and_blobs(
