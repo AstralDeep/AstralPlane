@@ -4696,7 +4696,7 @@ class AssignmentRepository:
 
     def _recover_expired(self, transaction, *, limit, profile):
         _integer(limit, 1, 100)
-        rows = transaction.fetch_all(
+        selection = (
             "SELECT id,owner_user_id FROM persistent_assignment "
             "WHERE execution_profile=%s AND (lease_expires_at<=clock_timestamp() "
             "OR (execution_profile='one_shot' AND lease_expires_at IS NULL "
@@ -4711,11 +4711,40 @@ class AssignmentRepository:
             "IN ('1'::jsonb,'2'::jsonb) "
             "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
             "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb)) "
-            "ORDER BY lease_expires_at NULLS FIRST,id "
-            "LIMIT %s FOR UPDATE SKIP LOCKED",
-            (profile, limit),
         )
-        reclaimed, bindings, uncertain = [], [], []
+        candidate_ids, owners, blocked = [], set(), set()
+        while len(candidate_ids) < limit and len(owners) + len(blocked) < 100:
+            candidates = transaction.fetch_all(
+                selection + "AND NOT (owner_user_id=ANY(%s::text[])) "
+                "AND NOT (id=ANY(%s::uuid[])) "
+                "ORDER BY lease_expires_at NULLS FIRST,id LIMIT %s",
+                (profile, sorted(blocked), candidate_ids, limit - len(candidate_ids)),
+            )
+            if not candidates:
+                break
+            for owner_id in sorted({row["owner_user_id"] for row in candidates} - owners):
+                if len(owners) + len(blocked) >= 100:
+                    break
+                acquired = transaction.fetch_one(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,79)) AS acquired",
+                    (owner_id,),
+                )
+                if acquired["acquired"] and self._lock_operation_owner(transaction, owner_id):
+                    owners.add(owner_id)
+                else:
+                    blocked.add(owner_id)
+            candidate_ids.extend(
+                str(row["id"]) for row in candidates if row["owner_user_id"] in owners
+            )
+        if not owners:
+            return AssignmentRecoveryResult()
+        # Completion delivery takes owner locks before assignment rows.
+        rows = transaction.fetch_all(
+            selection + "AND id=ANY(%s::uuid[]) AND owner_user_id=ANY(%s::text[]) "
+            "ORDER BY lease_expires_at NULLS FIRST,id LIMIT %s FOR UPDATE SKIP LOCKED",
+            (profile, candidate_ids, sorted(owners), limit),
+        )
+        reclaimed, bindings, uncertain, terminal = [], [], [], []
         for row in rows:
             data = self._load(transaction, row["owner_user_id"], str(row["id"]), lock=True)
             unclaimed_deadline = profile == "one_shot" and data["lease_expires_at"] is None
@@ -4834,8 +4863,12 @@ class AssignmentRepository:
                         )
                     self._terminal_operation_failure(transaction, data)
             self._clear_claim(data)
-            self._save(transaction, data)
-        return AssignmentRecoveryResult(tuple(reclaimed), tuple(bindings), tuple(uncertain))
+            saved = self._save(transaction, data)
+            if profile == "one_shot" and saved.lifecycle == "completed":
+                terminal.append(saved)
+        return AssignmentRecoveryResult(
+            tuple(reclaimed), tuple(bindings), tuple(uncertain), tuple(terminal)
+        )
 
     def _activity(self, transaction, data, activity, *, critical=False):
         _text(activity.activity_key)

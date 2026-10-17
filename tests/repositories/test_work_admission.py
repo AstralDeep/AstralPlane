@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from astralplane.repositories import RepositoryConflictError
+from astralplane.repositories import work_admission as admission
 from astralplane.repositories.work_admission import (
     AcceptedAdmission,
     AdmissionClass,
@@ -62,6 +63,143 @@ class _Transaction:
     @contextmanager
     def savepoint(self, name: str) -> Iterator[_Transaction]:
         yield self
+
+
+def test_retryable_inventory_uses_bounded_detached_administrative_keyset():
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+    row = _running_row()
+    row.update(state="retryable", terminal_code="execution_lease_expired")
+    transaction = _Transaction([_Result(returned_records=(row,))])
+    after = admission.RetryableOperationCursor(now, uuid.uuid4())
+
+    records = WorkAdmissionRepository().list_retryable_for_administration(
+        transaction, terminal_code="execution_lease_expired", now=now,
+        after=after, limit=3, handled_idempotency_namespace="recovery.test",
+    )
+
+    assert isinstance(records, tuple) and records[0].operation_id == row["operation_id"]
+    statement, parameters = transaction.calls[0]
+    assert "state = 'retryable'" in statement
+    assert "terminal_code = %s" in statement and "purge_after > %s" in statement
+    assert "(operation.accepted_at, operation.operation_id) >" in statement
+    assert "ORDER BY operation.accepted_at, operation.operation_id" in statement
+    assert "LIMIT %s" in statement
+    assert "child.parent_operation_id = operation.operation_id" in statement
+    assert "child.owner_scope = operation.owner_scope" in statement
+    assert "child.owner_user_id IS NOT DISTINCT FROM operation.owner_user_id" in statement
+    assert (
+        "child.connection_scope_id IS NOT DISTINCT FROM operation.connection_scope_id" in statement
+    )
+    assert "child.idempotency_namespace = %s" in statement
+    assert "child.idempotency_key = operation.operation_id::text" in statement
+    assert parameters == (
+        "execution_lease_expired", now, now, now, str(after.operation_id),
+        "recovery.test", "recovery.test", 3,
+    )
+    assert not any(word in statement.upper() for word in ("INSERT", "UPDATE", "DELETE"))
+
+
+@pytest.mark.parametrize("limit", [True, False, 0, -1, 1001, 1.5, "2"])
+def test_retryable_inventory_refuses_invalid_page_limit_before_query(limit):
+    transaction = _Transaction()
+    with pytest.raises(admission.RepositoryValidationError):
+        WorkAdmissionRepository().list_retryable_for_administration(
+            transaction, terminal_code="execution_lease_expired", limit=limit,
+        )
+    assert transaction.calls == []
+
+
+@pytest.mark.parametrize("accepted_at,operation_id", [
+    (datetime(2026, 8, 14), uuid.uuid4()),
+    ("2026-08-14", uuid.uuid4()),
+    (datetime(2026, 8, 14, tzinfo=UTC), "not-a-uuid"),
+])
+def test_retryable_inventory_refuses_malformed_typed_cursor(accepted_at, operation_id):
+    with pytest.raises(admission.RepositoryValidationError):
+        admission.RetryableOperationCursor(accepted_at, operation_id)
+
+
+@pytest.mark.parametrize("terminal_code,after", [(None, None), ("unsafe code", None),
+                                                  ("execution_lease_expired", object())])
+def test_retryable_inventory_refuses_invalid_predicates(terminal_code, after):
+    transaction = _Transaction()
+    with pytest.raises(admission.RepositoryValidationError):
+        WorkAdmissionRepository().list_retryable_for_administration(
+            transaction, terminal_code=terminal_code, after=after,
+        )
+    assert transaction.calls == []
+
+
+def test_retryable_inventory_uses_database_time_and_empty_page():
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+    transaction = _Transaction([_Result(returned_records=({"current_time": now},)), _Result()])
+    assert WorkAdmissionRepository().list_retryable_for_administration(
+        transaction, terminal_code="execution_lease_expired",
+    ) == ()
+    assert len(transaction.calls) == 2
+    assert transaction.calls[1][1] == (
+        "execution_lease_expired", now, None, None, None, None, None, 100,
+    )
+
+
+@pytest.mark.parametrize("namespace", [False, 1, "", "x" * 129])
+def test_retryable_inventory_refuses_invalid_handled_namespace(namespace):
+    transaction = _Transaction()
+    with pytest.raises(admission.RepositoryValidationError):
+        WorkAdmissionRepository().list_retryable_for_administration(
+            transaction, terminal_code="execution_lease_expired",
+            handled_idempotency_namespace=namespace,
+        )
+    assert transaction.calls == []
+
+
+@pytest.mark.parametrize("owner,owner_parameters", [
+    (OperationOwner(OwnerScope.USER, "owner-a", None), ("user", "owner-a")),
+    (OperationOwner(OwnerScope.CONNECTION, None, uuid.UUID(int=1)),
+     ("connection", str(uuid.UUID(int=1)))),
+    (OperationOwner(OwnerScope.MAINTENANCE, None, None), ("maintenance",)),
+])
+def test_read_only_idempotent_lookup_scopes_owner_and_does_not_lock(owner, owner_parameters):
+    transaction = _Transaction([_Result(returned_records=(_running_row(),))])
+    record = WorkAdmissionRepository().get_idempotent_operation(
+        transaction, owner=owner, idempotency_namespace="test", idempotency_key="same",
+    )
+    assert record is not None and record.idempotency_key == "same"
+    statement, parameters = transaction.calls[0]
+    assert "owner_scope = %s" in statement and "LIMIT 1" in statement
+    if owner.owner_scope is OwnerScope.USER:
+        assert "owner_user_id = %s" in statement
+    if owner.owner_scope is OwnerScope.CONNECTION:
+        assert "connection_scope_id = %s" in statement
+    assert parameters == (*owner_parameters, "test", "same")
+    assert not any(word in statement.upper() for word in ("FOR UPDATE", "INSERT", "DELETE"))
+
+
+@pytest.mark.parametrize("owner,namespace,key", [
+    (None, "test", "key"),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), False, "key"),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), "", "key"),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), "x" * 129, "key"),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), "test", ""),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), "test", None),
+    (OperationOwner(OwnerScope.USER, "owner-a", None), "test", "x" * 257),
+])
+def test_idempotent_lookup_refuses_invalid_identity_before_query(owner, namespace, key):
+    transaction = _Transaction()
+    with pytest.raises(admission.RepositoryValidationError):
+        WorkAdmissionRepository().get_idempotent_operation(
+            transaction, owner=owner, idempotency_namespace=namespace, idempotency_key=key,
+        )
+    assert transaction.calls == []
+
+
+def test_idempotent_lookup_absence_is_not_an_admission():
+    transaction = _Transaction()
+    assert WorkAdmissionRepository().get_idempotent_operation(
+        transaction, owner=OperationOwner(OwnerScope.USER, "owner-a", None),
+        idempotency_namespace="test", idempotency_key="missing",
+    ) is None
+    assert len(transaction.calls) == 1
 
 
 def _config_rows() -> tuple[dict[str, Any], ...]:

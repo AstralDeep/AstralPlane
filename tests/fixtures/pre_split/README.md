@@ -13,6 +13,15 @@ the `074.004` migration. It is not a production dump and must never be used as a
 and blob manifest. The fixture identity binds those files, every blob, the compatibility-builder
 source bytes, and its extracted historical source-blob identity.
 
+Audit classes follow AstralDeep's historical public schema at commit
+`96c2187b7e4ba3f1ac9fe78dcabbbcb98a0132d7`, whose database blob is the recorded
+`066.001` predecessor. Its audit schema blob `963116f37d017f8b994bac1ecf54f8e6ba21b214`
+declares `"agent_tool_call"` and `"auth"`; it never declares `"tool"` or `"session"`.
+The synthetic rows and semantic inventory use those supported classes. The migration
+test preserves every original audit field, including class, metadata, timestamps,
+schema version and hash bytes, through upgrade. These fixture-generation values do
+not normalize or rewrite any existing database or broaden the host's write vocabulary.
+
 Use only an isolated PostgreSQL test database and a new absolute blob root:
 
 ```text

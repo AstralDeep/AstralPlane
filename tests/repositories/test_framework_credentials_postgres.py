@@ -9,6 +9,7 @@ import hashlib
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from datetime import timedelta
 from threading import Event
 
@@ -38,6 +39,108 @@ from astralplane.repositories.history import (
 )
 
 TOKEN_HASH = "b" * 64
+
+
+def test_database_capture_returns_a_frozen_current_observation(database):
+    repository = FrameworkCredentialRepository()
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+        observation = repository.capture_execution_observation(
+            tx, owner_id=owner, credential_id=record.credential_id, token_hash=token_hash)
+        state = repository.assert_current_execution(tx, observation=observation)
+    assert isinstance(observation, FrameworkCredentialObservation)
+    assert observation.credential.owner_id == owner
+    assert observation.credential.scopes == record.scopes
+    assert observation.valid_until - observation.started_at == timedelta(seconds=15)
+    assert observation.started_at <= state.observed_at < observation.valid_until
+    assert token_hash not in repr(observation)
+    with pytest.raises(FrozenInstanceError):
+        observation.started_at = state.observed_at
+
+
+@pytest.mark.parametrize("change", ["owner", "credential", "hash", "revoked", "expired"])
+def test_database_capture_refuses_noncurrent_authority(database, change):
+    repository = FrameworkCredentialRepository()
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+        if change == "revoked":
+            repository.revoke(tx, owner_id=owner, credential_id=record.credential_id)
+        elif change == "expired":
+            tx.execute(
+                "UPDATE framework_credential SET created_at=clock_timestamp()-interval '2 hours', "
+                "expires_at=clock_timestamp()-interval '1 hour' WHERE id=%s",
+                (record.credential_id,),
+            )
+        with pytest.raises(RepositoryConflictError):
+            repository.capture_execution_observation(
+                tx, owner_id=uid() if change == "owner" else owner,
+                credential_id=uid() if change == "credential" else record.credential_id,
+                token_hash=fresh_token_hash() if change == "hash" else token_hash)
+
+
+@pytest.mark.parametrize("requested, expected", [
+    (("operations.read",), ("operations.read",)),
+    (("operations.read", "artifacts.read"), ("operations.read",)),
+])
+def test_database_capture_preserves_attenuated_scopes(database, requested, expected):
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+        observation = FrameworkCredentialRepository().capture_execution_observation(
+            tx, owner_id=owner, credential_id=record.credential_id,
+            token_hash=token_hash, scopes=requested)
+    assert observation.credential.scopes == expected
+
+
+@pytest.mark.parametrize("scopes", [(), ("sudo",), ("artifacts.read",)])
+def test_database_capture_never_returns_an_empty_or_unknown_scope_grant(database, scopes):
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+        with pytest.raises((RepositoryConflictError, RepositoryValidationError)):
+            FrameworkCredentialRepository().capture_execution_observation(
+                tx, owner_id=owner, credential_id=record.credential_id,
+                token_hash=token_hash, scopes=scopes)
+
+
+@pytest.mark.parametrize("offset", [timedelta(seconds=-16), timedelta(seconds=1)])
+def test_database_capture_cannot_refresh_an_overlong_or_backwards_clock_window(database, offset):
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+
+        class CaptureClock:
+            sampled = False
+
+            def __getattr__(self, name):
+                return getattr(tx, name)
+
+            def fetch_one(self, sql, *args, **kwargs):
+                value = tx.fetch_one(sql, *args, **kwargs)
+                if sql == "SELECT clock_timestamp() AS now" and not self.sampled:
+                    self.sampled = True
+                    return {"now": value["now"] + offset}
+                return value
+
+        with pytest.raises(RepositoryConflictError):
+            FrameworkCredentialRepository().capture_execution_observation(
+                CaptureClock(), owner_id=owner, credential_id=record.credential_id,
+                token_hash=token_hash)
+
+
+def test_database_capture_does_not_authorize_a_later_revoked_key(database):
+    repository = FrameworkCredentialRepository()
+    with database.transaction() as tx:
+        owner = uid()
+        record, token_hash = issue(tx, owner, seed_session(tx, owner))
+        observation = repository.capture_execution_observation(
+            tx, owner_id=owner, credential_id=record.credential_id, token_hash=token_hash)
+    with database.transaction() as tx:
+        repository.revoke(tx, owner_id=owner, credential_id=record.credential_id)
+    with database.transaction() as tx, pytest.raises(RepositoryConflictError):
+        repository.assert_current_execution(tx, observation=observation)
 
 
 def fresh_token_hash():
