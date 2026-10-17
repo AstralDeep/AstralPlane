@@ -528,6 +528,14 @@ settlement obtains no execution authority, creates no claim or action, and consu
 no retry attempt. A current unexpired lease is left to its holder. Unresolved
 liability or approval remains in reconciliation; unsupported versions remain held.
 Terminal and held rows are not repeatedly rewritten by subsequent recovery ticks.
+Recovery acquires available owner locks before assignment row locks and rechecks eligibility
+after those locks. It skips busy or retired owner prefixes while collecting at most the
+requested batch and trying at most 100 distinct owners per pass. A skipped owner is left
+untouched; reaching the owner budget returns bounded partial progress. The detached
+`terminal_assignments` records in `AssignmentRecoveryResult` identify the exact saved one-shot
+failures, including their owner and state version. The caller may deliver completion events
+and append its audit records in the same transaction; any delivery or audit failure must roll
+back recovery. Plane never decides notification or authorization policy.
 The one-shot recovery domain includes known outer versions 1 and 2, unlike new claim
 eligibility. Legacy v1 liabilities are not excluded before settlement. Recovery clears
 their old executable lease, retains uncertain/opaque effects and never schedules a

@@ -372,6 +372,7 @@ class AssignmentRecoveryResult(_Record):
     reclaimed_assignment_ids: tuple[str, ...] = ()
     operation_bindings: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
     uncertain_action_ids: tuple[str, ...] = ()
+    terminal_assignments: tuple[AssignmentRecord, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True, slots=True)

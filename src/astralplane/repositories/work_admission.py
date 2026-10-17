@@ -259,6 +259,16 @@ class OperationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class RetryableOperationCursor:
+    accepted_at: datetime
+    operation_id: uuid.UUID
+
+    def __post_init__(self) -> None:
+        _validated_datetime(self.accepted_at, "accepted_at")
+        _require_uuid(self.operation_id, "operation_id")
+
+
+@dataclass(frozen=True, slots=True)
 class SafeOperationProjection:
     operation_id: uuid.UUID
     operation_kind: str
@@ -1667,6 +1677,32 @@ class WorkAdmissionRepository:
         row = cursor.fetchone()
         return None if row is None else self._operation_from_row(row)
 
+    def get_idempotent_operation(
+        self,
+        transaction: Transaction,
+        *,
+        owner: OperationOwner,
+        idempotency_namespace: str,
+        idempotency_key: str,
+    ) -> OperationRecord | None:
+        owner = _validated_owner(owner)
+        if not isinstance(idempotency_namespace, str) or not 1 <= len(idempotency_namespace) <= 128:
+            raise RepositoryValidationError("idempotency namespace must be 1..128 characters")
+        if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256:
+            raise RepositoryValidationError("idempotency key must be 1..256 characters")
+        owner_sql, owner_parameters = self._owner_clause(owner)
+        cursor = _StatementSession(transaction)
+        cursor.execute(
+            f"""
+            SELECT * FROM operation_record WHERE {owner_sql}
+              AND idempotency_namespace = %s AND idempotency_key = %s
+            LIMIT 1
+            """,
+            (*owner_parameters, idempotency_namespace, idempotency_key),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._operation_from_row(row)
+
     def reconcile_submission(
         self,
         transaction: Transaction,
@@ -2330,6 +2366,77 @@ class WorkAdmissionRepository:
         cursor = _StatementSession(transaction)
         current_time = self._current_time(cursor, now)
         return self._expire_execution_leases_locked(cursor, current_time, retention)
+
+    def list_retryable_for_administration(
+        self,
+        transaction: Transaction,
+        *,
+        terminal_code: str,
+        now: datetime | None = None,
+        after: RetryableOperationCursor | None = None,
+        limit: int = 100,
+        handled_idempotency_namespace: str | None = None,
+    ) -> tuple[OperationRecord, ...]:
+        terminal_code = _validated_code(terminal_code, "terminal_code")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise RepositoryValidationError("inventory limit must be between 1 and 1000")
+        if after is not None and not isinstance(after, RetryableOperationCursor):
+            raise RepositoryValidationError("after must be a retryable operation cursor")
+        if handled_idempotency_namespace is not None and (
+            not isinstance(handled_idempotency_namespace, str)
+            or not 1 <= len(handled_idempotency_namespace) <= 128
+        ):
+            raise RepositoryValidationError(
+                "handled idempotency namespace must be 1..128 characters"
+            )
+        cursor = _StatementSession(transaction)
+        current_time = self._current_time(cursor, now)
+        cursor.execute(
+            """
+            SELECT operation.* FROM operation_record AS operation
+            WHERE operation.state = 'retryable' AND operation.terminal_code = %s
+              AND operation.purge_after > %s
+              AND (%s::timestamptz IS NULL
+                   OR (operation.accepted_at, operation.operation_id) > (%s, %s::uuid))
+              AND (%s::text IS NULL OR NOT EXISTS (
+                  SELECT 1 FROM operation_record AS child
+                  WHERE child.parent_operation_id = operation.operation_id
+                    AND child.operation_kind = operation.operation_kind
+                    AND child.admission_class = operation.admission_class
+                    AND child.chat_id IS NOT DISTINCT FROM operation.chat_id
+                    AND child.connection_generation
+                        IS NOT DISTINCT FROM operation.connection_generation
+                    AND child.request_generation
+                        IS NOT DISTINCT FROM operation.request_generation
+                    AND operation.normalized_input_digest IS NOT NULL
+                    AND child.normalized_input_digest = operation.normalized_input_digest
+                    AND child.owner_scope = operation.owner_scope
+                    AND child.owner_user_id IS NOT DISTINCT FROM operation.owner_user_id
+                    AND child.connection_scope_id IS NOT DISTINCT FROM operation.connection_scope_id
+                    AND (CASE
+                        WHEN child.owner_scope = 'connection' THEN child.connection_scope_id::text
+                        WHEN child.owner_scope IN ('user', 'schedule') THEN child.owner_user_id
+                        ELSE '' END) = (CASE
+                        WHEN operation.owner_scope = 'connection'
+                            THEN operation.connection_scope_id::text
+                        WHEN operation.owner_scope IN ('user', 'schedule')
+                            THEN operation.owner_user_id
+                        ELSE '' END)
+                    AND child.idempotency_namespace = %s
+                    AND child.idempotency_key = operation.operation_id::text
+              ))
+            ORDER BY operation.accepted_at, operation.operation_id
+            LIMIT %s
+            """,
+            (
+                terminal_code, current_time,
+                None if after is None else after.accepted_at,
+                None if after is None else after.accepted_at,
+                None if after is None else str(after.operation_id),
+                handled_idempotency_namespace, handled_idempotency_namespace, limit,
+            ),
+        )
+        return tuple(self._operation_from_row(row) for row in cursor.fetchall())
 
     def oldest_purge_eligible_due_at(
         self,

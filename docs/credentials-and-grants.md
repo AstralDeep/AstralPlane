@@ -181,13 +181,23 @@ transactions using `pg_blocking_pids`, not a timing guess.
   (revoking an already-revoked credential returns it unchanged); raises
   `RepositoryNotFoundError` for a foreign or missing id.
 - `list_for_owner(query, *, owner_id)` — bounded, owner-scoped, hash-free.
+- `capture_execution_observation(transaction, *, owner_id, credential_id,
+  token_hash, scopes=None)` — samples PostgreSQL time before acquiring the exact
+  credential row and returns the existing frozen `FrameworkCredentialObservation`.
+  Its unchanged 15-second window includes lookup and lock waits; a long capture,
+  future observation, revoked/expired key, foreign owner or wrong hash is refused.
+  Optional scopes intersect the current grant with the caller's attenuation and
+  cannot widen it. No caller timestamp, host-clock tolerance or retry is accepted.
+  This read-only capture creates no credential or admission and does not replace
+  the same-transaction execution check after later waits. Keep observations
+  ephemeral and out of logs, durable data and client responses.
 - `consume_admission(transaction, *, owner_id, credential_id)` — a
   compare-and-set that charges exactly one admission, refusing
   (`credential_allowance_exhausted`) a revoked, expired, or exhausted
   credential without ever double-charging a race's loser.
 - `assert_current_execution(transaction, *, observation)` — never persisted.
   Locks the exact credential row `FOR UPDATE`, re-validates a fresh
-  `FrameworkCredentialObservation` (host-captured, valid at most 15 seconds,
+  `FrameworkCredentialObservation` (database-captured, valid at most 15 seconds,
   the same freshness discipline as `SessionExecutionObservation`), and refuses
   a revoked, expired, owner-mismatched, or hash-mismatched (replaced)
   credential. `FrameworkCredentialFence`/`FrameworkCredentialObservation` are
