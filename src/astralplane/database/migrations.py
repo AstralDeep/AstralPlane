@@ -14,6 +14,7 @@ from typing import Final
 
 from astralplane.contracts import MigrationCallable, PlaneDatabase, Transaction
 from astralplane.database.assignment_schema import ASSIGNMENT_SCHEMA_STATEMENTS
+from astralplane.database.atlas_page_schema import ATLAS_PAGE_SCHEMA_STATEMENTS
 from astralplane.database.completion_wake_schema import COMPLETION_WAKE_SCHEMA_STATEMENTS
 from astralplane.database.declarative_agent_schema import DECLARATIVE_AGENT_SCHEMA_STATEMENTS
 from astralplane.database.framework_credential_schema import (
@@ -3514,6 +3515,12 @@ def _apply_plane_schema_089_004(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_089_005(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "089.004")
+    for statement in ATLAS_PAGE_SCHEMA_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
@@ -3533,6 +3540,8 @@ WITH owned_tables(table_name) AS (
         ('agent_scopes'),
         ('agent_trust'),
         ('assignment_operation_receipt'),
+        ('atlas_page'),
+        ('atlas_page_command'),
         ('assignment_guidance_reference'),
         ('assignment_guidance_selection'),
         ('assignment_selected_agent'),
@@ -4518,7 +4527,7 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22"
+    "2c4a2f8037836c8c0a80e56cc5aa973cea3a4b71b63910fb68cfcbb3b7e4516a"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4629,6 +4638,7 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     ("089.001", ("4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",)),
     ("089.002", ("dc9d7ec5b8c5be483c16f89ce7d723410c402fb6f5dc8962663c53a41e7609b5",)),
     ("089.003", ("3441e750601f9b78fa7057d36e0b0c51bed6a912450baca6a30db7aa33fcae22",)),
+    ("089.004", ("4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22",)),
 )
 
 
@@ -5161,6 +5171,22 @@ PLANE_SCHEMA_089_004_MIGRATION: Final = Migration(
     checksum=_statements_checksum(COMPLETION_WAKE_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_089_004,
 )
+PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "48d93ab8d6372404c557a816e6d1b57bde5e8c2a3ae64c91d0c1e67ae27337a5"
+)
+PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "e3f2988fea4b6e8cf7edd9064cec67b3d0665f0863de40bbd8332ff9e7f0a9f3"
+)
+PLANE_SCHEMA_089_004_REGISTRY_DIGEST: Final = (
+    "08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc"
+)
+PLANE_SCHEMA_089_005_MIGRATION: Final = Migration(
+    name="astralplane-089-atlas-pages",
+    source_revisions=("089.004",),
+    target_revision="089.005",
+    checksum=_statements_checksum(ATLAS_PAGE_SCHEMA_STATEMENTS),
+    operation=_apply_plane_schema_089_005,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -5182,6 +5208,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_089_002_MIGRATION,
         PLANE_SCHEMA_089_003_MIGRATION,
         PLANE_SCHEMA_089_004_MIGRATION,
+        PLANE_SCHEMA_089_005_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -5189,7 +5216,19 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
     predecessor_schema_verifier_checksum=PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
 )
 if MigrationRegistry(
-    MIGRATION_REGISTRY.migrations[:-2],
+    MIGRATION_REGISTRY.migrations[:-1],
+    current_schema_verifier=_verify_current_plane_schema,
+    current_schema_verifier_checksum=PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM,
+    predecessor_schema_verifier=_verify_predecessor_plane_schema,
+    predecessor_schema_verifier_checksum=(
+        PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+    ),
+).digest != PLANE_SCHEMA_089_004_REGISTRY_DIGEST:
+    raise MigrationDefinitionError(
+        "historical 089.004 migration registry no longer matches its pinned digest"
+    )
+if MigrationRegistry(
+    MIGRATION_REGISTRY.migrations[:-3],
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=PLANE_SCHEMA_089_002_SCHEMA_VERIFIER_CHECKSUM,
     predecessor_schema_verifier=_verify_predecessor_plane_schema,
@@ -5203,7 +5242,7 @@ PLANE_SCHEMA_089_003_REGISTRY_DIGEST: Final = (
 )
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="089.004",
+    schema_revision="089.005",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -5224,6 +5263,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "089.001",
         "089.002",
         "089.003",
+        "089.004",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -5245,11 +5285,13 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("089.001", PLANE_SCHEMA_089_001_REGISTRY_DIGEST),
         ("089.002", PLANE_SCHEMA_089_002_REGISTRY_DIGEST),
         ("089.003", PLANE_SCHEMA_089_003_REGISTRY_DIGEST),
+        ("089.004", PLANE_SCHEMA_089_004_REGISTRY_DIGEST),
     ),
 )
 
 
 __all__ = (
+    "ATLAS_PAGE_SCHEMA_STATEMENTS",
     "CURRENT_DATA_PLANE_REVISION",
     "CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
     "CURRENT_SCHEMA_STRUCTURE_DIGEST",
@@ -5308,6 +5350,11 @@ __all__ = (
     "PLANE_SCHEMA_089_002_REGISTRY_DIGEST",
     "PLANE_SCHEMA_089_002_SCHEMA_VERIFIER_CHECKSUM",
     "PLANE_SCHEMA_089_003_MIGRATION",
+    "PLANE_SCHEMA_089_004_MIGRATION",
+    "PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_004_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_005_MIGRATION",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
     "PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
     "SCHEDULER_POLICY_SCHEMA_STATEMENTS",

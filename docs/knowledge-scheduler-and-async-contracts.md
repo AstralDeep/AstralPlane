@@ -47,10 +47,9 @@ filter; this does not promise constant physical scan cost or a new envelope inde
 Keyset iteration is not a snapshot: inserts newer than the cursor appear on a fresh
 listing, and deleted rows disappear. Creation keys supplied through the existing memory
 write contract are non-null and non-negative. The host validates its complete envelope,
-ciphertext binding and product policy after this query. This does not implement the
-separately proposed first-class Atlas page/revision/tombstone store, parse private bodies,
-adopt new namespaces, or migrate legacy content. Schema `089.004`, its digest, and existing
-stored bytes are unchanged.
+ciphertext binding and product policy after this query. The separate first-class Atlas
+page/tombstone store is exposed by `atlas_pages` at schema `089.005`; this envelope query
+still does not parse private bodies, adopt new namespaces, or migrate legacy content.
 
 ## Scheduler-extended state
 
