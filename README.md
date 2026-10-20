@@ -211,7 +211,10 @@ The revisions after `079.001`:
   acknowledgments.
 
 Upgrade and recovery procedures for every revision are in
-[migration and recovery](docs/migration-and-recovery.md).
+[migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating
+a restored PostgreSQL/blob state as writable, including host-owned election and admission, are in
+[recovery and writable readiness](docs/recovery-and-writable-readiness.md). Local
+`PlaneHealth.ready` alone is not a writable-readiness decision.
 
 ## Error diagnostics
 

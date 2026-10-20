@@ -569,6 +569,12 @@ maintenance window has been verified:
    acceptance checks, then reopen traffic. Retain the previous and restored copies until the
    rollback window closes.
 
+The restore procedure ends with a closed-admission candidate, not a writable state. The neutral
+preconditions and evidence required before the host may open admission, including host-owned
+election/fencing, complete root verification, restored-session retirement, commit ambiguity, and
+forward-repair limits, are defined in
+[recovery and writable readiness](recovery-and-writable-readiness.md).
+
 ## Later blob-root relocation
 
 A later relocation is a separate operation: quiesce writers, reject symlink/reparse traversal,
