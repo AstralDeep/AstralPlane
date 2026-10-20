@@ -18,6 +18,7 @@ from typing import Final
 
 from astralplane.blob_store import ExplicitRootStreamingBlobStore
 from astralplane.compatibility import BLOB_LAYOUT_VERSION
+from astralplane.contracts import IsolationLevel
 from astralplane.database.migrations import CURRENT_DATA_PLANE_REVISION, MIGRATION_REGISTRY
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.postgres import create_postgres_driver_pool
@@ -424,7 +425,7 @@ def _inspect_database(
     pool: ConnectionPool, *, expected_database: str, expected_schema: str
 ) -> _DatabaseObservation:
     with pool.connection() as connection:
-        transaction = Transaction(connection)
+        transaction = Transaction(connection, isolation=IsolationLevel.READ_COMMITTED)
         try:
             transaction._begin()
             try:

@@ -16,7 +16,9 @@ prove that another host has stopped writing.
 
 ## Observation safety and bounds
 
-Each private observation records the connection's inherited transaction-read-only setting before
+Each private observation explicitly begins at READ COMMITTED isolation so catalog rechecks see
+newly committed namespace replacements even when a connection defaults to repeatable read or
+serializable isolation. It records the connection's inherited transaction-read-only setting before
 forcing its own transaction read-only. A primary with an inherited writable posture can therefore
 qualify without the observer issuing a write. An externally read-only connection remains
 `not_primary`. Every observation ends in rollback, including successful observations; rollback,

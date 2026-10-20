@@ -403,3 +403,74 @@ def test_namespace_identity_is_rechecked_at_both_sides_of_the_metadata_read(
     assert report.state is EndpointReadinessState.INCOMPATIBLE
     assert report.reasons == ("schema_identity_changed",)
     assert report.fence is None
+
+
+@pytest.mark.parametrize("isolation", ["repeatable read", "serializable"])
+@pytest.mark.parametrize("posture", ["writable", "replaced", "read-only"])
+def test_inherited_isolation_cannot_hide_a_committed_namespace_replacement(
+    migrated_clone, tmp_path, monkeypatch, isolation, posture
+):
+    from psycopg2.extensions import make_dsn
+
+    from astralplane import endpoint_readiness as module
+    from astralplane.database.transaction import Transaction
+
+    observe, fetch_all = module._observe_database, Transaction.fetch_all
+    observations, replacements = [], []
+    connections = _trace_connections(monkeypatch)
+
+    def observed(transaction, **kwargs):
+        observations.append(
+            (
+                transaction.fetch_one("SHOW default_transaction_isolation")[
+                    "default_transaction_isolation"
+                ],
+                transaction.fetch_one("SHOW transaction_isolation")["transaction_isolation"],
+            )
+        )
+        return observe(transaction, **kwargs)
+
+    def after_read(transaction, statement, parameters=()):
+        result = fetch_all(transaction, statement, parameters)
+        if posture == "replaced" and statement.startswith("WITH metadata AS MATERIALIZED"):
+            with migrated_clone.database.transaction() as other:
+                other.execute(
+                    f'ALTER SCHEMA "{migrated_clone.schema}" RENAME TO old_readiness_schema'
+                )
+                other.execute(f'CREATE SCHEMA "{migrated_clone.schema}"')
+                other.execute(
+                    f'CREATE TABLE "{migrated_clone.schema}".schema_meta AS '
+                    'SELECT * FROM old_readiness_schema.schema_meta'
+                )
+            replacements.append(True)
+        return result
+
+    monkeypatch.setattr(module, "_observe_database", observed)
+    monkeypatch.setattr(Transaction, "fetch_all", after_read)
+    root = tmp_path / "blobs"
+    root.mkdir()
+    request = _request(migrated_clone, {"blobs": root})
+    escaped_isolation = isolation.replace(" ", "\\ ")
+    options = (
+        f"-csearch_path={migrated_clone.schema},pg_catalog "
+        f"-cdefault_transaction_isolation={escaped_isolation}"
+    )
+    if posture == "read-only":
+        options += " -cdefault_transaction_read_only=on"
+    request["database_url"] = make_dsn(request["database_url"], options=options)
+    report = inspect_endpoint_readiness(**request)
+
+    assert replacements == ([True] if posture == "replaced" else [])
+    expected_state = {
+        "writable": EndpointReadinessState.WRITABLE,
+        "replaced": EndpointReadinessState.INCOMPATIBLE,
+        "read-only": EndpointReadinessState.NOT_PRIMARY,
+    }[posture]
+    assert report.state is expected_state
+    assert (report.fence is not None) is (posture == "writable")
+    if posture == "replaced":
+        assert report.reasons == ("schema_identity_changed",)
+    assert observations == [(isolation, "read committed")]
+    assert len(connections) == 1
+    assert connections[0].commits == 0
+    assert connections[0].connection.closed
