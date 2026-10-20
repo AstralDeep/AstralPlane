@@ -62,6 +62,15 @@ AstralDeep; callers pass neutral owner context and retain transaction ownership.
 `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
 `work_admission`, `workspaces`, `completion_wake`, and `atlas_pages`.
 
+`preferences.personalization.get_memory(query, owner_id=..., memory_id=...,
+for_update=True)` reads and locks the current owner-scoped memory row until the caller's
+transaction commits or rolls back. Callers must supply their open transaction when requesting
+the lock; missing and foreign-owned rows return `None` without locking a foreign row. The
+default `False` preserves the ordinary nonlocking read. Callers locking multiple sources must
+take any guidance owner lock first, then memory rows in sorted identifier order, before
+destination and audit writes. Memory updates, deletion, supersession, validity changes, and
+recall writes serialize with the locked row through PostgreSQL.
+
 The stable repository catalog includes four explicit stores for the first identity/agent
 cutover slice:
 
