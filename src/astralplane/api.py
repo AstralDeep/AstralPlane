@@ -106,6 +106,16 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas_pages import (
+    AtlasPageBatch,
+    AtlasPageChange,
+    AtlasPageCommandReceipt,
+    AtlasPageCreateCommand,
+    AtlasPageCursor,
+    AtlasPageDeleteCommand,
+    AtlasPageRecord,
+    AtlasPageRepository,
+)
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
@@ -140,6 +150,13 @@ from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
+from astralplane.repositories.notifications import (
+    NotificationDeliveryIdentity,
+    NotificationEventKind,
+    NotificationInboxEntry,
+    NotificationPreferenceRecord,
+    NotificationRepository,
+)
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -186,6 +203,10 @@ def create_assignment_repository() -> AssignmentRepository:
     return AssignmentRepository()
 
 
+def create_atlas_page_repository() -> AtlasPageRepository:
+    return AtlasPageRepository()
+
+
 def create_identity_repository() -> IdentityRepository:
     return IdentityRepository()
 
@@ -229,6 +250,10 @@ def create_offline_grant_repository() -> OfflineGrantRepository:
 
 def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
     return MeshEnrollmentRepository()
+
+
+def create_notification_repository() -> NotificationRepository:
+    return NotificationRepository()
 
 
 def create_stop_epoch_repository() -> StopEpochRepository:
@@ -415,6 +440,7 @@ class RepositoryCatalog:
     history: HistoryRepository
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
+    atlas_pages: AtlasPageRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -425,6 +451,7 @@ class RepositoryCatalog:
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
+    notifications: NotificationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -468,6 +495,7 @@ class RepositoryCatalog:
                 "knowledge": self.knowledge,
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
+                "notifications": self.notifications,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -488,6 +516,7 @@ class RepositoryCatalog:
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
+                "atlas_pages": self.atlas_pages,
             }
         )
 
@@ -518,6 +547,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
+        atlas_pages=create_atlas_page_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -528,6 +558,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
+        notifications=create_notification_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -763,6 +794,14 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasPageBatch",
+    "AtlasPageChange",
+    "AtlasPageCommandReceipt",
+    "AtlasPageCreateCommand",
+    "AtlasPageCursor",
+    "AtlasPageDeleteCommand",
+    "AtlasPageRecord",
+    "AtlasPageRepository",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",
@@ -791,6 +830,11 @@ __all__ = (
     "GeneratedAgentPublicationResultMetadata",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
+    "NotificationDeliveryIdentity",
+    "NotificationEventKind",
+    "NotificationInboxEntry",
+    "NotificationPreferenceRecord",
+    "NotificationRepository",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
@@ -816,6 +860,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_page_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",
@@ -835,6 +880,7 @@ __all__ = (
     "create_identity_repository",
     "create_knowledge_repository",
     "create_maintenance_repository",
+    "create_notification_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",

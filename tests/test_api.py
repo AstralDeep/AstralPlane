@@ -25,6 +25,7 @@ from astralplane.api import (
     create_agent_management_repository,
     create_agent_repository,
     create_artifact_repository,
+    create_atlas_page_repository,
     create_attachment_materialization_coordinator,
     create_attachment_parser_repository,
     create_audit_repository,
@@ -44,6 +45,7 @@ from astralplane.api import (
     create_knowledge_repository,
     create_maintenance_repository,
     create_mesh_enrollment_repository,
+    create_notification_repository,
     create_offline_grant_repository,
     create_outbox_store,
     create_personalization_graph_repository,
@@ -111,6 +113,7 @@ from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
+from astralplane.repositories.notifications import NotificationRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -249,6 +252,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_work_admission_repository, WorkAdmissionRepository),
         (create_maintenance_repository, MaintenanceRepository),
         (create_mesh_enrollment_repository, MeshEnrollmentRepository),
+        (create_notification_repository, NotificationRepository),
         (create_tracked_job_repository, TrackedJobRepository),
         (create_quality_audit_repository, QualityAuditRepository),
         (create_harness_cleanup_repository, HarnessCleanupRepository),
@@ -305,6 +309,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "knowledge",
         "maintenance",
         "mesh_enrollment",
+        "notifications",
         "offline_grants",
         "outbox",
         "preferences",
@@ -325,6 +330,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "work_admission",
         "workspaces",
         "completion_wake",
+        "atlas_pages",
     )
     assert first.history is not second.history
     assert first.generated_agent_publications is not second.generated_agent_publications
@@ -579,6 +585,7 @@ def test_package_root_exports_the_stable_composition_facade() -> None:
     assert astralplane.AsyncPlaneRuntime is AsyncPlaneRuntime
     assert astralplane.AuthorityRepository is PublicAuthorityRepository
     assert astralplane.create_authority_repository is create_authority_repository
+    assert astralplane.create_atlas_page_repository is create_atlas_page_repository
     assert astralplane.create_attachment_parser_repository is create_attachment_parser_repository
     assert not hasattr(astralplane, "create_blob_store_contract")
     assert astralplane.create_background_task_repository is create_background_task_repository

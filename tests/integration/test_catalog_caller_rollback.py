@@ -26,6 +26,7 @@ from astralplane.contracts import OutboxEntry, Transaction
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
+from astralplane.repositories.atlas_pages import AtlasPageCreateCommand
 from astralplane.repositories.audit import AuditEvent
 from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
@@ -1026,6 +1027,22 @@ def _write_work_admission(catalog: api.RepositoryCatalog, transaction: Transacti
     )
 
 
+def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.atlas_pages.create_page(
+        transaction,
+        command=AtlasPageCreateCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110079",
+            page_id="11111111-1111-4111-8111-111111110080",
+            project_id="rollback-atlas-project",
+            slug="rollback-atlas-page",
+            sources=("synthetic/rollback",),
+            content=b"synthetic-opaque-atlas-ciphertext",
+            created_at=10,
+        ),
+    )
+
+
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.completion_wake.register_subscription(
         transaction,
@@ -1039,6 +1056,57 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
         current_revision_fence=1,
         created_at=1,
         subscription_id="11111111-1111-4111-8111-111111110076",
+    )
+
+
+def _write_notifications(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.notifications.put_preferences(
+        transaction,
+        owner_id=_OWNER,
+        expected_revision=0,
+        in_app_completion=True,
+        in_app_failure=True,
+        in_app_required_action=True,
+        inbox_completion=True,
+        inbox_failure=True,
+        inbox_required_action=True,
+        push_completion=False,
+        push_failure=False,
+        push_required_action=False,
+        updated_at=1,
+    )
+    body = b"opaque-rollback-notification"
+    catalog.notifications.create_entry(
+        transaction,
+        owner_id=_OWNER,
+        event_kind="completion",
+        source_id="rollback-source",
+        deduplication_key="rollback-notification",
+        content_format="astral.notification/v1",
+        content_ciphertext=body,
+        content_sha256=hashlib.sha256(body).hexdigest(),
+        created_at=1,
+        retention_expires_at=100,
+        entry_id="74000000-0000-4000-8000-000000000090",
+    )
+    catalog.notifications.register_delivery_identity(
+        transaction,
+        owner_id=_OWNER,
+        entry_id="74000000-0000-4000-8000-000000000090",
+        delivery_key="rollback-delivery",
+        created_at=1,
+        delivery_id="74000000-0000-4000-8000-000000000091",
+    )
+
+
+def _observe_notifications(transaction: Transaction) -> object:
+    return tuple(
+        transaction.fetch_one(f"SELECT COUNT(*) AS value FROM {table}")["value"]
+        for table in (
+            "notification_preference",
+            "notification_inbox_entry",
+            "notification_delivery_identity",
+        )
     )
 
 
@@ -1204,6 +1272,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "notifications",
+        _write_notifications,
+        _observe_notifications,
+        (1, 1, 1),
+        (0, 0, 0),
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1344,6 +1419,17 @@ ROLLBACK_CASES = (
         1,
         0,
     ),
+    RollbackCase(
+        "atlas_pages",
+        _write_atlas_pages,
+        _count(
+            "atlas_page",
+            "page_id",
+            "11111111-1111-4111-8111-111111110080",
+        ),
+        1,
+        0,
+    ),
 )
 
 
@@ -1351,7 +1437,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 42
+    assert len(applicable_keys) == len(set(applicable_keys)) == 44
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

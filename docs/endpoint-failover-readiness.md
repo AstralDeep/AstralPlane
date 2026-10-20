@@ -10,9 +10,40 @@ observes the selected endpoint and returns neutral fence evidence.
 
 The facade is read-only. It creates no schema, durable row, service port, lease, election
 authority, or second database. It does not migrate, initialize, reconcile, retire sessions,
-publish blobs, or change admission. A successful result is evidence that the observed endpoint
-was writable and structurally exact at inspection time; it is not a durable lease and it does not
+publish blobs, or change admission. A successful result is evidence that the endpoint inherited a writable transaction posture
+and its observed catalog was structurally exact; it is not a durable lease and it does not
 prove that another host has stopped writing.
+
+## Observation safety and bounds
+
+Each private observation records the connection's inherited transaction-read-only setting before
+forcing its own transaction read-only. A primary with an inherited writable posture can therefore
+qualify without the observer issuing a write. An externally read-only connection remains
+`not_primary`. Every observation ends in rollback, including successful observations; rollback,
+pool-reset, release, and close failures never publish a writable fence.
+
+The migration shared advisory lock is attempted without waiting. Metadata relation locking also
+uses `NOWAIT`; every statement has a five-second server timeout and every lock wait has a one-second
+server timeout. Contention or cancellation returns non-writable evidence. These server limits bound
+SQL work and lock waits; connection establishment and pool checkout retain their separate bounded
+settings. They are not an end-to-end network deadline or a leadership lease.
+
+Before reading metadata, Plane captures the ordinary relation and namespace OIDs from PostgreSQL's
+catalog, locks the metadata relation, rechecks its identity, and verifies the exact current catalog.
+The metadata read uses `ONLY`, PostgreSQL's built-in full-table sampling method, disabled row-security
+policy execution, and guards on the actual row's table OID and built-in text column types. These
+checks reject a namesake table, domain-typed values, a rebound view, or a row-security policy rather
+than trusting copied revision rows. The result is bounded to three matching rows so duplicate
+markers fail closed, and relation/namespace identity is rechecked after reading. Schema identity in
+new fences uses the numeric namespace OID; fences from the earlier name-based encoding become stale
+and require the host's ordinary fresh-evidence procedure.
+
+Read-only enforcement and unconditional rollback prevent committed database effects, including
+transactional notifications, when observation fails. The observer does not promise that arbitrary
+user functions can never be planned during privileged concurrent catalog changes: PostgreSQL can
+simplify expression-index functions while planning a sample scan. It provides no protection against
+a malicious PostgreSQL server, server extensions, or external side effects of privileged code.
+Host-owned DDL, endpoint switching, and admission coordination remain necessary.
 
 ## Public contract
 
@@ -58,7 +89,7 @@ inventory itself; that remains an operator prerequisite.
 | --- | --- | --- |
 | `writable` | The supported primary, exact current schema/catalog, all root identities, and the supplied inventory match; any supplied expected fence also matches. | Yes |
 | `unavailable` | The database endpoint could not be observed or its private pool could not be cleaned up. | No |
-| `not_primary` | PostgreSQL is in recovery or the transaction is read-only. | No |
+| `not_primary` | PostgreSQL is in recovery or the connection inherited a read-only transaction posture. | No |
 | `stale` | Every current check passed, but the supplied expected fence belongs to another database, timeline, schema, root set, inventory, or composition. | No |
 | `incompatible` | The requested composition or observed database/schema, metadata, digest, catalog, blob layout, or topology is not the exact writable contract. | No |
 | `ambiguous` | Blob roots or inventory evidence are missing, invalid, duplicated, or cannot be qualified. | No |
@@ -99,6 +130,14 @@ inventory, and approval evidence for the recovery review window.
 
 ## Verification evidence
 
+`tests/integration/test_endpoint_readiness_safety.py` covers hostile substituted metadata,
+namespace replacement around locking/verification/reading, rebound views and row-security policies,
+domain-typed replacement rows, migration and relation-lock contention, server-side cancellation,
+transactional notification rollback, and rollback/reset/release failures with real PostgreSQL.
+Assertions inspect durable effects, notices, session cleanup, and refusal states; they impose no
+wall-clock performance threshold.
+
+
 Focused cases run against real PostgreSQL:
 
 - `tests/integration/test_endpoint_failover_readiness.py::test_primary_loss_reconnect_and_stale_writer_are_explicit`
@@ -124,6 +163,7 @@ Run the focused evidence against an isolated PostgreSQL database:
 ASTRALPLANE_TEST_POSTGRES_DSN='<isolated test database URL>' \
   python -m pytest -q tests/test_endpoint_readiness.py \
   tests/integration/test_endpoint_failover_readiness.py \
+  tests/integration/test_endpoint_readiness_safety.py \
   tests/test_blob_store.py::test_root_identity_digest_is_stable_opaque_and_tracks_relocation
 ```
 

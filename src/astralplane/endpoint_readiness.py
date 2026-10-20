@@ -21,20 +21,28 @@ from astralplane.compatibility import BLOB_LAYOUT_VERSION
 from astralplane.database.migrations import CURRENT_DATA_PLANE_REVISION, MIGRATION_REGISTRY
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.postgres import create_postgres_driver_pool
-from astralplane.database.transaction import PlaneDatabase, Transaction
+from astralplane.database.transaction import Transaction
 from astralplane.errors import PlaneError
 
 ENDPOINT_READINESS_CONTRACT_VERSION: Final = "astralplane.endpoint-readiness/v1"
 _SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
 _TIMELINE: Final = re.compile(r"^[0-9a-f]{8}$")
 _ROOT_NAME: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_METADATA_IDENTITY_QUERY: Final = """
+SELECT relation.oid AS relation_oid, namespace.oid AS namespace_oid
+FROM pg_catalog.pg_class AS relation
+JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+WHERE namespace.nspname = %s AND relation.relname = 'schema_meta'
+  AND relation.relkind = 'r' AND NOT relation.relrowsecurity
+  AND NOT relation.relforcerowsecurity
+"""
 _ENDPOINT_QUERY: Final = """
 SELECT
     pg_catalog.current_database() AS database,
     pg_catalog.current_schema() AS schema,
     (SELECT oid FROM pg_catalog.pg_database
      WHERE datname = pg_catalog.current_database()) AS database_oid,
-    pg_catalog.current_schema()::regnamespace AS schema_oid,
+    pg_catalog.current_schema()::regnamespace::oid AS schema_oid,
     (SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace
      WHERE oid = pg_catalog.current_schema()::regnamespace) AS schema_owner,
     pg_catalog.pg_is_in_recovery() AS in_recovery,
@@ -42,16 +50,9 @@ SELECT
     pg_catalog.inet_server_addr()::text AS server_address,
     pg_catalog.inet_server_port() AS server_port,
     pg_catalog.pg_postmaster_start_time() AS postmaster_started_at,
-    pg_catalog.pg_walfile_name(
-        CASE
-            WHEN pg_catalog.pg_is_in_recovery()
-            THEN coalesce(
-                pg_catalog.pg_last_wal_receive_lsn(),
-                pg_catalog.pg_last_wal_replay_lsn()
-            )
-            ELSE pg_catalog.pg_current_wal_lsn()
-        END
-    ) AS wal_file
+    CASE WHEN NOT pg_catalog.pg_is_in_recovery()
+         THEN pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn())
+    END AS wal_file
 """
 
 
@@ -280,6 +281,11 @@ def _observe_database(
     expected_database: str,
     expected_schema: str,
 ) -> _DatabaseObservation:
+    transaction.execute("SET LOCAL statement_timeout = '5s'")
+    transaction.execute("SET LOCAL lock_timeout = '1s'")
+    posture = transaction.fetch_one("SHOW transaction_read_only")
+    transaction.execute("SET TRANSACTION READ ONLY")
+    transaction.execute("SET LOCAL row_security = off")
     transaction.execute(
         "SELECT pg_catalog.set_config('search_path', pg_catalog.concat("
         "pg_catalog.quote_ident(pg_catalog.current_schema()), ',pg_temp'), true)"
@@ -301,10 +307,15 @@ def _observe_database(
     transaction.execute(
         "SELECT pg_catalog.set_config('search_path', %s, true)", (search_path,)
     )
-    transaction.fetch_one(
-        "SELECT pg_catalog.pg_advisory_xact_lock_shared(%s, %s)",
+    migration_lock = transaction.fetch_one(
+        "SELECT pg_catalog.pg_try_advisory_xact_lock_shared(%s, %s) AS acquired",
         CURRENT_DATA_PLANE_REVISION.migration_lock,
     )
+    if migration_lock is None or migration_lock.get("acquired") is not True:
+        return _DatabaseObservation(
+            EndpointReadinessState.UNAVAILABLE,
+            ("migration_in_progress",),
+        )
     endpoint = transaction.fetch_one(_ENDPOINT_QUERY)
     if endpoint is None:
         return _DatabaseObservation(
@@ -316,7 +327,7 @@ def _observe_database(
             EndpointReadinessState.NOT_PRIMARY,
             ("postgresql_in_recovery",),
         )
-    if endpoint.get("transaction_read_only") != "off":
+    if posture is None or posture.get("transaction_read_only") != "off":
         return _DatabaseObservation(
             EndpointReadinessState.NOT_PRIMARY,
             ("postgresql_read_only",),
@@ -328,9 +339,46 @@ def _observe_database(
             EndpointReadinessState.AMBIGUOUS,
             ("endpoint_timeline_unavailable",),
         )
+    identity = transaction.fetch_one(_METADATA_IDENTITY_QUERY, (expected_schema,))
+    if identity is None or identity["namespace_oid"] != endpoint.get("schema_oid"):
+        return _DatabaseObservation(
+            EndpointReadinessState.INCOMPATIBLE,
+            ("schema_catalog_mismatch",),
+        )
+    relation = '"' + expected_schema.replace('"', '""') + '".schema_meta'
+    try:
+        transaction.execute(f"LOCK TABLE ONLY {relation} IN ACCESS SHARE MODE NOWAIT")
+        if transaction.fetch_one(_METADATA_IDENTITY_QUERY, (expected_schema,)) != identity:
+            return _DatabaseObservation(
+                EndpointReadinessState.INCOMPATIBLE,
+                ("schema_identity_changed",),
+            )
+        MIGRATION_REGISTRY.verify_current(transaction)
+    except Exception as exc:
+        if getattr(exc, "pgcode", None) in {"55P03", "57014"}:
+            raise
+        return _DatabaseObservation(
+            EndpointReadinessState.INCOMPATIBLE,
+            ("schema_catalog_mismatch",),
+        )
     metadata = transaction.fetch_all(
-        "SELECT key,value FROM schema_meta WHERE key IN (%s,%s)",
-        ("revision", "astralplane_migration_digest"),
+        "WITH metadata AS MATERIALIZED ("
+        "SELECT CASE WHEN tableoid = %s AND pg_catalog.pg_typeof(key) = "
+        "'pg_catalog.text'::pg_catalog.regtype AND pg_catalog.pg_typeof(value) = "
+        "'pg_catalog.text'::pg_catalog.regtype "
+        "THEN pg_catalog.format('%%s'::pg_catalog.text, key) END AS key, "
+        "CASE WHEN tableoid = %s AND pg_catalog.pg_typeof(key) = "
+        "'pg_catalog.text'::pg_catalog.regtype AND pg_catalog.pg_typeof(value) = "
+        "'pg_catalog.text'::pg_catalog.regtype "
+        "THEN pg_catalog.format('%%s'::pg_catalog.text, value) END AS value "
+        f"FROM ONLY {relation} TABLESAMPLE pg_catalog.system(100)) "
+        "SELECT key,value FROM metadata WHERE key IN (%s,%s) LIMIT 3",
+        (
+            identity["relation_oid"],
+            identity["relation_oid"],
+            "revision",
+            "astralplane_migration_digest",
+        ),
     )
     expected_metadata = {
         "revision": CURRENT_DATA_PLANE_REVISION.schema_revision,
@@ -341,12 +389,10 @@ def _observe_database(
             EndpointReadinessState.INCOMPATIBLE,
             ("schema_metadata_mismatch",),
         )
-    try:
-        MIGRATION_REGISTRY.verify_current(transaction)
-    except Exception:
+    if transaction.fetch_one(_METADATA_IDENTITY_QUERY, (expected_schema,)) != identity:
         return _DatabaseObservation(
             EndpointReadinessState.INCOMPATIBLE,
-            ("schema_catalog_mismatch",),
+            ("schema_identity_changed",),
         )
     database_identity = _digest(
         {
@@ -372,6 +418,27 @@ def _observe_database(
         database_identity,
         schema_identity,
     )
+
+
+def _inspect_database(
+    pool: ConnectionPool, *, expected_database: str, expected_schema: str
+) -> _DatabaseObservation:
+    with pool.connection() as connection:
+        transaction = Transaction(connection)
+        try:
+            transaction._begin()
+            try:
+                return _observe_database(
+                    transaction,
+                    expected_database=expected_database,
+                    expected_schema=expected_schema,
+                )
+            finally:
+                transaction._finish(failed=True)
+        except BaseException:
+            if transaction.discard_required:
+                pool._discard_on_return(connection)
+            raise
 
 
 def _fence_reasons(expected: EndpointFence, observed: EndpointFence) -> tuple[str, ...]:
@@ -559,12 +626,11 @@ def inspect_endpoint_readiness(
             application_name="astralplane:endpoint-readiness",
         )
         pool = ConnectionPool(driver_pool)
-        with PlaneDatabase(pool).transaction() as transaction:
-            observation = _observe_database(
-                transaction,
-                expected_database=expected_database,
-                expected_schema=expected_schema,
-            )
+        observation = _inspect_database(
+            pool,
+            expected_database=expected_database,
+            expected_schema=expected_schema,
+        )
     except Exception:
         if pool is not None:
             with suppress(Exception):

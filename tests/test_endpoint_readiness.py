@@ -4,7 +4,6 @@ gates, ambiguous blob evidence, deterministic fence comparison, and data-free un
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
@@ -60,6 +59,10 @@ class _ScriptedTransaction:
         return None
 
     def fetch_one(self, statement, parameters=()):
+        if statement == "SHOW transaction_read_only":
+            return {"transaction_read_only": "off"}
+        if "pg_try_advisory_xact_lock_shared" in statement:
+            return {"acquired": True}
         if statement == (
             "SELECT pg_catalog.current_database() AS database, "
             "pg_catalog.current_schema() AS schema"
@@ -353,27 +356,12 @@ def test_pool_cleanup_failure_during_database_failure_is_suppressed(
         def close(self):
             raise RuntimeError("PRIVATE cleanup")
 
-    @contextmanager
-    def transaction():
-        def fail(*args, **kwargs):
-            raise RuntimeError("PRIVATE database failure")
-
-        class Transaction:
-            def execute(self, *args):
-                fail()
-
-        yield Transaction()
-
-    class Database:
-        def __init__(self, pool):
-            self.pool = pool
-
-        def transaction(self):
-            return transaction()
+    def observe(*args, **kwargs):
+        raise RuntimeError("PRIVATE database failure")
 
     monkeypatch.setattr(module, "create_postgres_driver_pool", lambda *a, **k: object())
     monkeypatch.setattr(module, "ConnectionPool", Pool)
-    monkeypatch.setattr(module, "PlaneDatabase", Database)
+    monkeypatch.setattr(module, "_inspect_database", observe)
     report = inspect_endpoint_readiness(**_request(tmp_path))  # type: ignore[arg-type]
 
     assert report.state is EndpointReadinessState.UNAVAILABLE
@@ -389,17 +377,6 @@ def test_cleanup_failure_never_publishes_writable_evidence(monkeypatch, tmp_path
         def close(self):
             raise RuntimeError("PRIVATE cleanup")
 
-    @contextmanager
-    def transaction():
-        yield object()
-
-    class Database:
-        def __init__(self, pool):
-            self.pool = pool
-
-        def transaction(self):
-            return transaction()
-
     def observe(*args, **kwargs):
         return module._DatabaseObservation(
             EndpointReadinessState.WRITABLE,
@@ -410,8 +387,7 @@ def test_cleanup_failure_never_publishes_writable_evidence(monkeypatch, tmp_path
 
     monkeypatch.setattr(module, "create_postgres_driver_pool", lambda *a, **k: object())
     monkeypatch.setattr(module, "ConnectionPool", Pool)
-    monkeypatch.setattr(module, "PlaneDatabase", Database)
-    monkeypatch.setattr(module, "_observe_database", observe)
+    monkeypatch.setattr(module, "_inspect_database", observe)
     report = inspect_endpoint_readiness(**_request(tmp_path))  # type: ignore[arg-type]
 
     assert report.state is EndpointReadinessState.UNAVAILABLE

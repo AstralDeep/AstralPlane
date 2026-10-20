@@ -94,6 +94,10 @@ def _assignments(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
     catalog.assignments.get_assignment(transaction, owner_id=_OWNER, assignment_id=_UUID4)
 
 
+def _atlas_pages(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.atlas_pages.get_page(transaction, owner_id=_OWNER, page_id=_UUID4)
+
+
 def _agents(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.agents.get_agent(transaction, owner_id=_OWNER, agent_id="agent-1")
 
@@ -156,6 +160,10 @@ def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecuto
         owner_id=_OWNER,
         mesh_id="mesh-1",
     )
+
+
+def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
 
 def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
@@ -669,6 +677,23 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "notifications",
+        api.create_notification_repository,
+        "src/astralplane/repositories/notifications.py",
+        _notifications,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "revision = %s"),
+        ("ON CONFLICT", "deduplication_key"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+            "RepositoryDataError",
+        ),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -908,6 +933,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         None,
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
+    RepositoryContract(
+        "atlas_pages",
+        api.create_atlas_page_repository,
+        "src/astralplane/repositories/atlas_pages.py",
+        _atlas_pages,
+        _OWNER,
+        "owner_id=%s AND page_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "revision=%s", "deleted_at IS NULL"),
+        ("request_digest", "command identity was reused"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
+    ),
 )
 
 
@@ -1099,6 +1136,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
     ),
     BehavioralEvidence(
+        "notifications",
+        "tests.test_notifications_089_005:test_preferences_read_is_owner_scoped",
+        "tests.test_notifications_089_005:test_entry_exact_replay_returns_original",
+        "tests.test_notifications_089_005:test_acknowledgment_stale_revision_conflicts",
+        "tests.test_notifications_089_005:test_deleted_entry_cannot_be_acknowledged",
+    ),
+    BehavioralEvidence(
         "offline_grants",
         "tests.repositories.test_offline_grants:test_owner_get_and_exchange_lookup_use_owner_and_live_predicates",
         "tests.repositories.test_offline_grants:test_create_grant_accepts_exact_replay_after_lifecycle_change",
@@ -1238,6 +1282,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
         "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
         "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
+    ),
+    BehavioralEvidence(
+        "atlas_pages",
+        "tests.repositories.test_atlas_pages_postgres:"
+        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_pages_postgres:"
+        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_pages_postgres:"
+        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_pages_postgres:"
+        "test_public_atlas_page_contract_behaviors",
     ),
 )
 
