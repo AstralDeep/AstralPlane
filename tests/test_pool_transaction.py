@@ -15,12 +15,19 @@ from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import (
     ConnectionResetError,
+    InitializationError,
+    PlaneError,
+    PoolCheckoutError,
     PoolClosedError,
     PoolInUseError,
     PoolReleaseError,
     PoolShutdownError,
+    TransactionCleanupError,
     TransactionCommitError,
+    TransactionCommitOutcomeUnknownError,
+    TransactionRollbackError,
     TransactionStateError,
+    TransactionStatementError,
 )
 
 
@@ -35,8 +42,13 @@ class Cursor:
 
     def execute(self, statement: str, parameters: object | None = None) -> None:
         self.connection.statements.append((statement, parameters))
+        if statement == "INTERRUPT":
+            self.connection.closed = 2
+            raise RuntimeError("connection interrupted")
         if statement == "BROKEN" or (statement.startswith("BEGIN") and self.connection.fail_begin):
             raise ValueError("broken statement")
+        if statement.startswith("SAVEPOINT") and self.connection.fail_savepoint:
+            raise RuntimeError("savepoint start failed")
         if statement.startswith("RELEASE SAVEPOINT") and self.connection.fail_release_savepoint:
             raise RuntimeError("savepoint release failed")
         if (
@@ -51,22 +63,52 @@ class Cursor:
 
 class Connection:
     def __init__(self) -> None:
-        self.autocommit = True
+        self._autocommit = True
         self.statements: list[tuple[str, object | None]] = []
         self.commits = 0
         self.rollbacks = 0
-        self.closed = 0
+        self._closed = 0
+        self.fail_state_inspection = False
         self.fail_commit = False
+        self.commit_error: BaseException | None = None
         self.fail_rollback = False
+        self.fail_autocommit = False
+        self.fail_autocommit_on_restore = False
         self.fail_begin = False
+        self.fail_savepoint = False
         self.fail_release_savepoint = False
         self.fail_rollback_savepoint = False
+        self.autocommit_error: BaseException | None = None
+
+    @property
+    def closed(self) -> int:
+        if self.fail_state_inspection:
+            raise RuntimeError("connection state unavailable")
+        return self._closed
+
+    @closed.setter
+    def closed(self, value: int) -> None:
+        self._closed = value
+
+    @property
+    def autocommit(self) -> bool:
+        return self._autocommit
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        if self.autocommit_error is not None:
+            raise self.autocommit_error
+        if self.fail_autocommit or (self.fail_autocommit_on_restore and value):
+            raise RuntimeError("autocommit failed")
+        self._autocommit = value
 
     def cursor(self) -> Cursor:
         return Cursor(self)
 
     def commit(self) -> None:
         self.commits += 1
+        if self.commit_error is not None:
+            raise self.commit_error
         if self.fail_commit:
             raise RuntimeError("commit failed")
 
@@ -86,6 +128,7 @@ class DriverPool:
         self.close_calls = 0
         self.fail_release = False
         self.fail_borrow = False
+        self.borrow_error: BaseException | None = None
         self.fail_closeall = False
         self.interrupt_closeall = False
         self.close_gate: threading.Event | None = None
@@ -95,6 +138,8 @@ class DriverPool:
         self._close_accounting_lock = threading.Lock()
 
     def getconn(self) -> Connection:
+        if self.borrow_error is not None:
+            raise self.borrow_error
         if self.fail_borrow:
             raise RuntimeError("borrow failed")
         return self.connection
@@ -144,9 +189,18 @@ def test_failed_driver_checkout_releases_the_reserved_borrow_slot() -> None:
     driver.fail_borrow = True
     pool = ConnectionPool(driver)
 
-    with pytest.raises(RuntimeError, match="borrow failed"), pool.connection():
+    with pytest.raises(PoolCheckoutError) as error, pool.connection():
         pass
 
+    assert error.value.code == "pool_checkout_failed"
+    assert error.value.metadata == ()
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert "borrow failed" not in str(error.value)
+    assert pool.snapshot.borrowed == 0
+
+    driver.fail_borrow = False
+    with pool.connection() as borrowed:
+        assert borrowed is connection
     assert pool.snapshot.borrowed == 0
 
 
@@ -370,6 +424,91 @@ def test_body_failure_is_not_masked_by_reset_or_release_failures() -> None:
     assert connection.closed == 1
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [InitializationError("checkout deadline", code="pool_acquire_timeout"), KeyboardInterrupt()],
+)
+def test_checkout_preserves_typed_and_base_exceptions_while_releasing_the_slot(
+    failure: BaseException,
+) -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    driver.borrow_error = failure
+    pool = ConnectionPool(driver)
+
+    with pytest.raises(type(failure)) as error, pool.connection():
+        pytest.fail("a failed checkout must not yield a connection")
+
+    assert error.value is failure
+    assert pool.snapshot.borrowed == 0
+
+
+def test_transaction_state_rejects_double_begin_and_finish_after_close() -> None:
+    connection = Connection()
+    database = PlaneDatabase(ConnectionPool(DriverPool(connection)))
+
+    with database.transaction() as transaction:
+        assert transaction.active
+        assert not transaction.discard_required
+        with pytest.raises(TransactionStateError, match="already active"):
+            transaction._begin()
+
+    assert not transaction.active
+    with pytest.raises(TransactionStateError, match="not active"):
+        transaction._finish(failed=False)
+
+
+def test_plane_error_statement_failure_is_not_rewrapped() -> None:
+    connection = Connection()
+    database = PlaneDatabase(ConnectionPool(DriverPool(connection)))
+
+    with (
+        pytest.raises(PlaneError, match="statement must be a string"),
+        database.transaction() as transaction,
+    ):
+        transaction.execute(7)  # type: ignore[arg-type]
+
+
+def test_savepoint_start_failure_aborts_without_commit() -> None:
+    connection = Connection()
+    connection.fail_savepoint = True
+    database = PlaneDatabase(ConnectionPool(DriverPool(connection)))
+
+    with (
+        pytest.raises(RuntimeError, match="savepoint start"),
+        database.transaction() as transaction,
+        transaction.savepoint("safe"),
+    ):
+        pytest.fail("an unusable savepoint must not run its body")
+
+    assert connection.commits == 0
+
+
+def test_autocommit_setup_base_exception_is_preserved_and_discarded() -> None:
+    connection = Connection()
+    connection.autocommit_error = KeyboardInterrupt()
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(KeyboardInterrupt), database.transaction():
+        pytest.fail("an interrupted setup must not run the body")
+
+    assert driver.returned == [(connection, True)]
+
+
+def test_autocommit_restore_base_exception_is_preserved_and_discarded() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(KeyboardInterrupt), database.transaction() as transaction:
+        transaction.execute("UPDATE")
+        connection.autocommit_error = KeyboardInterrupt()
+
+    assert connection.commits == 1
+    assert driver.returned == [(connection, True)]
+
+
 def test_transaction_commits_only_when_outer_caller_scope_succeeds() -> None:
     connection = Connection()
     pool = ConnectionPool(DriverPool(connection))
@@ -418,13 +557,185 @@ def test_handled_driver_failure_cannot_commit_fake_success() -> None:
 def test_commit_failure_is_typed_and_rolls_back() -> None:
     connection = Connection()
     connection.fail_commit = True
-    database = PlaneDatabase(ConnectionPool(DriverPool(connection)))
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
 
-    with pytest.raises(TransactionCommitError), database.transaction() as transaction:
+    with (
+        pytest.raises(TransactionCommitOutcomeUnknownError) as error,
+        database.transaction() as transaction,
+    ):
+        transaction.execute("UPDATE")
+
+    assert isinstance(error.value, TransactionCommitError)
+    assert error.value.code == "transaction_commit_outcome_unknown"
+    assert "failed" not in str(error.value)
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert connection.commits == 1
+    assert connection.rollbacks >= 1
+    assert driver.returned == [(connection, True)]
+
+
+def test_commit_uncertainty_survives_failed_rollback_release_and_cleanup() -> None:
+    connection = Connection()
+    connection.fail_commit = True
+    connection.fail_rollback = True
+    driver = DriverPool(connection)
+    driver.fail_release = True
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(TransactionCommitOutcomeUnknownError) as error,
+        database.transaction() as transaction,
+    ):
+        transaction.execute("UPDATE")
+
+    assert error.value.__cause__ is not None
+    assert connection.commits == 1
+    assert connection.closed == 1
+    assert driver.returned == []
+
+
+def test_commit_base_exception_is_preserved_and_connection_is_discarded() -> None:
+    connection = Connection()
+    connection.commit_error = KeyboardInterrupt()
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(KeyboardInterrupt), database.transaction() as transaction:
         transaction.execute("UPDATE")
 
     assert connection.commits == 1
-    assert connection.rollbacks >= 1
+    assert driver.returned == [(connection, True)]
+
+
+def test_interrupted_statement_is_typed_and_discards_the_connection() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(TransactionStatementError) as error,
+        database.transaction() as transaction,
+    ):
+        transaction.execute("INTERRUPT")
+
+    assert error.value.code == "transaction_statement_failed"
+    assert error.value.metadata == (("operation", "execute"),)
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert connection.commits == 0
+    assert driver.returned == [(connection, True)]
+
+
+def test_connection_state_inspection_failure_fails_closed() -> None:
+    connection = Connection()
+    connection.fail_state_inspection = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(TransactionStatementError) as error,
+        database.transaction() as transaction,
+    ):
+        transaction.execute("BROKEN")
+
+    assert error.value.metadata == (("operation", "execute"),)
+    assert isinstance(error.value.__cause__, ValueError)
+    assert driver.returned == [(connection, True)]
+
+
+def test_isolation_begin_failure_with_failed_restore_discards_connection() -> None:
+    connection = Connection()
+    connection.fail_begin = True
+    connection.fail_autocommit_on_restore = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(ValueError, match="broken"),
+        database.transaction(isolation=IsolationLevel.REPEATABLE_READ),
+    ):
+        pytest.fail("a failed begin must not run the body")
+
+    assert driver.returned == [(connection, True)]
+
+
+def test_ordinary_statement_failure_keeps_the_connection_reusable() -> None:
+    connection = Connection()
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(ValueError, match="broken"), database.transaction() as transaction:
+        transaction.execute("BROKEN")
+
+    assert driver.returned == [(connection, False)]
+    with database.transaction() as transaction:
+        transaction.execute("UPDATE")
+
+    assert connection.commits == 1
+    assert driver.returned[-1] == (connection, False)
+
+
+def test_rollback_failure_marks_the_connection_unsafe_without_masking_body_error() -> None:
+    connection = Connection()
+    connection.fail_rollback = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(KeyError, match="caller"), database.transaction() as transaction:
+        transaction.execute("UPDATE")
+        raise KeyError("caller")
+
+    assert connection.commits == 0
+    assert driver.returned == [(connection, True)]
+
+
+def test_autocommit_restore_failure_after_commit_is_typed_and_discards() -> None:
+    connection = Connection()
+    connection.fail_autocommit_on_restore = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(TransactionCleanupError) as error,
+        database.transaction() as transaction,
+    ):
+        transaction.execute("UPDATE")
+
+    assert error.value.code == "transaction_cleanup_failed"
+    assert connection.commits == 1
+    assert driver.returned == [(connection, True)]
+
+
+def test_autocommit_setup_failure_is_typed_and_discards_the_connection() -> None:
+    connection = Connection()
+    connection.fail_autocommit = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with pytest.raises(TransactionCleanupError) as error, database.transaction():
+        pytest.fail("an unusable connection must not start a transaction")
+
+    assert error.value.code == "transaction_cleanup_failed"
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert driver.returned == [(connection, True)]
+
+
+def test_failed_rollback_after_a_handled_failure_is_typed_and_discarded() -> None:
+    connection = Connection()
+    connection.fail_rollback = True
+    driver = DriverPool(connection)
+    database = PlaneDatabase(ConnectionPool(driver))
+
+    with (
+        pytest.raises(TransactionRollbackError) as error,
+        database.transaction() as transaction,
+        pytest.raises(ValueError, match="broken"),
+    ):
+        transaction.execute("BROKEN")
+
+    assert error.value.code == "transaction_rollback_failed"
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert driver.returned == [(connection, True)]
 
 
 def test_savepoint_recovers_a_statement_failure_without_nested_commit() -> None:

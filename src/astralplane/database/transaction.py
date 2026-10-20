@@ -1,6 +1,8 @@
 """Caller-owned transactions (Transaction, PlaneDatabase) over database/pool.py
 connections that detach every result into immutable DetachedRecord/CommandResult
-values before the cursor closes.
+values before the cursor closes. A lost statement connection is typed and discarded,
+while a commit whose acknowledgement was lost is reported as an unknown outcome and
+is never retried as a success.
 """
 
 from __future__ import annotations
@@ -15,9 +17,17 @@ from typing import Any
 from astralplane.contracts import IsolationLevel, Parameters, Statement
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.sql import execute_native
-from astralplane.errors import TransactionCommitError, TransactionStateError
+from astralplane.errors import (
+    PlaneError,
+    TransactionCleanupError,
+    TransactionCommitOutcomeUnknownError,
+    TransactionRollbackError,
+    TransactionStateError,
+    TransactionStatementError,
+)
 
 _SAVEPOINT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+_TRANSACTION_STATUS_UNKNOWN = 4
 
 
 def _freeze(value: Any) -> Any:
@@ -106,30 +116,67 @@ class Transaction:
         self._active = False
         self._failed = False
         self._prior_autocommit: bool | None = None
+        self._discard_required = False
 
     @property
     def active(self) -> bool:
         return self._active
 
+    @property
+    def discard_required(self) -> bool:
+        return self._discard_required
+
+    def _connection_interrupted(self) -> bool:
+        try:
+            if getattr(self._connection, "closed", 0):
+                return True
+            info = getattr(self._connection, "info", None)
+            return getattr(info, "transaction_status", 0) == _TRANSACTION_STATUS_UNKNOWN
+        except Exception:
+            return True
+
+    def _raise_if_interrupted(self, exc: BaseException, operation: str) -> None:
+        if not isinstance(exc, Exception) or isinstance(exc, PlaneError):
+            return
+        if self._connection_interrupted():
+            self._discard_required = True
+            raise TransactionStatementError(
+                "transaction statement connection was interrupted",
+                metadata={"operation": operation},
+            ) from exc
+
     def _begin(self) -> None:
         if self._active:
             raise TransactionStateError("transaction is already active")
         if hasattr(self._connection, "autocommit"):
-            self._prior_autocommit = bool(self._connection.autocommit)
-            self._connection.autocommit = False
+            try:
+                self._prior_autocommit = bool(self._connection.autocommit)
+                if self._prior_autocommit:
+                    self._connection.autocommit = False
+            except BaseException as exc:
+                self._prior_autocommit = None
+                self._discard_required = True
+                if not isinstance(exc, Exception):
+                    raise
+                raise TransactionCleanupError("transaction connection setup failed") from exc
         self._active = True
         if self._isolation is not None:
             try:
                 self._control(f"BEGIN ISOLATION LEVEL {self._isolation.value}")
-            except BaseException:
+            except BaseException as exc:
                 self._active = False
-                self._restore_autocommit()
+                try:
+                    self._restore_autocommit()
+                except BaseException:
+                    self._discard_required = True
+                self._raise_if_interrupted(exc, "begin")
                 raise
 
     def _restore_autocommit(self) -> None:
         if self._prior_autocommit is not None:
-            self._connection.autocommit = self._prior_autocommit
+            prior = self._prior_autocommit
             self._prior_autocommit = None
+            self._connection.autocommit = prior
 
     def _ensure_usable(self) -> None:
         if not self._active:
@@ -141,22 +188,27 @@ class Transaction:
         self._ensure_usable()
         try:
             return self._connection.cursor()
-        except BaseException:
+        except BaseException as exc:
             self._failed = True
+            self._raise_if_interrupted(exc, "cursor")
             raise
 
     def _close_cursor(self, cursor: Any, *, preserve_active_error: bool) -> None:
         try:
             cursor.close()
-        except BaseException:
+        except BaseException as exc:
             self._failed = True
             if not preserve_active_error:
+                self._raise_if_interrupted(exc, "cursor_close")
                 raise
 
     def _control(self, statement: str) -> None:
         cursor = self._connection.cursor()
         try:
             cursor.execute(statement)
+        except BaseException as exc:
+            self._raise_if_interrupted(exc, "control")
+            raise
         finally:
             cursor.close()
 
@@ -180,9 +232,10 @@ class Transaction:
                 ),
                 returned_records=returned_records,
             )
-        except BaseException:
+        except BaseException as exc:
             operation_failed = True
             self._failed = True
+            self._raise_if_interrupted(exc, "execute")
             raise
         finally:
             self._close_cursor(cursor, preserve_active_error=operation_failed)
@@ -194,9 +247,10 @@ class Transaction:
             execute_native(cursor, statement, parameters)
             row = cursor.fetchone()
             return None if row is None else _detach_row(row, cursor.description)
-        except BaseException:
+        except BaseException as exc:
             operation_failed = True
             self._failed = True
+            self._raise_if_interrupted(exc, "fetch_one")
             raise
         finally:
             self._close_cursor(cursor, preserve_active_error=operation_failed)
@@ -209,9 +263,10 @@ class Transaction:
         try:
             execute_native(cursor, statement, parameters)
             return tuple(_detach_row(row, cursor.description) for row in cursor.fetchall())
-        except BaseException:
+        except BaseException as exc:
             operation_failed = True
             self._failed = True
+            self._raise_if_interrupted(exc, "fetch_all")
             raise
         finally:
             self._close_cursor(cursor, preserve_active_error=operation_failed)
@@ -250,19 +305,44 @@ class Transaction:
         if not self._active:
             raise TransactionStateError("transaction is not active")
         should_rollback = failed or self._failed
+        primary_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
         try:
             if should_rollback:
-                self._connection.rollback()
+                try:
+                    self._connection.rollback()
+                except BaseException as exc:
+                    self._discard_required = True
+                    primary_error = exc
             else:
                 try:
                     self._connection.commit()
                 except BaseException as exc:
+                    self._discard_required = True
                     with suppress(BaseException):
                         self._connection.rollback()
-                    raise TransactionCommitError("transaction commit failed") from exc
+                    primary_error = exc
         finally:
             self._active = False
-            self._restore_autocommit()
+            try:
+                self._restore_autocommit()
+            except BaseException as exc:
+                self._discard_required = True
+                cleanup_error = exc
+        if primary_error is not None:
+            if not isinstance(primary_error, Exception):
+                raise primary_error
+            if should_rollback:
+                raise TransactionRollbackError("transaction rollback failed") from primary_error
+            raise TransactionCommitOutcomeUnknownError(
+                "transaction commit outcome is unknown"
+            ) from primary_error
+        if cleanup_error is not None:
+            if not isinstance(cleanup_error, Exception):
+                raise cleanup_error
+            raise TransactionCleanupError(
+                "transaction connection cleanup failed"
+            ) from cleanup_error
         if self._failed and not failed:
             raise TransactionStateError("transaction rolled back after a handled command failure")
 
@@ -275,15 +355,20 @@ class PlaneDatabase:
     def transaction(self, *, isolation: IsolationLevel | None = None) -> Iterator[Transaction]:
         with self._pool.connection() as connection:
             transaction = Transaction(connection, isolation=isolation)
-            transaction._begin()
             try:
-                yield transaction
+                transaction._begin()
+                try:
+                    yield transaction
+                except BaseException:
+                    with suppress(BaseException):
+                        transaction._finish(failed=True)
+                    raise
+                else:
+                    transaction._finish(failed=False)
             except BaseException:
-                with suppress(BaseException):
-                    transaction._finish(failed=True)
+                if transaction.discard_required:
+                    self._pool._discard_on_return(connection)
                 raise
-            else:
-                transaction._finish(failed=False)
 
 
 __all__ = ("CommandResult", "DetachedRecord", "PlaneDatabase", "Transaction")

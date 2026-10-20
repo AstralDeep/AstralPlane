@@ -569,6 +569,12 @@ maintenance window has been verified:
    acceptance checks, then reopen traffic. Retain the previous and restored copies until the
    rollback window closes.
 
+If a restore, migration, reconciliation, or session-retirement transaction loses its connection or
+commit acknowledgement, keep admission closed and treat the outcome as unknown. Re-read the durable
+state or repeat only the declared idempotent step; never infer success, rollback, or a safe
+connection from the exception. The exact failure and connection-custody rules are in
+[connection loss and uncertain outcomes](connection-loss-and-uncertain-outcomes.md).
+
 ## Later blob-root relocation
 
 A later relocation is a separate operation: quiesce writers, reject symlink/reparse traversal,
