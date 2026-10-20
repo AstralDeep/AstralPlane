@@ -25,29 +25,35 @@ from tests.integration.test_session_issuer_upgrade import retained_rows
 AT = datetime(2026, 10, 10, tzinfo=UTC)
 
 
-def at_089_004(database, registry=None):
+def at_089_006(database, registry=None):
     capped = (
         registry
         if registry is not None
         else m.MigrationRegistry(
             m.MIGRATION_REGISTRY.migrations[:-1],
             current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(
-                tx, "089.004"
+                tx, "089.006"
             ),
-            current_schema_verifier_checksum=m.PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM,
+            current_schema_verifier_checksum=m.PLANE_SCHEMA_089_006_SCHEMA_VERIFIER_CHECKSUM,
             predecessor_schema_verifier=m._verify_predecessor_plane_schema,
             predecessor_schema_verifier_checksum=(
-                m.PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+                m.PLANE_SCHEMA_089_006_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
             ),
         )
     )
     revision = replace(
         m.CURRENT_DATA_PLANE_REVISION,
-        schema_revision="089.004",
+        schema_revision="089.006",
         migration_digest=capped.digest,
-        read_compatible_from=m.CURRENT_DATA_PLANE_REVISION.read_compatible_from[:-1],
-        accepted_predecessor_digests=(
-            m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests[:-1]
+        read_compatible_from=tuple(
+            value
+            for value in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            if value < "089.006"
+        ),
+        accepted_predecessor_digests=tuple(
+            pair
+            for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if pair[0] < "089.006"
         ),
     )
     return m.MigrationRunner(database, revision=revision, registry=capped)
@@ -62,7 +68,7 @@ def current(database, registry=m.MIGRATION_REGISTRY):
 
 
 def populated_predecessor(db):
-    BaselineMigrationRunner(db, at_089_004(db)).run(expected_revision="089.004")
+    BaselineMigrationRunner(db, at_089_006(db)).run(expected_revision="089.006")
     with db.transaction() as tx:
         tables = populated(tx)
         MeshEnrollmentRepository().bootstrap_mesh(
@@ -90,7 +96,7 @@ def test_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
     ).already_current
     with pytest.raises(SchemaRevisionError):
-        at_089_004(db).run(expected_revision="089.004")
+        at_089_006(db).run(expected_revision="089.006")
 
 
 def test_committed_publication_survives_repeat_and_restart(empty_postgres_schema):
@@ -132,13 +138,13 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
     tables, before = populated_predecessor(db)
 
     def interrupted(tx):
-        m.PLANE_SCHEMA_089_005_MIGRATION.operation(tx)
+        m.PLANE_SCHEMA_089_007_MIGRATION.operation(tx)
         raise RuntimeError("synthetic migration interruption")
 
     registry = m.MigrationRegistry(
         (
             *m.MIGRATION_REGISTRY.migrations[:-1],
-            replace(m.PLANE_SCHEMA_089_005_MIGRATION, operation=interrupted),
+            replace(m.PLANE_SCHEMA_089_007_MIGRATION, operation=interrupted),
         ),
         current_schema_verifier=m._verify_current_plane_schema,
         current_schema_verifier_checksum=m.CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -155,7 +161,7 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
         )
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.004"
+            == "089.006"
         )
     assert current(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -164,7 +170,7 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
 
 def test_current_catalog_damage_is_refused(empty_postgres_schema):
     db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, at_089_004(db)).run(expected_revision="089.004")
+    BaselineMigrationRunner(db, at_089_006(db)).run(expected_revision="089.006")
     current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         tx.execute(
@@ -185,7 +191,7 @@ def test_namesake_is_not_adopted(empty_postgres_schema):
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.004"
+            == "089.006"
         )
         assert (
             tx.fetch_one("SELECT to_regclass('capability_publication_owner_live') AS relation")[

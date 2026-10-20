@@ -931,6 +931,8 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             "astralplane-089-mesh-enrollment-records",
             "astralplane-owner-stop-epochs",
             "astralplane-089-completion-wake",
+            "astralplane-089-notification-records",
+            "astralplane-089-atlas-pages",
             "astralplane-089-capability-publications",
         )
         assert runner.run(

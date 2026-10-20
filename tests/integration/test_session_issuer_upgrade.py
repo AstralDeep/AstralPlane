@@ -163,6 +163,8 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(p
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
         "astralplane-089-capability-publications",
     )
     with db.transaction() as tx:
@@ -272,5 +274,7 @@ def test_interrupted_upgrade_rolls_back_both_metadata_columns_and_retries(predec
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
         "astralplane-089-capability-publications",
     )

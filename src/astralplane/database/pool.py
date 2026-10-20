@@ -1,10 +1,6 @@
-"""Explicit, driver-neutral pooled connection scopes: ConnectionPool wraps a DriverPool
-(psycopg2 or an injectable test pool) and always rolls back a borrowed connection before
-returning it, so implicit reads never leak to the next borrower. Close closes admission
-from its first attempt, serializes driver cleanup so concurrent callers neither duplicate
-it nor report success before it finishes, and raises the typed PoolShutdownError on driver
-failure with the attempt count so callers can bound retries and escalate persistent
-failures to the host while the pool stays closed to new checkouts.
+"""Wraps driver pools with bounded connection custody and typed checkout, reset, and release errors.
+Transactions mark unsafe connections for discard through this pool before returning them.
+Shutdown closes admission and serializes cleanup while preserving borrow accounting.
 """
 
 from __future__ import annotations
@@ -17,6 +13,8 @@ from typing import Any, Protocol
 
 from astralplane.errors import (
     ConnectionResetError,
+    PlaneError,
+    PoolCheckoutError,
     PoolClosedError,
     PoolInUseError,
     PoolReleaseError,
@@ -51,6 +49,7 @@ class ConnectionPool:
         self._cleanup_complete = False
         self._cleanup_failed = False
         self._cleanup_attempts = 0
+        self._discarded: dict[int, Any] = {}
 
     @property
     def snapshot(self) -> PoolSnapshot:
@@ -71,10 +70,21 @@ class ConnectionPool:
         try:
             connection = self._driver_pool.getconn()
             return connection
-        except BaseException:
+        except BaseException as exc:
             with self._state_lock:
                 self._borrowed -= 1
-            raise
+            if not isinstance(exc, Exception) or isinstance(exc, PlaneError):
+                raise
+            raise PoolCheckoutError("connection checkout failed") from exc
+
+    def _discard_on_return(self, connection: Any) -> None:
+        with self._state_lock:
+            self._discarded[id(connection)] = connection
+
+    def _take_discard(self, connection: Any) -> bool:
+        with self._state_lock:
+            marked = self._discarded.pop(id(connection), None)
+        return marked is connection
 
     def _release(self, connection: Any, *, discard: bool) -> None:
         release_error: BaseException | None = None
@@ -105,8 +115,14 @@ class ConnectionPool:
                 connection.rollback()
             except BaseException as exc:
                 reset_error = exc
+            marked_for_discard = self._take_discard(connection)
+            discard = (
+                reset_error is not None
+                or getattr(body_error, "discard_connection", False)
+                or marked_for_discard
+            )
             try:
-                self._release(connection, discard=reset_error is not None)
+                self._release(connection, discard=discard)
             except PoolReleaseError:
                 if body_error is None and reset_error is None:
                     raise

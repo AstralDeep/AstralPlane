@@ -1108,7 +1108,10 @@ class PersonalizationRepository(ExplicitNotesRepository):
         *,
         owner_id: str,
         memory_id: str,
+        for_update: bool = False,
     ) -> MemoryRecord | None:
+        if type(for_update) is not bool:
+            raise RepositoryValidationError("for_update must be a boolean")
         owner_id = _required_id(owner_id, "owner_id")
         memory_id = _required_id(memory_id, "memory_id")
         row = query.fetch_one(
@@ -1116,7 +1119,7 @@ class PersonalizationRepository(ExplicitNotesRepository):
             SELECT {self._MEMORY_FIELDS}
             FROM memory_item
             WHERE id = %s AND user_id = %s
-            """,
+            """ + (" FOR UPDATE" if for_update else ""),
             (memory_id, owner_id),
         )
         return None if row is None else _memory(row)

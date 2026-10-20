@@ -345,6 +345,8 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
         "astralplane-089-capability-publications",
     )
     assert second.already_current
@@ -382,6 +384,8 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane_authority_lifecycle_operation",
         "astralplane_outbox",
         "astralplane_receipt_claim",
+        "atlas_page",
+        "atlas_page_command",
         "test_runs",
         "test_case_results",
         "test_evidence",
@@ -397,6 +401,12 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "search_path=pg_catalog"
     ]
     assert function_configurations.pop("reject_selected_agent_identity_update") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("enforce_atlas_page_lifecycle") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_atlas_page_command_mutation") == [
         "search_path=pg_catalog"
     ]
     assert set(function_configurations) == {
@@ -962,6 +972,8 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
         "astralplane-089-capability-publications",
     )
 

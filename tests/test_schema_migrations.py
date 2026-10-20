@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-7] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-9] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -707,7 +707,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-6] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-8] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,7 +732,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.005"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
@@ -751,13 +751,11 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     )
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-7] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
-    assert edge.checksum == canonical._statements_checksum(
-        TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS
-    )
+    assert edge.checksum == canonical._statements_checksum(TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS)
 
     ddl = "\n".join(TYPESAFE_CREDENTIAL_SCHEMA_STATEMENTS)
     assert "CREATE TABLE user_typesafe_credential" in ddl
@@ -765,8 +763,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     assert "api_key_enc BYTEA NOT NULL" in ddl
     assert "key_fingerprint TEXT NOT NULL CHECK(key_fingerprint ~ '^[0-9a-f]{12}$')" in ddl
     assert (
-        "CHECK(last_verification_outcome IN "
-        "('unverified','valid','rejected','unavailable'))"
+        "CHECK(last_verification_outcome IN ('unverified','valid','rejected','unavailable'))"
     ) in ddl
     assert "ALTER TABLE" not in ddl
     assert "IF NOT EXISTS" not in ddl
@@ -826,9 +823,9 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.005"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "731cbc6dafe220276ba2479ae2a57f9f34a7bc03c5df3b0e48f04caec7403d27"
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (
@@ -869,26 +866,61 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
         canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.005"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "731cbc6dafe220276ba2479ae2a57f9f34a7bc03c5df3b0e48f04caec7403d27"
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("completion_subscription", "wake_receipt"):
         assert f"('{table}')" in query_tables
 
 
-def test_089_005_capability_publication_edge_is_pinned_to_the_exact_089_004_registry() -> None:
+def test_089_006_atlas_page_edge_is_pinned_to_the_exact_089_005_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.atlas_page_schema import ATLAS_PAGE_SCHEMA_STATEMENTS
+
+    edge = canonical.PLANE_SCHEMA_089_006_MIGRATION
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert edge.name == "astralplane-089-atlas-pages"
+    assert edge.source_revisions == ("089.005",)
+    assert edge.target_revision == "089.006"
+    assert edge.checksum == canonical._statements_checksum(ATLAS_PAGE_SCHEMA_STATEMENTS)
+
+    ddl = "\n".join(ATLAS_PAGE_SCHEMA_STATEMENTS)
+    for table in ("atlas_page", "atlas_page_command"):
+        assert f"CREATE TABLE {table}" in ddl
+    assert "CREATE UNIQUE INDEX atlas_page_live_slug" in ddl
+    assert "COALESCE(project_id,'')" in ddl
+    assert "atlas_page_lifecycle" in ddl
+    assert "atlas_page_command_immutable" in ddl
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+
+    assert canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST == (
+        "98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.005"] == (
+        "2aae4fa6281bda3ca690ce9eb174a5e43b454f0862b0544129bd537eb67bb798",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.005") == (
+        canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    for table in ("atlas_page", "atlas_page_command"):
+        assert f"('{table}')" in query_tables
+
+def test_089_007_capability_publication_edge_is_pinned_to_the_exact_089_006_registry() -> None:
     import astralplane.database.migrations as canonical
     from astralplane.database.capability_publication_schema import (
         CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS,
     )
 
-    edge = canonical.PLANE_SCHEMA_089_005_MIGRATION
+    edge = canonical.PLANE_SCHEMA_089_007_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
     assert edge.name == "astralplane-089-capability-publications"
-    assert edge.source_revisions == ("089.004",)
-    assert edge.target_revision == "089.005"
+    assert edge.source_revisions == ("089.006",)
+    assert edge.target_revision == "089.007"
     assert edge.checksum == canonical._statements_checksum(
         CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS
     )
@@ -905,26 +937,26 @@ def test_089_005_capability_publication_edge_is_pinned_to_the_exact_089_004_regi
     assert "IF NOT EXISTS" not in ddl
     assert "REFERENCES" not in ddl
 
-    assert canonical.PLANE_SCHEMA_089_004_REGISTRY_DIGEST == (
-        "08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc"
+    assert canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST == (
+        "1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1"
     )
-    assert canonical.PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM == (
-        "48d93ab8d6372404c557a816e6d1b57bde5e8c2a3ae64c91d0c1e67ae27337a5"
+    assert canonical.PLANE_SCHEMA_089_006_SCHEMA_VERIFIER_CHECKSUM == (
+        "6911bade08880589f3a7de5a5654412ce14baa207b451d611fa41a1c27aaabed"
     )
-    assert canonical.PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "e3f2988fea4b6e8cf7edd9064cec67b3d0665f0863de40bbd8332ff9e7f0a9f3"
+    assert canonical.PLANE_SCHEMA_089_006_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
+        "6415846f481719dc158cde3940668df747b7f3b80a49474e0d8ce3cbca640d48"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.004") == (
-        canonical.PLANE_SCHEMA_089_004_REGISTRY_DIGEST
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.006") == (
+        canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.005"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "731cbc6dafe220276ba2479ae2a57f9f34a7bc03c5df3b0e48f04caec7403d27"
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('capability_publication')" in query_tables
-    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.004"] == (
-        "4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22",
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.006"] == (
+        "88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48",
     )
 
 

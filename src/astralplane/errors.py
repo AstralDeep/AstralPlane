@@ -64,6 +64,7 @@ def _resolve_code(code: str | None, default: str) -> str:
 
 class PlaneError(RuntimeError):
     default_code: Final = "plane_error"
+    discard_connection: Final = False
 
     def __init__(
         self,
@@ -79,6 +80,10 @@ class PlaneError(RuntimeError):
 
 class PoolClosedError(PlaneError):
     default_code = "pool_closed"
+
+
+class PoolCheckoutError(PlaneError):
+    default_code = "pool_checkout_failed"
 
 
 class PoolInUseError(PlaneError):
@@ -101,8 +106,27 @@ class TransactionStateError(PlaneError):
     default_code = "transaction_state"
 
 
+class TransactionStatementError(TransactionStateError):
+    default_code = "transaction_statement_failed"
+    discard_connection = True
+
+
+class TransactionCleanupError(TransactionStateError):
+    default_code = "transaction_cleanup_failed"
+    discard_connection = True
+
+
 class TransactionCommitError(PlaneError):
     default_code = "transaction_commit_failed"
+
+
+class TransactionCommitOutcomeUnknownError(TransactionCommitError):
+    default_code = "transaction_commit_outcome_unknown"
+    discard_connection = True
+
+
+class TransactionRollbackError(TransactionCleanupError):
+    default_code = "transaction_rollback_failed"
 
 
 class SQLContractError(PlaneError, ValueError):

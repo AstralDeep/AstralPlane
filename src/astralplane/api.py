@@ -55,6 +55,16 @@ from astralplane.database.pool import ConnectionPool, DriverPool, PoolSnapshot
 from astralplane.database.postgres import create_postgres_driver_pool
 from astralplane.database.revision import SCHEMA_REVISION
 from astralplane.database.transaction import PlaneDatabase
+from astralplane.endpoint_readiness import (
+    ENDPOINT_READINESS_CONTRACT_VERSION,
+    EndpointFence,
+    EndpointFenceError,
+    EndpointReadiness,
+    EndpointReadinessError,
+    EndpointReadinessState,
+    EndpointTopology,
+    inspect_endpoint_readiness,
+)
 from astralplane.errors import InitializationError
 from astralplane.immutable_bundle_store import (
     ArtifactCollisionError,
@@ -96,6 +106,16 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas_pages import (
+    AtlasPageBatch,
+    AtlasPageChange,
+    AtlasPageCommandReceipt,
+    AtlasPageCreateCommand,
+    AtlasPageCursor,
+    AtlasPageDeleteCommand,
+    AtlasPageRecord,
+    AtlasPageRepository,
+)
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
@@ -137,6 +157,13 @@ from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
+from astralplane.repositories.notifications import (
+    NotificationDeliveryIdentity,
+    NotificationEventKind,
+    NotificationInboxEntry,
+    NotificationPreferenceRecord,
+    NotificationRepository,
+)
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -183,6 +210,10 @@ def create_assignment_repository() -> AssignmentRepository:
     return AssignmentRepository()
 
 
+def create_atlas_page_repository() -> AtlasPageRepository:
+    return AtlasPageRepository()
+
+
 def create_identity_repository() -> IdentityRepository:
     return IdentityRepository()
 
@@ -226,6 +257,10 @@ def create_offline_grant_repository() -> OfflineGrantRepository:
 
 def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
     return MeshEnrollmentRepository()
+
+
+def create_notification_repository() -> NotificationRepository:
+    return NotificationRepository()
 
 
 def create_stop_epoch_repository() -> StopEpochRepository:
@@ -417,6 +452,7 @@ class RepositoryCatalog:
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
     capability_publications: CapabilityPublicationRepository
+    atlas_pages: AtlasPageRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -427,6 +463,7 @@ class RepositoryCatalog:
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
+    notifications: NotificationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -470,6 +507,7 @@ class RepositoryCatalog:
                 "knowledge": self.knowledge,
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
+                "notifications": self.notifications,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -491,6 +529,7 @@ class RepositoryCatalog:
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
                 "capability_publications": self.capability_publications,
+                "atlas_pages": self.atlas_pages,
             }
         )
 
@@ -522,6 +561,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
         capability_publications=create_capability_publication_repository(),
+        atlas_pages=create_atlas_page_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -532,6 +572,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
+        notifications=create_notification_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -752,6 +793,7 @@ def create_postgres_runtime(
 
 
 __all__ = (
+    "ENDPOINT_READINESS_CONTRACT_VERSION",
     "GENERATED_AGENT_BUNDLE_CONTRACT",
     "GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
@@ -766,6 +808,14 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasPageBatch",
+    "AtlasPageChange",
+    "AtlasPageCommandReceipt",
+    "AtlasPageCreateCommand",
+    "AtlasPageCursor",
+    "AtlasPageDeleteCommand",
+    "AtlasPageRecord",
+    "AtlasPageRepository",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",
@@ -785,6 +835,12 @@ __all__ = (
     "CapabilityPublicationState",
     "DraftAgentRecord",
     "DraftPublicationRecord",
+    "EndpointFence",
+    "EndpointFenceError",
+    "EndpointReadiness",
+    "EndpointReadinessError",
+    "EndpointReadinessState",
+    "EndpointTopology",
     "ExecutionFence",
     "FinalizedBundle",
     "GeneratedAgentPublicationIntent",
@@ -793,6 +849,11 @@ __all__ = (
     "GeneratedAgentPublicationResultMetadata",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
+    "NotificationDeliveryIdentity",
+    "NotificationEventKind",
+    "NotificationInboxEntry",
+    "NotificationPreferenceRecord",
+    "NotificationRepository",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
@@ -818,6 +879,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_page_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",
@@ -838,6 +900,7 @@ __all__ = (
     "create_identity_repository",
     "create_knowledge_repository",
     "create_maintenance_repository",
+    "create_notification_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",
@@ -866,6 +929,7 @@ __all__ = (
     "generated_agent_publication_recovery_operation_binding",
     "initialize_empty_database",
     "inspect_baseline_compatibility",
+    "inspect_endpoint_readiness",
     "paths_for",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",
