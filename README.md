@@ -48,7 +48,7 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 44 members, in
+`create_repository_catalog()` returns the stable repository catalog. Its 45 members, in
 `RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
 `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
 `chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
