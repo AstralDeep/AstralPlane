@@ -432,7 +432,7 @@ class NotificationRepository:
                     deduplication_key, content_format, content_ciphertext,
                     content_sha256, created_at, retention_expires_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (owner_id, deduplication_key) DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING {_ENTRY_FIELDS}
                 """,
                 (
@@ -567,20 +567,22 @@ class NotificationRepository:
         entry = _required_uuid(entry_id, "entry_id")
         revision = _required_integer(expected_revision, "expected_revision")
         at = _required_integer(acknowledged_at, "acknowledged_at")
-        changed = _optional_row(
-            transaction.execute(
-                f"""
-                UPDATE notification_inbox_entry
-                SET acknowledged_at = %s, revision = revision + 1
-                WHERE entry_id = %s AND owner_id = %s AND revision = %s
-                  AND acknowledged_at IS NULL AND deleted_at IS NULL
-                  AND created_at <= %s
-                RETURNING {_ENTRY_FIELDS}
-                """,
-                (at, entry, owner, revision, at),
-            ),
-            "notification_inbox_entry.acknowledge",
-        )
+        changed = None
+        if revision < _MAX_INTEGER:
+            changed = _optional_row(
+                transaction.execute(
+                    f"""
+                    UPDATE notification_inbox_entry
+                    SET acknowledged_at = %s, revision = revision + 1
+                    WHERE entry_id = %s AND owner_id = %s AND revision = %s
+                      AND acknowledged_at IS NULL AND deleted_at IS NULL
+                      AND created_at <= %s
+                    RETURNING {_ENTRY_FIELDS}
+                    """,
+                    (at, entry, owner, revision, at),
+                ),
+                "notification_inbox_entry.acknowledge",
+            )
         if changed is not None:
             return _entry_record(changed)
         existing = self.get_entry(
@@ -618,19 +620,21 @@ class NotificationRepository:
         entry = _required_uuid(entry_id, "entry_id")
         revision = _required_integer(expected_revision, "expected_revision")
         at = _required_integer(deleted_at, "deleted_at")
-        changed = _optional_row(
-            transaction.execute(
-                f"""
-                UPDATE notification_inbox_entry
-                SET deleted_at = %s, revision = revision + 1
-                WHERE entry_id = %s AND owner_id = %s AND revision = %s
-                  AND deleted_at IS NULL AND created_at <= %s
-                RETURNING {_ENTRY_FIELDS}
-                """,
-                (at, entry, owner, revision, at),
-            ),
-            "notification_inbox_entry.delete",
-        )
+        changed = None
+        if revision < _MAX_INTEGER:
+            changed = _optional_row(
+                transaction.execute(
+                    f"""
+                    UPDATE notification_inbox_entry
+                    SET deleted_at = %s, revision = revision + 1
+                    WHERE entry_id = %s AND owner_id = %s AND revision = %s
+                      AND deleted_at IS NULL AND created_at <= %s
+                    RETURNING {_ENTRY_FIELDS}
+                    """,
+                    (at, entry, owner, revision, at),
+                ),
+                "notification_inbox_entry.delete",
+            )
         if changed is not None:
             return _entry_record(changed)
         existing = self.get_entry(
@@ -724,7 +728,7 @@ class NotificationRepository:
                 INSERT INTO notification_delivery_identity (
                     delivery_id, entry_id, owner_id, delivery_key, created_at
                 ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (owner_id, delivery_key) DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING {_DELIVERY_FIELDS}
                 """,
                 (delivery, entry, owner, key, created),

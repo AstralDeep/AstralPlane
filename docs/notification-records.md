@@ -38,13 +38,17 @@ Plane accepts only bounded ciphertext bytes and verifies that the supplied diges
 bytes. It never receives plaintext notification content and has no rendering or decryption path.
 `(owner_id, deduplication_key)` is unique. An exact replay returns the original entry, including a
 deleted entry, so a retry cannot resurrect or duplicate a notification the owner removed. Reusing
-the key with changed immutable content conflicts.
+the key with changed immutable content conflicts. Every UUID conflict uses an owner-scoped replay
+lookup or raises `RepositoryConflictError` without exposing another owner's row or aborting the
+caller transaction.
 
 `acknowledge_entry` and `delete_entry` require the owner, entry identity, and expected revision in
 the mutation statement. Acknowledging an already acknowledged entry is idempotent only for the same
 acknowledgment timestamp; deletion likewise replays only the same tombstone time. Deleted entries
 cannot be acknowledged or receive new delivery identities. Reads default to live entries, with an
-explicit `include_deleted` inspection path for recovery and support.
+explicit `include_deleted` inspection path for recovery and support. At the maximum revision
+(`9007199254740991`), writes that would increment it return a typed conflict before issuing an
+update; exact acknowledgment and deletion replays still return the original record.
 
 `purge_expired_entries` is a bounded, owner-scoped retention sweep. It selects only live rows whose
 `retention_expires_at` has passed, takes row locks with `SKIP LOCKED`, and records a deletion
@@ -56,8 +60,9 @@ WAL, replicas, or backups; physical erasure remains an explicit host purge and o
 `notification_delivery_identity` binds one owner-scoped immutable delivery key to one live inbox
 entry. The composite `(entry_id, owner_id)` foreign key makes a cross-owner binding
 unrepresentable. Exact registration replay returns the original identity; a changed entry or
-creation time conflicts. The key is opaque and does not encode a channel, endpoint, token, route,
-provider, or IAM subject. Retries, provider selection, and whether a delivery ever occurs remain
+creation time conflicts. Every delivery UUID conflict uses an owner-scoped replay lookup or a typed
+conflict without exposing another owner's identity or aborting the caller transaction. The key is
+opaque and does not encode a channel, endpoint, token, route, provider, or IAM subject. Retries, provider selection, and whether a delivery ever occurs remain
 in Deep.
 
 ## Public composition

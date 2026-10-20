@@ -107,7 +107,7 @@ def test_entry_exact_replay_returns_original() -> None:
         retention_expires_at=100,
     )
     assert result.entry_id == str(uuid.UUID(int=1))
-    assert "ON CONFLICT (owner_id, deduplication_key) DO NOTHING" in transaction.calls[0][1]
+    assert transaction.calls[1][2] == ("owner-1", "completion:assignment-1:1")
 
 
 def test_acknowledgment_stale_revision_conflicts() -> None:
@@ -185,22 +185,26 @@ def test_preference_revision_exhaustion_is_visible() -> None:
 def test_entry_revision_exhaustion_is_visible_for_ack_and_delete() -> None:
     repository = NotificationRepository()
     exhausted = _entry_row(revision=9007199254740991)
+    acknowledgment = ScriptedTransaction(one=[exhausted])
     with pytest.raises(RepositoryConflictError, match="exhausted"):
         repository.acknowledge_entry(
-            ScriptedTransaction(execute=[Result()], one=[exhausted]),
+            acknowledgment,
             owner_id="owner-1",
             entry_id=str(uuid.UUID(int=1)),
             expected_revision=9007199254740991,
             acknowledged_at=30,
         )
+    deletion = ScriptedTransaction(one=[exhausted])
     with pytest.raises(RepositoryConflictError, match="exhausted"):
         repository.delete_entry(
-            ScriptedTransaction(execute=[Result()], one=[exhausted]),
+            deletion,
             owner_id="owner-1",
             entry_id=str(uuid.UUID(int=1)),
             expected_revision=9007199254740991,
             deleted_at=30,
         )
+
+    assert all(call[0] == "one" for call in acknowledgment.calls + deletion.calls)
 
 
 def test_missing_insert_owner_rows_are_reported() -> None:

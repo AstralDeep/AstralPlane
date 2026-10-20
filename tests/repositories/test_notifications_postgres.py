@@ -10,6 +10,7 @@ import uuid
 import pytest
 from test_assignments_postgres import database as database
 
+from astralplane.api import create_repository_catalog
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryNotFoundError,
@@ -550,3 +551,158 @@ def test_restart_preserves_entries_and_rejects_a_stale_ack(database):
                 expected_revision=1,
                 acknowledged_at=31,
             )
+
+
+@pytest.mark.parametrize("kind", ["entry", "delivery"])
+@pytest.mark.parametrize(
+    ("owner", "key"),
+    [("owner-1", "new-key"), ("owner-2", "original-key"), ("owner-2", "new-key")],
+)
+def test_uuid_collision_is_typed_private_and_keeps_caller_transaction(
+    migrated_clone,
+    kind,
+    owner,
+    key,
+):
+    repo = create_repository_catalog().notifications
+    db = migrated_clone.database
+    identity = "40000000-0000-4000-8000-000000000001"
+    with db.transaction() as tx:
+        original = repo.create_entry(
+            tx, **entry_args(entry_id=identity, deduplication_key="original-key")
+        )
+        if kind == "delivery":
+            original = repo.register_delivery_identity(
+                tx,
+                owner_id="owner-1",
+                entry_id=original.entry_id,
+                delivery_key="original-key",
+                created_at=20,
+                delivery_id=identity,
+            )
+            target = repo.create_entry(tx, **entry_args(owner_id=owner))
+        repo.put_preferences(tx, **preference_args(owner_id=owner))
+        with pytest.raises(RepositoryConflictError) as refusal:
+            if kind == "entry":
+                repo.create_entry(
+                    tx, **entry_args(owner_id=owner, entry_id=identity, deduplication_key=key)
+                )
+            else:
+                repo.register_delivery_identity(
+                    tx,
+                    owner_id=owner,
+                    entry_id=target.entry_id,
+                    delivery_key=key,
+                    created_at=20,
+                    delivery_id=identity,
+                )
+        assert not refusal.value.metadata
+        assert refusal.value.__cause__ is None
+        assert refusal.value.__context__ is None
+        assert "owner-1" not in str(refusal.value)
+        assert identity not in str(refusal.value)
+        assert repo.get_preferences(tx, owner_id=owner).revision == 1
+    with db.transaction() as tx:
+        assert repo.get_preferences(tx, owner_id=owner).revision == 1
+        if kind == "entry":
+            assert repo.get_entry(tx, owner_id="owner-1", entry_id=identity) == original
+            assert (
+                repo.get_entry_by_deduplication_key(
+                    tx,
+                    owner_id=owner,
+                    deduplication_key=key,
+                )
+                is None
+            )
+        else:
+            assert (
+                repo.get_delivery_identity(
+                    tx,
+                    owner_id="owner-1",
+                    delivery_id=identity,
+                )
+                == original
+            )
+            assert (
+                repo.list_delivery_identities(
+                    tx, owner_id=owner, entry_id=target.entry_id, limit=10
+                )
+                == ()
+            )
+
+
+@pytest.mark.parametrize("kind", ["entry", "delivery"])
+def test_unhandled_uuid_conflict_rolls_back_only_the_callers_work(migrated_clone, kind):
+    repo = create_repository_catalog().notifications
+    db = migrated_clone.database
+    identity = "40000000-0000-4000-8000-000000000001"
+    with db.transaction() as tx:
+        original = repo.create_entry(tx, **entry_args(entry_id=identity))
+        if kind == "delivery":
+            repo.register_delivery_identity(
+                tx,
+                owner_id="owner-1",
+                entry_id=original.entry_id,
+                delivery_key="original-key",
+                created_at=20,
+                delivery_id=identity,
+            )
+    with pytest.raises(RepositoryConflictError), db.transaction() as tx:
+        repo.put_preferences(tx, **preference_args())
+        if kind == "entry":
+            repo.create_entry(tx, **entry_args(entry_id=identity, deduplication_key="new-key"))
+        else:
+            repo.register_delivery_identity(
+                tx,
+                owner_id="owner-1",
+                entry_id=original.entry_id,
+                delivery_key="new-key",
+                created_at=20,
+                delivery_id=identity,
+            )
+    with db.transaction() as tx:
+        assert repo.get_preferences(tx, owner_id="owner-1") is None
+        assert repo.get_entry(tx, owner_id="owner-1", entry_id=identity) == original
+
+
+@pytest.mark.parametrize(
+    ("operation", "field"),
+    [("acknowledge_entry", "acknowledged_at"), ("delete_entry", "deleted_at")],
+)
+@pytest.mark.parametrize("revision", [9007199254740990, 9007199254740991])
+def test_revision_boundary_is_typed_and_preserves_replays(
+    migrated_clone,
+    operation,
+    field,
+    revision,
+):
+    repo = create_repository_catalog().notifications
+    db = migrated_clone.database
+    with db.transaction() as tx:
+        original = repo.create_entry(tx, **entry_args())
+        tx.execute(
+            "UPDATE notification_inbox_entry SET revision=%s WHERE entry_id=%s",
+            (revision, original.entry_id),
+        )
+        values = dict(
+            owner_id="owner-1",
+            entry_id=original.entry_id,
+            expected_revision=revision,
+            **{field: 30},
+        )
+        if revision == 9007199254740991:
+            with pytest.raises(RepositoryConflictError, match="exhausted"):
+                getattr(repo, operation)(tx, **values)
+            unchanged = repo.get_entry(tx, owner_id="owner-1", entry_id=original.entry_id)
+            assert unchanged.revision == revision
+            assert getattr(unchanged, field) is None
+        else:
+            changed = getattr(repo, operation)(tx, **values)
+            assert changed.revision == 9007199254740991
+            assert getattr(changed, field) == 30
+            values["expected_revision"] = 9007199254740991
+            assert getattr(repo, operation)(tx, **values) == changed
+            values[field] = 31
+            with pytest.raises(RepositoryConflictError):
+                getattr(repo, operation)(tx, **values)
+        assert repo.put_preferences(tx, **preference_args()).revision == 1
