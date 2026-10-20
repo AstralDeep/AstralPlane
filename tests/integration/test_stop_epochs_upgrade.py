@@ -21,7 +21,7 @@ from tests.integration.test_session_issuer_upgrade import retained_rows
 
 def predecessor(database):
     registry = m.MigrationRegistry(
-        m.MIGRATION_REGISTRY.migrations[:-2],
+        m.MIGRATION_REGISTRY.migrations[:-3],
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.002"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_002_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -49,7 +49,7 @@ def at_089_003(database, registry=None):
         registry
         if registry is not None
         else m.MigrationRegistry(
-            m.MIGRATION_REGISTRY.migrations[:-1],
+            m.MIGRATION_REGISTRY.migrations[:-2],
             current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.003"),
             current_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
             predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -112,7 +112,7 @@ def test_stop_partial_migration_rolls_back_and_can_retry(empty_postgres_schema):
 
     registry = m.MigrationRegistry(
         (
-            *m.MIGRATION_REGISTRY.migrations[:-2],
+            *m.MIGRATION_REGISTRY.migrations[:-3],
             replace(m.PLANE_SCHEMA_089_003_MIGRATION, operation=interrupted),
         ),
         current_schema_verifier=m._verify_current_plane_schema,

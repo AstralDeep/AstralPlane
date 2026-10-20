@@ -44,6 +44,7 @@ from astralplane.api import (
     create_knowledge_repository,
     create_maintenance_repository,
     create_mesh_enrollment_repository,
+    create_notification_repository,
     create_offline_grant_repository,
     create_outbox_store,
     create_personalization_graph_repository,
@@ -111,6 +112,7 @@ from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
+from astralplane.repositories.notifications import NotificationRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -249,6 +251,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_work_admission_repository, WorkAdmissionRepository),
         (create_maintenance_repository, MaintenanceRepository),
         (create_mesh_enrollment_repository, MeshEnrollmentRepository),
+        (create_notification_repository, NotificationRepository),
         (create_tracked_job_repository, TrackedJobRepository),
         (create_quality_audit_repository, QualityAuditRepository),
         (create_harness_cleanup_repository, HarnessCleanupRepository),
@@ -305,6 +308,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "knowledge",
         "maintenance",
         "mesh_enrollment",
+        "notifications",
         "offline_grants",
         "outbox",
         "preferences",

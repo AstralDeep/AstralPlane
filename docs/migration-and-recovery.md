@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -304,6 +304,42 @@ rollback checks described above. Failed DDL rolls back with registry metadata.
 `089.004` revision/digest intact. An `089.003` binary is not compatible merely
 because these tables are additive.
 
+### `089.005` notification records and recovery
+
+This additive edge requires the exact `089.004` registry digest
+`08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc`
+and its catalog. It adds three independent owner-scoped tables and alters nothing that
+exists. Current catalog digest is
+`2aae4fa6281bda3ca690ce9eb174a5e43b454f0862b0544129bd537eb67bb798`.
+
+`notification_preference` stores explicit per-channel/per-event booleans for in-app, inbox,
+and push delivery of completion, failure, and required-action events, plus a monotonic revision
+and host-supplied update time. `notification_inbox_entry` stores deduplication identity, a
+bounded event kind and source reference, an opaque content format, ciphertext and its SHA-256,
+creation/retention times, an acknowledgment time, a deletion tombstone, and a monotonic revision.
+`notification_delivery_identity` stores an immutable host-supplied delivery key for one live
+inbox entry. A composite owner/entry foreign key prevents a delivery identity from referencing
+another owner's entry.
+
+Creation is deduplicated by `(owner_id, deduplication_key)`; an exact replay returns the
+original entry, including a tombstone, while changed immutable content conflicts. Preferences,
+acknowledgment, and deletion use owner plus expected-revision fences in the mutation statement.
+The retention sweep is owner-scoped, bounded, and uses `FOR UPDATE SKIP LOCKED`; it only
+tombstones entries whose retention boundary has passed. Physical deletion remains an explicit
+host purge decision. Plane never decrypts content, selects a route or provider, validates IAM,
+or decides that a notification should be sent.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and rollback checks
+described above. Failed DDL rolls back with registry metadata.
+
+**Recovery.** Once this transaction commits, keep all three tables and the exact
+`089.005` revision/digest intact. An `089.004` binary is not compatible merely because these
+tables are additive. Preserve tombstones and acknowledged state for recovery inspection. A
+guarded forward repair is preferred; if the prior composition must be restored, restore the
+verified pre-upgrade PostgreSQL backup and paired durable roots together under closed admission,
+then retire restored sessions and reconcile any post-backup notification records before reopening.
+Never drop the tables, rewrite revision markers, or infer a downgrade.
+
 ### `089.002` mesh enrollment records and recovery
 
 This additive edge requires the exact `089.001` registry and catalog. It adds
@@ -457,7 +493,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.003` must carry its own pinned historical registry digest. A current `089.004` marker and
+`089.004` must carry its own pinned historical registry digest. A current `089.005` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -560,8 +596,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, and `089.003` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.004` state must carry the exact current
+   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, and `089.004` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.005` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
