@@ -161,6 +161,14 @@ admission, and awaitable results inside the transaction, which then rolls back i
 committing. See
 `docs/knowledge-scheduler-and-async-contracts.md` for the exact lifecycle and cancellation rules.
 
+Connection loss at checkout, during a statement, or during commit keeps caller-owned transaction
+custody explicit. Checkout failures raise `pool_checkout_failed` without leaking a borrow slot;
+interrupted statements raise `transaction_statement_failed`; and a lost commit acknowledgement
+raises `transaction_commit_outcome_unknown` without retrying or claiming a rollback. Every unsafe
+connection is discarded, while ordinary PostgreSQL errors keep their driver types for savepoint
+handling. See
+[connection loss and uncertain outcomes](docs/connection-loss-and-uncertain-outcomes.md).
+
 The public `work_admission` catalog member owns durable operation admission, finite hierarchical
 capacity, submission replay, execution leases, fenced terminalization, request-generation binding,
 and bounded retention. `configure()` and `load_existing_configs()` return detached snapshots;
