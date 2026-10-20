@@ -16,6 +16,8 @@ package in-process; AstralPlane does not add a service port or a second database
   `089.001`, `089.002`, `089.003`, `089.004`, and `089.005`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
+- Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
+  externally managed PostgreSQL primary and its paired blob roots
 
 `create_postgres_runtime(...)` owns psycopg2 driver-pool construction, bounded checkout, runtime
 composition, and guarded startup. On a truly empty application schema it first installs the
@@ -242,6 +244,10 @@ Upgrade and recovery procedures for every revision are in
 a restored PostgreSQL/blob state as writable, including host-owned election and admission, are in
 [recovery and writable readiness](docs/recovery-and-writable-readiness.md). Local
 `PlaneHealth.ready` alone is not a writable-readiness decision.
+
+The neutral, read-only fence evidence for an externally managed PostgreSQL primary and its
+paired blob roots, including primary loss, reconnect, stale writer, and promoted-endpoint
+refusal, is in [endpoint failover readiness](docs/endpoint-failover-readiness.md).
 
 ## Error diagnostics
 

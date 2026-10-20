@@ -55,6 +55,16 @@ from astralplane.database.pool import ConnectionPool, DriverPool, PoolSnapshot
 from astralplane.database.postgres import create_postgres_driver_pool
 from astralplane.database.revision import SCHEMA_REVISION
 from astralplane.database.transaction import PlaneDatabase
+from astralplane.endpoint_readiness import (
+    ENDPOINT_READINESS_CONTRACT_VERSION,
+    EndpointFence,
+    EndpointFenceError,
+    EndpointReadiness,
+    EndpointReadinessError,
+    EndpointReadinessState,
+    EndpointTopology,
+    inspect_endpoint_readiness,
+)
 from astralplane.errors import InitializationError
 from astralplane.immutable_bundle_store import (
     ArtifactCollisionError,
@@ -769,6 +779,7 @@ def create_postgres_runtime(
 
 
 __all__ = (
+    "ENDPOINT_READINESS_CONTRACT_VERSION",
     "GENERATED_AGENT_BUNDLE_CONTRACT",
     "GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
@@ -805,6 +816,12 @@ __all__ = (
     "BundleRecoveryResult",
     "DraftAgentRecord",
     "DraftPublicationRecord",
+    "EndpointFence",
+    "EndpointFenceError",
+    "EndpointReadiness",
+    "EndpointReadinessError",
+    "EndpointReadinessState",
+    "EndpointTopology",
     "ExecutionFence",
     "FinalizedBundle",
     "GeneratedAgentPublicationIntent",
@@ -892,6 +909,7 @@ __all__ = (
     "generated_agent_publication_recovery_operation_binding",
     "initialize_empty_database",
     "inspect_baseline_compatibility",
+    "inspect_endpoint_readiness",
     "paths_for",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",
