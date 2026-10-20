@@ -158,6 +158,10 @@ def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
+
+
 def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.stop_epochs.get(transaction, owner_id=_OWNER)
 
@@ -669,6 +673,23 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "notifications",
+        api.create_notification_repository,
+        "src/astralplane/repositories/notifications.py",
+        _notifications,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "revision = %s"),
+        ("ON CONFLICT", "deduplication_key"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+            "RepositoryDataError",
+        ),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -1097,6 +1118,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_mesh_enrollment_postgres:test_invitation_lifecycle_is_atomic_and_single_use",
         "tests.repositories.test_mesh_enrollment_postgres:test_concurrent_invitation_consumption_admits_exactly_one",
         "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
+    ),
+    BehavioralEvidence(
+        "notifications",
+        "tests.test_notifications_089_005:test_preferences_read_is_owner_scoped",
+        "tests.test_notifications_089_005:test_entry_exact_replay_returns_original",
+        "tests.test_notifications_089_005:test_acknowledgment_stale_revision_conflicts",
+        "tests.test_notifications_089_005:test_deleted_entry_cannot_be_acknowledged",
     ),
     BehavioralEvidence(
         "offline_grants",

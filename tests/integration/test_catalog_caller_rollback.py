@@ -1042,6 +1042,57 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_notifications(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.notifications.put_preferences(
+        transaction,
+        owner_id=_OWNER,
+        expected_revision=0,
+        in_app_completion=True,
+        in_app_failure=True,
+        in_app_required_action=True,
+        inbox_completion=True,
+        inbox_failure=True,
+        inbox_required_action=True,
+        push_completion=False,
+        push_failure=False,
+        push_required_action=False,
+        updated_at=1,
+    )
+    body = b"opaque-rollback-notification"
+    catalog.notifications.create_entry(
+        transaction,
+        owner_id=_OWNER,
+        event_kind="completion",
+        source_id="rollback-source",
+        deduplication_key="rollback-notification",
+        content_format="astral.notification/v1",
+        content_ciphertext=body,
+        content_sha256=hashlib.sha256(body).hexdigest(),
+        created_at=1,
+        retention_expires_at=100,
+        entry_id="74000000-0000-4000-8000-000000000090",
+    )
+    catalog.notifications.register_delivery_identity(
+        transaction,
+        owner_id=_OWNER,
+        entry_id="74000000-0000-4000-8000-000000000090",
+        delivery_key="rollback-delivery",
+        created_at=1,
+        delivery_id="74000000-0000-4000-8000-000000000091",
+    )
+
+
+def _observe_notifications(transaction: Transaction) -> object:
+    return tuple(
+        transaction.fetch_one(f"SELECT COUNT(*) AS value FROM {table}")["value"]
+        for table in (
+            "notification_preference",
+            "notification_inbox_entry",
+            "notification_delivery_identity",
+        )
+    )
+
+
 def _write_workspaces(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.workspaces.canvas.create(
         transaction,
@@ -1204,6 +1255,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "notifications",
+        _write_notifications,
+        _observe_notifications,
+        (1, 1, 1),
+        (0, 0, 0),
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1351,7 +1409,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 42
+    assert len(applicable_keys) == len(set(applicable_keys)) == 43
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

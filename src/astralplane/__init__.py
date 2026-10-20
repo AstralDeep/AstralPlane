@@ -45,6 +45,7 @@ from astralplane.api import (
     create_knowledge_repository,
     create_maintenance_repository,
     create_mesh_enrollment_repository,
+    create_notification_repository,
     create_offline_grant_repository,
     create_outbox_store,
     create_personalization_graph_repository,
@@ -177,6 +178,13 @@ from astralplane.repositories.generated_agent_publications import (
     generated_agent_publication_paths,
     generated_agent_publication_recovery_operation_binding,
 )
+from astralplane.repositories.notifications import (
+    NotificationDeliveryIdentity,
+    NotificationEventKind,
+    NotificationInboxEntry,
+    NotificationPreferenceRecord,
+    NotificationRepository,
+)
 from astralplane.repositories.stop_epochs import (
     OwnerStoppedError,
     OwnerStopRecord,
@@ -271,6 +279,11 @@ __all__ = (
     "MigrationRegistry",
     "MigrationReport",
     "MigrationRunner",
+    "NotificationDeliveryIdentity",
+    "NotificationEventKind",
+    "NotificationInboxEntry",
+    "NotificationPreferenceRecord",
+    "NotificationRepository",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
@@ -333,6 +346,7 @@ __all__ = (
     "create_knowledge_repository",
     "create_maintenance_repository",
     "create_mesh_enrollment_repository",
+    "create_notification_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",
