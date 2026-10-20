@@ -122,6 +122,7 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -233,6 +234,7 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(predecessor):
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
 
 
@@ -356,6 +358,7 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(prede
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
     for _ in range(2):
         with db.transaction() as tx:

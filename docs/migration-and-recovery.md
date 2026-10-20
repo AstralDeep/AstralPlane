@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -309,7 +309,7 @@ because these tables are additive.
 This additive edge requires the exact `089.004` registry digest
 `08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc`
 and its catalog. It adds three independent owner-scoped tables and alters nothing that
-exists. Current catalog digest is
+exists. Its historical catalog digest is
 `2aae4fa6281bda3ca690ce9eb174a5e43b454f0862b0544129bd537eb67bb798`.
 
 `notification_preference` stores explicit per-channel/per-event booleans for in-app, inbox,
@@ -339,6 +339,49 @@ guarded forward repair is preferred; if the prior composition must be restored, 
 verified pre-upgrade PostgreSQL backup and paired durable roots together under closed admission,
 then retire restored sessions and reconcile any post-backup notification records before reopening.
 Never drop the tables, rewrite revision markers, or infer a downgrade.
+
+### `089.006` Atlas pages and recovery
+
+This additive edge requires the exact `089.005` registry digest
+`98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0` and its
+catalog. Current catalog digest is
+`88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48`.
+It adds `atlas_page` and `atlas_page_command` and alters nothing that
+exists. The page table stores a stable owner/page identity, exact optional
+project, live slug, current revision, bounded source references, opaque
+host-ciphertext, its SHA-256 digest, caller timestamps, and a content-free
+tombstone. The command table stores immutable create/delete receipts under an
+owner-scoped command identity and request digest.
+
+The migration infers no existing page, imports no legacy memory/envelope rows,
+and does not rewrite preferences, notes, knowledge, or audit state. A same-name
+foreign object, damaged predecessor catalog, partial DDL, or failed stamp rolls
+back or fails closed before adoption. Repeat startup verifies both tables,
+indexes, constraints, and lifecycle/immutability triggers and performs no write.
+Reads, listings, and writes carry the owner predicate in SQL. Deletion advances
+the current revision under its fence, erases ciphertext and source metadata, and
+leaves a terminal tombstone; replaying the original create or delete command
+cannot restore content. Editing, revision history, and links are not part of
+this edge or its repository.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. Failed DDL rolls back with registry
+metadata. The populated upgrade, interruption, namesake, and current-catalog
+damage cases are exercised by `tests/integration/test_atlas_pages_upgrade.py`;
+owner, replay, pagination, concurrency, and tombstone behavior are exercised by
+`tests/repositories/test_atlas_pages_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.006` revision/digest intact. An `089.005` binary is not compatible merely
+because these tables are additive. Prefer a reviewed forward repair through the
+guarded registry. If the previous composition must be restored, close admission
+and restore the verified pre-upgrade PostgreSQL backup and every paired durable
+root together with the exact prior application and unchanged keys. Account for
+post-backup Atlas creates and deletes, retire restored sessions through the
+governed recovery contract, and reconcile uncertain effects before reopening
+admission. Never drop the tables, rewrite revision/digest markers, restore a
+tombstone to a live page, or execute ad-hoc downgrade SQL. A restored database
+snapshot cannot recover content that was never stored in Plane.
 
 ### `089.002` mesh enrollment records and recovery
 
@@ -493,7 +536,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.004` must carry its own pinned historical registry digest. A current `089.005` marker and
+`089.005` must carry its own pinned historical registry digest. A current `089.006` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -596,8 +639,8 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, and `089.004` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.005` state must carry the exact current
+   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, and `089.005` states must carry their exact pinned historical registry digests and
+   match their pinned predecessor catalogs. A restored `089.006` state must carry the exact current
    registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

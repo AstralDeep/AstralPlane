@@ -96,6 +96,16 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas_pages import (
+    AtlasPageBatch,
+    AtlasPageChange,
+    AtlasPageCommandReceipt,
+    AtlasPageCreateCommand,
+    AtlasPageCursor,
+    AtlasPageDeleteCommand,
+    AtlasPageRecord,
+    AtlasPageRepository,
+)
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
@@ -181,6 +191,10 @@ def create_history_repository() -> HistoryRepository:
 
 def create_assignment_repository() -> AssignmentRepository:
     return AssignmentRepository()
+
+
+def create_atlas_page_repository() -> AtlasPageRepository:
+    return AtlasPageRepository()
 
 
 def create_identity_repository() -> IdentityRepository:
@@ -416,6 +430,7 @@ class RepositoryCatalog:
     history: HistoryRepository
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
+    atlas_pages: AtlasPageRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -491,6 +506,7 @@ class RepositoryCatalog:
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
+                "atlas_pages": self.atlas_pages,
             }
         )
 
@@ -521,6 +537,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
+        atlas_pages=create_atlas_page_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -766,6 +783,14 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasPageBatch",
+    "AtlasPageChange",
+    "AtlasPageCommandReceipt",
+    "AtlasPageCreateCommand",
+    "AtlasPageCursor",
+    "AtlasPageDeleteCommand",
+    "AtlasPageRecord",
+    "AtlasPageRepository",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",
@@ -818,6 +843,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_page_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
     "create_audit_repository",

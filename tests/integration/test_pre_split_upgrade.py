@@ -270,24 +270,22 @@ def test_pre_split_audit_classes_match_historical_product_contract(
         ("00000000-0000-4000-8000-000000000403", "fixture-owner-b", "auth"),
     )
     statement = (
-        "SELECT event_id::text, actor_user_id, event_class "
-        "FROM audit_events ORDER BY event_id"
+        "SELECT event_id::text, actor_user_id, event_class FROM audit_events ORDER BY event_id"
     )
     assert _query_all(fixture.connection, statement) == expected
     inventory = json.loads(
-        (Path(__file__).parents[1] / "fixtures/pre_split/database.json").read_text(
-            encoding="utf-8"
-        )
+        (Path(__file__).parents[1] / "fixtures/pre_split/database.json").read_text(encoding="utf-8")
     )
-    assert tuple(
-        (row["eventId"], row["ownerId"], row["eventClass"])
-        for row in inventory["records"]["audit"]
-    ) == expected
+    assert (
+        tuple(
+            (row["eventId"], row["ownerId"], row["eventClass"])
+            for row in inventory["records"]["audit"]
+        )
+        == expected
+    )
     before = _representative_snapshot(fixture.connection)
 
-    _current_runner(fixture).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
 
     assert _query_all(fixture.connection, statement) == expected
     assert _representative_snapshot(fixture.connection) == before
@@ -338,6 +336,7 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
     assert not report.already_current
     assert _metadata(fixture.connection) == {
@@ -592,6 +591,7 @@ def test_transactional_failure_rolls_back_both_edges_and_retry_recovers(
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
     assert _metadata(fixture.connection)["revision"] == CURRENT_DATA_PLANE_REVISION.schema_revision
 
@@ -708,6 +708,7 @@ def test_075_failure_rolls_back_backend_column_and_forward_retry_recovers(
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
+        "astralplane-089-atlas-pages",
     )
     assert _query_one(
         fixture.connection,
@@ -747,11 +748,13 @@ def test_079_upgrades_exact_075_data_and_repeats_without_replaying_ddl(
         schema_revision="079.001",
         migration_digest=historical_registry.digest,
         read_compatible_from=tuple(
-            revision for revision in CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            revision
+            for revision in CURRENT_DATA_PLANE_REVISION.read_compatible_from
             if revision != "079.001"
         ),
         accepted_predecessor_digests=tuple(
-            pair for pair in CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            pair
+            for pair in CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
             if pair[0] != "079.001"
         ),
     )
@@ -821,11 +824,26 @@ def test_documented_joint_restore_returns_to_066_then_reapplies_upgrade(
     pre_split_postgres: _LoadedFixture,
     tmp_path: Path,
 ) -> None:
+    from astralplane.repositories.atlas_pages import AtlasPageDeleteCommand
+    from tests.integration.test_atlas_pages_upgrade import page_command
+
     fixture = pre_split_postgres
     baseline_snapshot = _representative_snapshot(fixture.connection)
     baseline_digest = fixture.report.fixture_digest
     original_blob_evidence = verify_blob_fixture(fixture.blob_root)
     _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+
+    pages = create_repository_catalog().atlas_pages
+    command = page_command()
+    with fixture.database.transaction() as tx:
+        pages.create_page(tx, command=command)
+        tombstone = pages.delete_page(
+            tx,
+            command=AtlasPageDeleteCommand(
+                command.owner_id, str(uuid.uuid4()), command.page_id, 1, 40
+            ),
+        )
+        assert tombstone.page.deleted and tombstone.page.content is None
 
     drop_postgres_fixture(fixture.connection, schema=fixture.schema)
     restored_blob_root = (tmp_path / "restored-pre-split-blobs").resolve()
@@ -850,3 +868,7 @@ def test_documented_joint_restore_returns_to_066_then_reapplies_upgrade(
     assert recovered.source_revision == "066.001"
     assert recovered.target_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
     assert _metadata(fixture.connection)["astralplane_migration_digest"] == MIGRATION_DIGEST
+    with fixture.database.transaction() as tx:
+        assert tx.fetch_all("SELECT * FROM atlas_page") == ()
+        assert tx.fetch_all("SELECT * FROM atlas_page_command") == ()
+        assert tx.fetch_all("SELECT * FROM notification_inbox_entry") == ()

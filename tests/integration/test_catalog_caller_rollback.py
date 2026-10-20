@@ -26,6 +26,7 @@ from astralplane.contracts import OutboxEntry, Transaction
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
+from astralplane.repositories.atlas_pages import AtlasPageCreateCommand
 from astralplane.repositories.audit import AuditEvent
 from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
@@ -1026,6 +1027,22 @@ def _write_work_admission(catalog: api.RepositoryCatalog, transaction: Transacti
     )
 
 
+def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.atlas_pages.create_page(
+        transaction,
+        command=AtlasPageCreateCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110079",
+            page_id="11111111-1111-4111-8111-111111110080",
+            project_id="rollback-atlas-project",
+            slug="rollback-atlas-page",
+            sources=("synthetic/rollback",),
+            content=b"synthetic-opaque-atlas-ciphertext",
+            created_at=10,
+        ),
+    )
+
+
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.completion_wake.register_subscription(
         transaction,
@@ -1402,6 +1419,17 @@ ROLLBACK_CASES = (
         1,
         0,
     ),
+    RollbackCase(
+        "atlas_pages",
+        _write_atlas_pages,
+        _count(
+            "atlas_page",
+            "page_id",
+            "11111111-1111-4111-8111-111111110080",
+        ),
+        1,
+        0,
+    ),
 )
 
 
@@ -1409,7 +1437,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 43
+    assert len(applicable_keys) == len(set(applicable_keys)) == 44
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

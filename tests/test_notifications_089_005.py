@@ -21,9 +21,7 @@ from astralplane.repositories.notifications import (
 from tests.repositories._support import Result, ScriptedTransaction
 
 OLD_089_004_REGISTRY_DIGEST = "08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc"
-CURRENT_089_005_REGISTRY_DIGEST = (
-    "98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0"
-)
+CURRENT_089_005_REGISTRY_DIGEST = "98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0"
 CURRENT_089_005_STRUCTURE_DIGEST = (
     "2aae4fa6281bda3ca690ce9eb174a5e43b454f0862b0544129bd537eb67bb798"
 )
@@ -285,13 +283,11 @@ def test_089_005_notification_edge_is_pinned_to_the_exact_089_004_registry() -> 
 
     edge = canonical.PLANE_SCHEMA_089_005_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
     assert edge.name == "astralplane-089-notification-records"
     assert edge.source_revisions == ("089.004",)
     assert edge.target_revision == "089.005"
-    assert edge.checksum == canonical._statements_checksum(
-        NOTIFICATION_SCHEMA_STATEMENTS
-    )
+    assert edge.checksum == canonical._statements_checksum(NOTIFICATION_SCHEMA_STATEMENTS)
 
     ddl = "\n".join(NOTIFICATION_SCHEMA_STATEMENTS)
     for table in (
@@ -314,18 +310,20 @@ def test_089_005_notification_edge_is_pinned_to_the_exact_089_004_registry() -> 
     assert canonical.PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
         "e3f2988fea4b6e8cf7edd9064cec67b3d0665f0863de40bbd8332ff9e7f0a9f3"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.005"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.006"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.004") == (
         OLD_089_004_REGISTRY_DIGEST
     )
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.004"] == (
         "4be9c1e2ab9fe95472bd1a1a986bcfc578984071cd4c7de41397b39af6851c22",
     )
-    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == CURRENT_089_005_STRUCTURE_DIGEST
-    assert canonical.MIGRATION_DIGEST == CURRENT_089_005_REGISTRY_DIGEST
-    assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.005"] == (
+        CURRENT_089_005_STRUCTURE_DIGEST,
+    )
+    assert canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST == CURRENT_089_005_REGISTRY_DIGEST
+    assert canonical.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM == (
         "e6fe3fdb7a7c87498589b5d9eb11ce7a9c98e6a42619127f585e6c23ca76e1b3"
     )
-    assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
+    assert canonical.PLANE_SCHEMA_089_005_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
         "0cf15dc0f990fc103169bf0d1c2137b434cfa8ecf63922aed6741092778918f4"
     )

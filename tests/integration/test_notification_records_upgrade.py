@@ -25,7 +25,11 @@ def at_089_004(database, registry=None):
         registry
         if registry is not None
         else m.MigrationRegistry(
-            m.MIGRATION_REGISTRY.migrations[:-1],
+            tuple(
+                edge
+                for edge in m.MIGRATION_REGISTRY.migrations
+                if edge.target_revision <= "089.004"
+            ),
             current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.004"),
             current_schema_verifier_checksum=m.PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM,
             predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -39,20 +43,52 @@ def at_089_004(database, registry=None):
         m.CURRENT_DATA_PLANE_REVISION,
         schema_revision="089.004",
         migration_digest=capped.digest,
-        read_compatible_from=m.CURRENT_DATA_PLANE_REVISION.read_compatible_from[:-1],
-        accepted_predecessor_digests=m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests[
-            :-1
-        ],
+        read_compatible_from=tuple(
+            value
+            for value in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            if value < "089.004"
+        ),
+        accepted_predecessor_digests=tuple(
+            pair
+            for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if pair[0] < "089.004"
+        ),
     )
     return m.MigrationRunner(database, revision=revision, registry=capped)
 
 
-def current(database, registry=m.MIGRATION_REGISTRY):
-    return m.MigrationRunner(
-        database,
-        revision=m.CURRENT_DATA_PLANE_REVISION,
-        registry=registry,
+def current(database, registry=None):
+    capped = (
+        registry
+        if registry is not None
+        else m.MigrationRegistry(
+            tuple(
+                edge
+                for edge in m.MIGRATION_REGISTRY.migrations
+                if edge.target_revision <= "089.005"
+            ),
+            current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
+            current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
+            predecessor_schema_verifier=m._verify_predecessor_plane_schema,
+            predecessor_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+        )
     )
+    revision = replace(
+        m.CURRENT_DATA_PLANE_REVISION,
+        schema_revision="089.005",
+        migration_digest=capped.digest,
+        read_compatible_from=tuple(
+            value
+            for value in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from
+            if value < "089.005"
+        ),
+        accepted_predecessor_digests=tuple(
+            pair
+            for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+            if pair[0] < "089.005"
+        ),
+    )
+    return m.MigrationRunner(database, revision=revision, registry=capped)
 
 
 def populated_predecessor(db):
@@ -100,9 +136,7 @@ def test_notification_populated_upgrade_preserves_rows_and_repeats(empty_postgre
         ):
             assert tx.fetch_all(f"SELECT * FROM {table}") == ()
     assert current(db).run(expected_revision="089.005").already_current
-    assert BaselineMigrationRunner(db, current(db)).run(
-        expected_revision="089.005"
-    ).already_current
+    assert BaselineMigrationRunner(db, current(db)).run(expected_revision="089.005").already_current
     with pytest.raises(SchemaRevisionError):
         at_089_004(db).run(expected_revision="089.004")
 
@@ -117,27 +151,28 @@ def test_notification_partial_migration_rolls_back_and_can_retry(empty_postgres_
 
     registry = m.MigrationRegistry(
         (
-            *m.MIGRATION_REGISTRY.migrations[:-1],
+            *tuple(
+                edge
+                for edge in m.MIGRATION_REGISTRY.migrations
+                if edge.target_revision <= "089.004"
+            ),
             replace(m.PLANE_SCHEMA_089_005_MIGRATION, operation=interrupted),
         ),
-        current_schema_verifier=m._verify_current_plane_schema,
-        current_schema_verifier_checksum=m.CURRENT_SCHEMA_VERIFIER_CHECKSUM,
+        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
+        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
-        predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+        predecessor_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic notification migration interruption"):
         current(db, registry).run(expected_revision="089.005")
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert (
-            tx.fetch_one(
-                "SELECT to_regclass('notification_preference') AS relation"
-            )["relation"]
+            tx.fetch_one("SELECT to_regclass('notification_preference') AS relation")["relation"]
             is None
         )
         assert (
-            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.004"
+            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.004"
         )
     assert current(db).run(expected_revision="089.005").applied_steps == (
         "astralplane-089-notification-records",
@@ -165,12 +200,9 @@ def test_notification_namesake_is_not_adopted(empty_postgres_schema):
         current(db).run(expected_revision="089.005")
     with db.transaction() as tx:
         assert (
-            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.004"
+            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.004"
         )
         assert (
-            tx.fetch_one(
-                "SELECT to_regclass('notification_inbox_entry') AS relation"
-            )["relation"]
+            tx.fetch_one("SELECT to_regclass('notification_inbox_entry') AS relation")["relation"]
             is None
         )
