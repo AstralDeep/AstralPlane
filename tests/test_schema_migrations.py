@@ -666,7 +666,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
     from astralplane.database.scheduler_policy_schema import SCHEDULER_POLICY_SCHEMA_STATEMENTS
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-8] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-9] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -707,7 +707,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     )
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-7] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-8] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,7 +732,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.006"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
@@ -751,7 +751,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
     )
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
-    assert canonical.MIGRATION_REGISTRY.migrations[-6] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-7] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
@@ -823,9 +823,9 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.006"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48"
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (
@@ -866,9 +866,9 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
         canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.006"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48"
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("completion_subscription", "wake_receipt"):
@@ -905,10 +905,59 @@ def test_089_006_atlas_page_edge_is_pinned_to_the_exact_089_005_registry() -> No
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.005") == (
         canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.006"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("atlas_page", "atlas_page_command"):
         assert f"('{table}')" in query_tables
+
+def test_089_007_capability_publication_edge_is_pinned_to_the_exact_089_006_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.capability_publication_schema import (
+        CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS,
+    )
+
+    edge = canonical.PLANE_SCHEMA_089_007_MIGRATION
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert edge.name == "astralplane-089-capability-publications"
+    assert edge.source_revisions == ("089.006",)
+    assert edge.target_revision == "089.007"
+    assert edge.checksum == canonical._statements_checksum(
+        CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS
+    )
+
+    ddl = "\n".join(CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS)
+    assert "CREATE TABLE capability_publication" in ddl
+    assert "PRIMARY KEY (owner_id, capability_id, audience_id)" in ddl
+    assert "metadata_ciphertext TEXT NOT NULL" in ddl
+    assert "metadata_digest TEXT NOT NULL CHECK(metadata_digest ~ '^[0-9a-f]{64}$')" in ddl
+    assert "publication_state IN ('published', 'withdrawn', 'expired')" in ddl
+    assert "isfinite(published_at) AND isfinite(expires_at) AND expires_at > published_at" in ddl
+    assert "CREATE INDEX capability_publication_owner_live" in ddl
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+    assert "REFERENCES" not in ddl
+
+    assert canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST == (
+        "1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1"
+    )
+    assert canonical.PLANE_SCHEMA_089_006_SCHEMA_VERIFIER_CHECKSUM == (
+        "6911bade08880589f3a7de5a5654412ce14baa207b451d611fa41a1c27aaabed"
+    )
+    assert canonical.PLANE_SCHEMA_089_006_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
+        "6415846f481719dc158cde3940668df747b7f3b80a49474e0d8ce3cbca640d48"
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.006") == (
+        canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.007"
+    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
+        "f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d"
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    assert "('capability_publication')" in query_tables
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.006"] == (
+        "88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48",
+    )
 
 
 class _NoStructure:

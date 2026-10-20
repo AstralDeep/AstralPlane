@@ -182,6 +182,18 @@ def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _capability_publications(
+    catalog: api.RepositoryCatalog,
+    transaction: FailingExecutor,
+) -> None:
+    catalog.capability_publications.get(
+        transaction,
+        owner_id=_OWNER,
+        capability_id="capability-1",
+        audience_id="audience-1",
+    )
+
+
 def _offline_grants(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.offline_grants.get_grant(
         transaction,
@@ -932,6 +944,21 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("idempotency_key", "replay"),
         None,
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),    RepositoryContract(
+        "capability_publications",
+        api.create_capability_publication_repository,
+        "src/astralplane/repositories/capability_publications.py",
+        _capability_publications,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "state_revision = %s", "publication_state = 'published'"),
+        ("ON CONFLICT", "replay", "capability publication revision is stale"),
+        None,
+        (
+            "CapabilityPublicationConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryDataError",
+        ),
     ),
     RepositoryContract(
         "atlas_pages",
@@ -1282,6 +1309,16 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
         "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
         "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
+    ),    BehavioralEvidence(
+        "capability_publications",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_owner_scope_and_active_reads_never_cross_owners",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_exact_publish_replay_is_idempotent_and_changed_replay_conflicts",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_stale_withdraw_and_concurrent_first_publish_are_fenced",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_caller_failure_rolls_back_and_restart_reads_durable_state",
     ),
     BehavioralEvidence(
         "atlas_pages",

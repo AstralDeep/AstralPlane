@@ -68,7 +68,7 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "53c8a30fe6fc75d78c81a88d9e61c8c85abc3c0074abb0e41c2c21e2731c9815"
+          "sha256": "169710721d2efbea26d916268281f1f2c683751ddf22dff940d4db2c2bb57c3c"
         }
       ],
       "task": "T075/T085",
@@ -643,7 +643,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "8c1200ea9e5936fba7038c4bff3f6e449d73874ec6a93f1db051f399a0f929da"
+          "sha256": "dc7455aae13bfbaa181acfa86330256ee97b4fb1f254a08be14dd6903e94d1e7"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -787,7 +787,7 @@
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "b2c7272a93cf618c09beb8d444b0283741f1d61c15f66b27ea2ab4c77d66357c"
+          "sha256": "76006733a5eb4f9c5220e84eabea1cf903d55ca7e2d151e5f91566ed24046cd9"
         },
         {
           "path": "tests/test_sql_parameters.py",

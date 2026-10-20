@@ -1059,6 +1059,23 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_capability_publications(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.capability_publications.publish(
+        transaction,
+        owner_id=_OWNER,
+        capability_id="rollback-capability",
+        audience_id="rollback-audience",
+        capability_revision="rollback-revision",
+        metadata_ciphertext="synthetic-rollback-ciphertext",
+        metadata_digest=_DIGEST_A,
+        published_at=_NOW,
+        expires_at=_NOW + timedelta(hours=1),
+        expected_revision=0,
+    )
+
+
 def _write_notifications(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.notifications.put_preferences(
         transaction,
@@ -1420,6 +1437,19 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "capability_publications",
+        _write_capability_publications,
+        _count(
+            "capability_publication",
+            "capability_id",
+            "rollback-capability",
+            extra_sql=" AND owner_id = %s AND audience_id = %s",
+            extra_parameters=(_OWNER, "rollback-audience"),
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
         "atlas_pages",
         _write_atlas_pages,
         _count(
@@ -1437,7 +1467,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 44
+    assert len(applicable_keys) == len(set(applicable_keys)) == 45
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

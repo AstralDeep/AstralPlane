@@ -32,6 +32,7 @@ from astralplane.api import (
     create_audit_retention_repository,
     create_authority_repository,
     create_background_task_repository,
+    create_capability_publication_repository,
     create_chat_step_repository,
     create_conversation_file_repository,
     create_credential_repository,
@@ -100,6 +101,7 @@ from astralplane.repositories.artifacts import (
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
+from astralplane.repositories.capability_publications import CapabilityPublicationRepository
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
 from astralplane.repositories.credentials import CredentialRepository
@@ -249,6 +251,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_personalization_graph_repository, PersonalizationGraphRepository),
         (create_scheduler_repository, SchedulerRepository),
         (create_background_task_repository, BackgroundTaskRepository),
+        (create_capability_publication_repository, CapabilityPublicationRepository),
         (create_work_admission_repository, WorkAdmissionRepository),
         (create_maintenance_repository, MaintenanceRepository),
         (create_mesh_enrollment_repository, MeshEnrollmentRepository),
@@ -330,6 +333,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "work_admission",
         "workspaces",
         "completion_wake",
+        "capability_publications",
         "atlas_pages",
     )
     assert first.history is not second.history

@@ -31,7 +31,11 @@ OWNER = "atlas-upgrade-owner"
 
 def prior_runner(database):
     registry = m.MigrationRegistry(
-        m.MIGRATION_REGISTRY.migrations[:-1],
+        tuple(
+            edge
+            for edge in m.MIGRATION_REGISTRY.migrations
+            if edge.target_revision <= "089.005"
+        ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -168,7 +172,10 @@ def test_populated_089_006_upgrade_preserves_rows_adds_only_atlas_tables(predece
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
     report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-atlas-pages",)
+    assert report.applied_steps == (
+        "astralplane-089-atlas-pages",
+        "astralplane-089-capability-publications",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM atlas_page") == ()
@@ -203,7 +210,10 @@ def test_interrupted_atlas_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-atlas-pages",)
+    ).applied_steps == (
+        "astralplane-089-atlas-pages",
+        "astralplane-089-capability-publications",
+    )
 
 
 def test_atlas_namesake_or_damaged_predecessor_is_refused(predecessor):
