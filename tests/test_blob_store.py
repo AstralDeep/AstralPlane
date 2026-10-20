@@ -242,8 +242,11 @@ def test_root_identity_digest_is_stable_opaque_and_tracks_relocation(
 
     third = ExplicitRootStreamingBlobStore(relocated)
     assert third.root_identity_digest != digest
-    relocated.rmdir()
-    relocated.mkdir()
+    replacement = relocated.with_name("replacement-blobs")
+    displaced = relocated.with_name("displaced-blobs")
+    replacement.mkdir()
+    relocated.rename(displaced)
+    replacement.rename(relocated)
     with pytest.raises(PlaneError) as replaced:
         _ = third.root_identity_digest
     assert replaced.value.code == "blob_path_unsafe"
