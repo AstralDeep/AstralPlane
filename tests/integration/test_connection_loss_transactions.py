@@ -95,6 +95,8 @@ def test_statement_interruption_is_typed_discarded_and_recovers(
         assert error.value.metadata == (("operation", "execute"),)
         assert isinstance(error.value.__cause__, psycopg2.Error)
         assert "server closed" not in str(error.value)
+        assert database._pool.snapshot.borrowed == 0
+        assert not database._pool._discarded
 
         with database.transaction() as transaction:
             transaction.execute(
@@ -124,6 +126,8 @@ def test_commit_interruption_is_unknown_discarded_and_recovers(
         assert error.value.code == "transaction_commit_outcome_unknown"
         assert "failed" not in str(error.value)
         assert isinstance(error.value.__cause__, psycopg2.Error)
+        assert database._pool.snapshot.borrowed == 0
+        assert not database._pool._discarded
 
         with database.transaction() as transaction:
             transaction.execute(
@@ -203,6 +207,8 @@ def test_lost_commit_acknowledgement_preserves_uncertainty_without_retry(
         assert error.value.code == "transaction_commit_outcome_unknown"
         assert driver.connections[0].commit_calls == 1
         assert driver.returned == [(driver.connections[0], True)]
+        assert pool.snapshot.borrowed == 0
+        assert not pool._discarded
         assert _probe_rows(administrator, schema) == [(20, "acknowledgement-lost")]
 
         with database.transaction() as transaction:

@@ -840,3 +840,41 @@ def test_isolation_begin_failure_restores_connection_state() -> None:
 
     assert connection.autocommit is True
     assert connection.commits == 0
+
+
+@pytest.mark.parametrize("operation", ["statement", "commit"])
+@pytest.mark.parametrize("rollback_fails", [False, True])
+@pytest.mark.parametrize("release_fails", [False, True])
+def test_discarded_transaction_releases_its_marker_and_preserves_primary_error(
+    operation: str, rollback_fails: bool, release_fails: bool
+) -> None:
+    connection = Connection()
+    connection.fail_rollback = rollback_fails
+    primary_error = RuntimeError("commit acknowledgement interrupted")
+    if operation == "commit":
+        connection.commit_error = primary_error
+    driver = DriverPool(connection)
+    driver.fail_release = release_fails
+    pool = ConnectionPool(driver)
+    database = PlaneDatabase(pool)
+    expected_error = (
+        TransactionStatementError if operation == "statement"
+        else TransactionCommitOutcomeUnknownError
+    )
+
+    with pytest.raises(expected_error) as error, database.transaction() as transaction:
+        transaction.execute("INTERRUPT" if operation == "statement" else "UPDATE")
+
+    if operation == "commit":
+        assert error.value.__cause__ is primary_error
+        assert connection.commits == 1
+    else:
+        assert isinstance(error.value.__cause__, RuntimeError)
+        assert str(error.value.__cause__) == "connection interrupted"
+        assert connection.commits == 0
+    assert connection.rollbacks == 2
+    assert driver.returned == ([] if release_fails else [(connection, True)])
+    if release_fails:
+        assert connection.closed == (3 if operation == "statement" else 1)
+    assert pool.snapshot.borrowed == 0
+    assert not pool._discarded
