@@ -216,6 +216,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
     )
     with db.transaction() as tx:

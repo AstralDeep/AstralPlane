@@ -20,7 +20,7 @@ from astralplane.repositories import (
 )
 
 MAX_REVISION: Final = 2**53 - 1
-MAX_TIME: Final = 2**63 - 1
+MAX_TIME: Final = 2**53 - 1
 MAX_CONTENT_BYTES: Final = 16384
 MAX_SOURCES: Final = 8
 MAX_SOURCE_CHARACTERS: Final = 512

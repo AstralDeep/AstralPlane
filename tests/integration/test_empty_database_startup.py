@@ -345,6 +345,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
     )
     assert second.already_current
@@ -970,6 +971,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-mesh-enrollment-records",
         "astralplane-owner-stop-epochs",
         "astralplane-089-completion-wake",
+        "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
     )
 

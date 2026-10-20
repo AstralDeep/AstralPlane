@@ -1,6 +1,6 @@
 # Atlas page contracts
 
-Schema `089.005` adds the first bounded Atlas page store behind
+Schema `089.006` adds the first bounded Atlas page store behind
 `create_atlas_page_repository()` and the `atlas_pages` catalog member. The repository stores
 opaque owner- and project-scoped page heads, exact create/delete command receipts, and terminal
 tombstones. It does not parse or encrypt content, authorize a caller, audit a command, expose a
@@ -16,7 +16,19 @@ another owner or project.
 
 The live row carries a host-sealed `content` byte string of 1 through 16,384 bytes, its SHA-256
 digest, up to eight unique source references, the current `revision` (initially `1`), and
-caller-supplied millisecond timestamps. Plane never receives a plaintext page body or an
+caller-supplied millisecond timestamps from 0 through 9,007,199,254,740,991 (the safe 53-bit integer
+maximum). All commands, detached records, receipts, and cursors enforce the same timestamp range
+before SQL.
+
+Each source reference contains 1 through 512 Unicode characters, with no edge whitespace, surrogate
+code points, or control characters other than interior tab/newline. The eight references are unique.
+PostgreSQL bounds the UTF-8 bytes of `sources::text` at 16,416: eight strings of 512 four-byte
+characters, 16 quote bytes, 14 comma/space bytes, and two bracket bytes. JSON escaping of quotes,
+backslashes, tabs, and newlines uses two bytes per character, so it cannot exceed that bound. Real
+PostgreSQL tests reach the exact maximum with distinct supplementary-plane strings and exercise all
+escaped forms.
+
+Plane never receives a plaintext page body or an
 encryption key and never interprets the ciphertext. Reads verify that the stored digest still
 matches the stored bytes and fail with `RepositoryDataError` instead of returning damaged content.
 `titles`, rendering, source validation policy, PHI checks, encryption, authorization, and audit
@@ -61,8 +73,8 @@ creating a second database or service.
 
 ## Migration and recovery
 
-The `089.004 -> 089.005` edge attests the exact predecessor registry digest
-`08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc` and complete catalog before
+The `089.005 -> 089.006` edge attests the exact predecessor registry digest
+`98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0` and complete catalog before
 creating only `atlas_page` and `atlas_page_command`. It does not rewrite any existing table or row.
 A repeat run verifies the complete current catalog and is a no-op. Partial DDL or a stamp failure
 rolls the edge back with its registry metadata; a same-name foreign object or damaged predecessor
@@ -70,7 +82,7 @@ fails before adoption.
 
 Follow the closed-admission backup, guarded upgrade, populated repeat, corruption, and rollback
 checks in [migration and recovery](migration-and-recovery.md). Once the edge commits, keep both
-tables and the exact `089.005` revision/digest intact. Prefer a reviewed forward repair. If the
+tables and the exact `089.006` revision/digest intact. Prefer a reviewed forward repair. If the
 prior composition must be restored, restore the verified PostgreSQL backup and every paired durable
 root together under closed admission, then retire restored sessions and reconcile uncertain
 effects before reopening. Never drop the tables, rewrite revision markers, or execute ad-hoc

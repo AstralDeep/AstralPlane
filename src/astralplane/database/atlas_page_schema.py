@@ -24,7 +24,7 @@ CREATE TABLE atlas_page (
     sources JSONB NOT NULL CHECK(
         jsonb_typeof(sources)='array'
         AND jsonb_array_length(sources)<=8
-        AND octet_length(sources::text)<=4096
+        AND octet_length(sources::text)<=16416
     ),
     content BYTEA,
     content_sha256 TEXT CHECK(

@@ -80,20 +80,15 @@ def test_create_read_and_list_round_trip_owner_project_and_slug(migrated_clone):
         assert created.page.content == project.content
         assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A) == created.page
         assert (
-            repo.get_page_by_slug(
-                tx, owner_id=OWNER, project_id=PROJECT, slug="kickoff"
-            )
+            repo.get_page_by_slug(tx, owner_id=OWNER, project_id=PROJECT, slug="kickoff")
             == created.page
         )
         assert repo.get_page(tx, owner_id=FOREIGN, page_id=PAGE_A) is None
         assert (
-            repo.get_page_by_slug(tx, owner_id=FOREIGN, project_id=PROJECT, slug="kickoff")
-            is None
+            repo.get_page_by_slug(tx, owner_id=FOREIGN, project_id=PROJECT, slug="kickoff") is None
         )
         assert (
-            repo.get_page_by_slug(
-                tx, owner_id=OWNER, project_id=OTHER_PROJECT, slug="kickoff"
-            )
+            repo.get_page_by_slug(tx, owner_id=OWNER, project_id=OTHER_PROJECT, slug="kickoff")
             is None
         )
         global_created = repo.create_page(tx, command=global_page)
@@ -162,9 +157,9 @@ def test_delete_erases_content_and_replay_cannot_restore_it(migrated_clone):
         assert deleted.page.deleted_at == deleted.page.updated_at == 20
         assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A) is None
         assert repo.list_pages(tx, owner_id=OWNER, project_id=PROJECT).records == ()
-        assert repo.get_page(
-            tx, owner_id=OWNER, page_id=PAGE_A, include_deleted=True
-        ) == deleted.page
+        assert (
+            repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A, include_deleted=True) == deleted.page
+        )
         replay = repo.delete_page(tx, command=removal)
         assert replay.replayed and replay.page == deleted.page
         create_replay = repo.create_page(tx, command=created_command)
@@ -180,9 +175,7 @@ def test_delete_erases_content_and_replay_cannot_restore_it(migrated_clone):
         with pytest.raises(RepositoryConflictError, match="identity already exists"):
             repo.create_page(
                 tx,
-                command=create_command(
-                    command_id=COMMAND_C, page_id=PAGE_A, slug="replacement"
-                ),
+                command=create_command(command_id=COMMAND_C, page_id=PAGE_A, slug="replacement"),
             )
         stored = tx.fetch_one(
             "SELECT content, content_sha256, sources, revision, deleted_at"
@@ -199,8 +192,7 @@ def test_delete_erases_content_and_replay_cannot_restore_it(migrated_clone):
     with migrated_clone.database.transaction() as tx:
         assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A) is None
         assert (
-            repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A, include_deleted=True)
-            == deleted.page
+            repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A, include_deleted=True) == deleted.page
         )
 
 
@@ -212,30 +204,22 @@ def test_delete_fences_revision_time_and_missing_owner(migrated_clone):
         with pytest.raises(RepositoryConflictError, match="revision changed"):
             repo.delete_page(
                 tx,
-                command=delete_command(
-                    command_id=COMMAND_B, expected_revision=2
-                ),
+                command=delete_command(command_id=COMMAND_B, expected_revision=2),
             )
         with pytest.raises(RepositoryConflictError, match="clock regressed"):
             repo.delete_page(
                 tx,
-                command=delete_command(
-                    command_id=COMMAND_B, expected_revision=1, deleted_at=9
-                ),
+                command=delete_command(command_id=COMMAND_B, expected_revision=1, deleted_at=9),
             )
         with pytest.raises(RepositoryNotFoundError):
             repo.delete_page(
                 tx,
-                command=delete_command(
-                    command_id=COMMAND_B, page_id=PAGE_B, expected_revision=1
-                ),
+                command=delete_command(command_id=COMMAND_B, page_id=PAGE_B, expected_revision=1),
             )
         with pytest.raises(RepositoryNotFoundError):
             repo.delete_page(
                 tx,
-                command=delete_command(
-                    owner_id=FOREIGN, command_id=COMMAND_B, expected_revision=1
-                ),
+                command=delete_command(owner_id=FOREIGN, command_id=COMMAND_B, expected_revision=1),
             )
         assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A).revision == 1
 
@@ -284,9 +268,7 @@ def test_list_pages_is_bounded_ordered_and_scope_bound(migrated_clone):
         assert len(combined) == 3
         exact = repo.list_pages(tx, owner_id=OWNER, project_id=PROJECT, limit=3)
         assert len(exact.records) == 3 and exact.next_cursor is None
-        assert foreign_page in repo.list_pages(
-            tx, owner_id=FOREIGN, project_id=PROJECT
-        ).records
+        assert foreign_page in repo.list_pages(tx, owner_id=FOREIGN, project_id=PROJECT).records
         for cursor in (
             AtlasPageCursor("foreign", PROJECT, first.next_cursor.created_at, PAGE_A),
             AtlasPageCursor(OWNER, OTHER_PROJECT, first.next_cursor.created_at, PAGE_A),
@@ -400,6 +382,7 @@ def test_concurrent_create_admits_exactly_one_writer(migrated_clone):
         assert tx.fetch_one("SELECT count(*) AS count FROM atlas_page")["count"] == 1
         assert tx.fetch_one("SELECT count(*) AS count FROM atlas_page_command")["count"] == 1
 
+
 def test_public_atlas_page_contract_behaviors():
     from test_assignments_postgres import parallel_transactions, standalone_database
 
@@ -422,9 +405,7 @@ def test_public_atlas_page_contract_behaviors():
             with pytest.raises(RepositoryConflictError):
                 repo.delete_page(
                     tx,
-                    command=delete_command(
-                        command_id=COMMAND_C, expected_revision=2
-                    ),
+                    command=delete_command(command_id=COMMAND_C, expected_revision=2),
                 )
         results = parallel_transactions(
             database,
@@ -435,17 +416,76 @@ def test_public_atlas_page_contract_behaviors():
         )
         assert sum(not isinstance(result, RepositoryConflictError) for result in results) == 1
         with database.transaction() as tx:
-            deleted = repo.delete_page(
-                tx, command=delete_command(command_id=COMMAND_C)
-            )
+            deleted = repo.delete_page(tx, command=delete_command(command_id=COMMAND_C))
             assert deleted.page.deleted and deleted.page.content is None
             assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A) is None
             with pytest.raises(RepositoryNotFoundError):
                 repo.delete_page(
                     tx,
-                    command=delete_command(
-                        command_id=str(uuid.uuid4()), page_id=PAGE_B
-                    ),
+                    command=delete_command(command_id=str(uuid.uuid4()), page_id=PAGE_B),
                 )
     finally:
         fixture.close()
+
+
+@pytest.mark.parametrize("character", ["x", "é", "😀", '"', "\\", "\n", "\t"])
+def test_advertised_source_maxima_are_insertable_and_rollback(migrated_clone, character):
+    repo = create_repository_catalog().atlas_pages
+    sources = tuple("x" + character * 510 + chr(0x1F600 + index) for index in range(8))
+    command = create_command(sources=sources)
+    with (
+        pytest.raises(RuntimeError, match="caller rollback"),
+        migrated_clone.database.transaction() as tx,
+    ):
+        created = repo.create_page(tx, command=command)
+        assert created.page.sources == sources
+        assert repo.create_page(tx, command=command).replayed
+        stored_size = tx.fetch_one("SELECT octet_length(sources::text) AS size FROM atlas_page")[
+            "size"
+        ]
+        assert stored_size <= 16416
+        assert tx.fetch_one("SELECT 1 AS usable")["usable"] == 1
+        raise RuntimeError("caller rollback")
+    with migrated_clone.database.transaction() as tx:
+        assert repo.get_page(tx, owner_id=OWNER, page_id=PAGE_A) is None
+        assert tx.fetch_all("SELECT * FROM atlas_page_command") == ()
+
+
+def test_four_byte_source_maximum_matches_database_bound(migrated_clone):
+    repo = create_repository_catalog().atlas_pages
+    sources = tuple(chr(0x1F600 + index) * 512 for index in range(8))
+    with migrated_clone.database.transaction() as tx:
+        assert repo.create_page(tx, command=create_command(sources=sources)).page.sources == sources
+        assert (
+            tx.fetch_one("SELECT octet_length(sources::text) AS size FROM atlas_page")["size"]
+            == 16416
+        )
+
+
+def test_safe_integer_timestamp_maximum_create_delete_and_replay(migrated_clone):
+    repo = create_repository_catalog().atlas_pages
+    command = create_command(created_at=2**53 - 1)
+    removal = delete_command(deleted_at=2**53 - 1)
+    with migrated_clone.database.transaction() as tx:
+        created = repo.create_page(tx, command=command)
+        assert created.receipt.created_at == 2**53 - 1
+        deleted = repo.delete_page(tx, command=removal)
+        assert deleted.page.deleted_at == 2**53 - 1
+        assert repo.delete_page(tx, command=removal).replayed
+        assert repo.create_page(tx, command=command).replayed
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"created_at": 2**53},
+        {"sources": tuple(str(i) for i in range(9))},
+        {"sources": ("x" * 513,)},
+    ],
+)
+def test_out_of_contract_create_is_typed_and_transaction_remains_usable(migrated_clone, changes):
+    with migrated_clone.database.transaction() as tx:
+        with pytest.raises(RepositoryValidationError):
+            create_command(**changes)
+        assert tx.fetch_one("SELECT 1 AS usable")["usable"] == 1
+        assert tx.fetch_all("SELECT * FROM atlas_page") == ()

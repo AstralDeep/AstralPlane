@@ -10,10 +10,10 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.005`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.006`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  `089.001`, `089.002`, `089.003`, and `089.004`
+  `089.001`, `089.002`, `089.003`, `089.004`, and `089.005`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
@@ -21,11 +21,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.004`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.005`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.005` database must carry the exact current
+before the first migration write. A current `089.006` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -54,7 +54,8 @@ AstralDeep; callers pass neutral owner context and retain transaction ownership.
 `chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
 `generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`,
 `framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`,
-`mesh_enrollment`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`,
+`mesh_enrollment`, `notifications`, `offline_grants`, `outbox`, `preferences`,
+`personalization_graph`, `purge`,
 `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`,
 `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
 `work_admission`, `workspaces`, `completion_wake`, and `atlas_pages`.
@@ -93,7 +94,14 @@ are fenced to owner/live rows with terminal coverage enforced, and acceptance lo
 subscription through the caller's transaction so it serializes with revocation and deletion.
 See [migration and recovery](docs/migration-and-recovery.md#089004-completion-subscriptions-and-wake-receipts).
 
-Schema `089.005` adds the bounded `atlas_pages` store: stable owner/project page identities,
+Schema `089.005` adds neutral notification records: explicitly typed per-channel/per-event
+preferences, opaque ciphertext inbox entries with deduplication and retention, reversible
+acknowledgment and deletion tombstones, and per-entry durable delivery identities. Plane stores
+no plaintext notification content and never chooses a route, provider, recipient, or IAM decision.
+See [notification records](docs/notification-records.md) and
+[migration and recovery](docs/migration-and-recovery.md#089005-notification-records-and-recovery).
+
+Schema `089.006` adds the bounded `atlas_pages` store: stable owner/project page identities,
 host-sealed content and source metadata, exact create/delete receipts, owner-scoped reads and
 keyset listings, and terminal tombstones that erase ciphertext. Editing, revision history, links,
 content encryption, authorization, and audit remain outside this slice. See
@@ -167,6 +175,14 @@ admission, and awaitable results inside the transaction, which then rolls back i
 committing. See
 `docs/knowledge-scheduler-and-async-contracts.md` for the exact lifecycle and cancellation rules.
 
+Connection loss at checkout, during a statement, or during commit keeps caller-owned transaction
+custody explicit. Checkout failures raise `pool_checkout_failed` without leaking a borrow slot;
+interrupted statements raise `transaction_statement_failed`; and a lost commit acknowledgement
+raises `transaction_commit_outcome_unknown` without retrying or claiming a rollback. Every unsafe
+connection is discarded, while ordinary PostgreSQL errors keep their driver types for savepoint
+handling. See
+[connection loss and uncertain outcomes](docs/connection-loss-and-uncertain-outcomes.md).
+
 The public `work_admission` catalog member owns durable operation admission, finite hierarchical
 capacity, submission replay, execution leases, fenced terminalization, request-generation binding,
 and bounded retention. `configure()` and `load_existing_configs()` return detached snapshots;
@@ -217,11 +233,15 @@ The revisions after `079.001`:
   acknowledgments.
 - `089.002` adds personal mesh enrollment and revocation records, `089.003` adds owner stop epochs,
   and `089.004` adds completion subscriptions and wake receipts.
-- `089.005` adds bounded owner/project Atlas page heads, command receipts, and tombstones; see
+- `089.005` adds notification preferences, ciphertext inbox entries, and delivery identities.
+- `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones; see
   [Atlas page contracts](docs/atlas-page-contracts.md).
 
 Upgrade and recovery procedures for every revision are in
-[migration and recovery](docs/migration-and-recovery.md).
+[migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating
+a restored PostgreSQL/blob state as writable, including host-owned election and admission, are in
+[recovery and writable readiness](docs/recovery-and-writable-readiness.md). Local
+`PlaneHealth.ready` alone is not a writable-readiness decision.
 
 ## Error diagnostics
 

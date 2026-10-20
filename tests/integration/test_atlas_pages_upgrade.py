@@ -1,10 +1,11 @@
-"""Exercises the guarded 089.004-to-089.005 Atlas page edge on populated PostgreSQL data.
+"""Exercises the guarded 089.005-to-089.006 Atlas page edge on populated PostgreSQL data.
 The predecessor digest, repeat no-op, injected rollback, and namespace collision stay
 fail-closed while existing stop and completion records remain byte-for-byte unchanged.
 """
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from astralplane.repositories.atlas_pages import (
     AtlasPageRepository,
 )
 from astralplane.repositories.completion_wake import CompletionWakeRepository
+from astralplane.repositories.notifications import NotificationRepository
 from astralplane.repositories.stop_epochs import StopEpochRepository
 from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
@@ -30,27 +32,27 @@ OWNER = "atlas-upgrade-owner"
 def prior_runner(database):
     registry = m.MigrationRegistry(
         m.MIGRATION_REGISTRY.migrations[:-1],
-        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.004"),
-        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_004_SCHEMA_VERIFIER_CHECKSUM,
+        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
+        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
         predecessor_schema_verifier_checksum=(
-            m.PLANE_SCHEMA_089_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+            m.PLANE_SCHEMA_089_005_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
         ),
     )
-    assert registry.digest == m.PLANE_SCHEMA_089_004_REGISTRY_DIGEST
+    assert registry.digest == m.PLANE_SCHEMA_089_005_REGISTRY_DIGEST
     revision = replace(
         m.CURRENT_DATA_PLANE_REVISION,
-        schema_revision="089.004",
+        schema_revision="089.005",
         migration_digest=registry.digest,
         read_compatible_from=tuple(
             value
             for value in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from
-            if value < "089.004"
+            if value < "089.005"
         ),
         accepted_predecessor_digests=tuple(
             pair
             for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
-            if pair[0] < "089.004"
+            if pair[0] < "089.005"
         ),
     )
     return m.MigrationRunner(database, revision=revision, registry=registry)
@@ -67,7 +69,7 @@ def predecessor_template(postgres_administrator_dsn):
     with DatabaseTemplate.build(
         postgres_administrator_dsn,
         lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="089.004"
+            expected_revision="089.005"
         ),
     ) as template:
         yield template
@@ -80,7 +82,47 @@ def predecessor(predecessor_template):
 
 
 def seed_populated(tx):
-    tables = (*populated(tx), "owner_stop_epoch", "completion_subscription")
+    tables = (
+        *populated(tx),
+        "owner_stop_epoch",
+        "completion_subscription",
+        "notification_preference",
+        "notification_inbox_entry",
+        "notification_delivery_identity",
+    )
+    notifications = NotificationRepository()
+    for owner in (OWNER, "atlas-upgrade-foreign"):
+        notifications.put_preferences(
+            tx,
+            owner_id=owner,
+            expected_revision=0,
+            updated_at=10,
+            **{
+                f"{channel}_{event}": True
+                for channel in ("in_app", "inbox", "push")
+                for event in ("completion", "failure", "required_action")
+            },
+        )
+        content = b"synthetic-upgrade-notification-ciphertext"
+        entry = notifications.create_entry(
+            tx,
+            owner_id=owner,
+            event_kind="completion",
+            source_id="synthetic-source",
+            deduplication_key="synthetic-key",
+            content_format="synthetic-sealed",
+            content_ciphertext=content,
+            content_sha256=hashlib.sha256(content).hexdigest(),
+            created_at=10,
+            retention_expires_at=100,
+        )
+        notifications.register_delivery_identity(
+            tx,
+            owner_id=owner,
+            entry_id=entry.entry_id,
+            delivery_key="synthetic-delivery",
+            created_at=11,
+        )
     StopEpochRepository().engage(
         tx,
         owner_id=OWNER,
@@ -120,14 +162,12 @@ def page_command(**changes):
     return AtlasPageCreateCommand(**values)
 
 
-def test_populated_089_005_upgrade_preserves_rows_adds_only_atlas_tables(predecessor):
+def test_populated_089_006_upgrade_preserves_rows_adds_only_atlas_tables(predecessor):
     db = predecessor.database
     with db.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
-    report = current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     assert report.applied_steps == ("astralplane-089-atlas-pages",)
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -135,11 +175,13 @@ def test_populated_089_005_upgrade_preserves_rows_adds_only_atlas_tables(predece
         assert tx.fetch_all("SELECT * FROM atlas_page_command") == ()
         created = AtlasPageRepository().create_page(tx, command=page_command())
         assert created.page.content == b"synthetic-opaque-upgrade-ciphertext"
-    assert current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).already_current
+    assert (
+        current_runner(db)
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+        .already_current
+    )
     with pytest.raises(SchemaRevisionError):
-        prior_runner(db).run(expected_revision="089.004")
+        prior_runner(db).run(expected_revision="089.005")
 
 
 def test_interrupted_atlas_edge_rolls_back_and_retries(predecessor):
@@ -148,19 +190,16 @@ def test_interrupted_atlas_edge_rolls_back_and_retries(predecessor):
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
     with pytest.raises(RuntimeError, match="injected atlas failure"), db.transaction() as tx:
-        m.PLANE_SCHEMA_089_005_MIGRATION.apply(tx)
+        m.PLANE_SCHEMA_089_006_MIGRATION.apply(tx)
         raise RuntimeError("injected atlas failure")
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
+        assert tx.fetch_one("SELECT to_regclass('atlas_page') AS relation")["relation"] is None
         assert (
-            tx.fetch_one("SELECT to_regclass('atlas_page') AS relation")["relation"] is None
-        )
-        assert (
-            tx.fetch_one("SELECT to_regclass('atlas_page_command') AS relation")["relation"]
-            is None
+            tx.fetch_one("SELECT to_regclass('atlas_page_command') AS relation")["relation"] is None
         )
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
-            "089.004"
+            "089.005"
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -175,11 +214,10 @@ def test_atlas_namesake_or_damaged_predecessor_is_refused(predecessor):
         current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
-            "089.004"
+            "089.005"
         )
         assert (
-            tx.fetch_one("SELECT to_regclass('atlas_page_command') AS relation")["relation"]
-            is None
+            tx.fetch_one("SELECT to_regclass('atlas_page_command') AS relation")["relation"] is None
         )
 
 
@@ -199,3 +237,28 @@ def test_current_atlas_catalog_damage_is_refused(migrated_clone, corruption):
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
         current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "DROP INDEX notification_inbox_entry_owner_live",
+        "ALTER TABLE notification_inbox_entry "
+        "DROP CONSTRAINT notification_inbox_entry_deduplication",
+    ],
+)
+def test_damaged_notification_predecessor_is_refused_without_atlas_adoption(
+    predecessor, corruption
+):
+    db = predecessor.database
+    with db.transaction() as tx:
+        seed_populated(tx)
+        tx.execute(corruption)
+    with pytest.raises(SchemaRevisionError):
+        current_runner(db).run(expected_revision="089.006")
+    with db.transaction() as tx:
+        assert (
+            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.005"
+        )
+        assert tx.fetch_one("SELECT to_regclass('atlas_page') AS relation")["relation"] is None
+        assert tx.fetch_one("SELECT count(*) AS count FROM notification_inbox_entry")["count"] == 2

@@ -133,12 +133,15 @@ def test_delete_command_rejects_invalid_bounds_before_sql(changes):
 
 def test_record_accepts_live_and_tombstone_shapes_and_rejects_inconsistent_ones():
     live = _page(page_row())
-    assert live is not None and not live.deleted and live.sources == (
-        "https://example.invalid/source",
+    assert (
+        live is not None
+        and not live.deleted
+        and live.sources == ("https://example.invalid/source",)
     )
     tombstone = _page(
-        page_row(revision=2, sources=[], content=None, content_sha256=None, updated_at=20,
-                 deleted_at=20)
+        page_row(
+            revision=2, sources=[], content=None, content_sha256=None, updated_at=20, deleted_at=20
+        )
     )
     assert tombstone is not None and tombstone.deleted and tombstone.content is None
     for changes in (
@@ -189,9 +192,7 @@ def test_repository_preflights_reads_and_cursors_before_querying():
     with pytest.raises(RepositoryValidationError):
         repository.get_page(query, owner_id="atlas-owner", page_id="bad")
     with pytest.raises(RepositoryValidationError):
-        repository.get_page_by_slug(
-            query, owner_id="atlas-owner", project_id=None, slug="Bad"
-        )
+        repository.get_page_by_slug(query, owner_id="atlas-owner", project_id=None, slug="Bad")
     with pytest.raises(RepositoryValidationError):
         repository.list_pages(query, owner_id="atlas-owner", project_id=None, limit=0)
     with pytest.raises(RepositoryValidationError):
@@ -249,6 +250,7 @@ def test_atlas_page_record_cannot_be_reconstructed_from_a_tombstone_with_content
             20,
             20,
         )
+
 
 def receipt_row(**changes):
     values = dict(
@@ -310,9 +312,7 @@ def test_page_and_receipt_optional_corruption_guards_are_exercised():
 def test_change_and_batch_types_refuse_inconsistent_detached_values():
     page = _page(page_row())
     assert page is not None
-    receipt = AtlasPageCommandReceipt(
-        "atlas-owner", COMMAND, PAGE, "create", "a" * 64, 1, 10
-    )
+    receipt = AtlasPageCommandReceipt("atlas-owner", COMMAND, PAGE, "create", "a" * 64, 1, 10)
     assert AtlasPageChange(page, receipt, False).page == page
     assert AtlasPageBatch((page,), None).records == (page,)
     with pytest.raises(RepositoryValidationError):
@@ -348,8 +348,8 @@ def test_scripted_receipt_and_insert_failures_are_typed():
     with pytest.raises(RepositoryDataError, match="receipt has no page"):
         repository.create_page(
             ScriptedTransaction(
-                    one=[lock, receipt_row(request_digest=command.request_digest), None]
-                ),
+                one=[lock, receipt_row(request_digest=command.request_digest), None]
+            ),
             command=command,
         )
     with pytest.raises(RepositoryDataError, match="returned no record"):
@@ -368,9 +368,7 @@ def test_scripted_delete_receipt_and_update_failures_are_typed():
             ScriptedTransaction(
                 one=[
                     lock,
-                    receipt_row(
-                        command="create", request_digest=command.request_digest
-                    ),
+                    receipt_row(command="create", request_digest=command.request_digest),
                 ]
             ),
             command=command,
@@ -398,3 +396,24 @@ def test_get_page_refuses_non_boolean_include_deleted():
             page_id=PAGE,
             include_deleted="no",
         )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["create", "delete", "record-created", "record-updated", "record-deleted", "receipt", "cursor"],
+)
+def test_all_atlas_timestamp_types_refuse_above_safe_integer(kind):
+    with pytest.raises(RepositoryValidationError):
+        if kind == "create":
+            create_command(created_at=2**53)
+        elif kind == "delete":
+            delete_command(deleted_at=2**53)
+        elif kind.startswith("record-"):
+            changes = {kind.removeprefix("record-") + "_at": 2**53, "updated_at": 2**53}
+            if kind == "record-deleted":
+                changes.update(content=None, content_sha256=None, sources=(), revision=2)
+            AtlasPageRecord(**page_row(**changes))
+        elif kind == "receipt":
+            AtlasPageCommandReceipt("atlas-owner", COMMAND, PAGE, "create", "a" * 64, 1, 2**53)
+        else:
+            AtlasPageCursor("atlas-owner", None, 2**53, PAGE)
