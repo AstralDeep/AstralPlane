@@ -1396,3 +1396,25 @@ def test_preferences_facade_exposes_neutral_stores() -> None:
     assert isinstance(facade.onboarding, OnboardingRepository)
     assert isinstance(facade.personalization, PersonalizationRepository)
     assert isinstance(facade.theme, ThemePreferenceRepository)
+
+
+@pytest.mark.parametrize("for_update", (False, True))
+def test_memory_read_lock_preserves_owner_and_record(for_update):
+    repository, query = PersonalizationRepository(), FakeTransaction()
+    query.fetch_one_results.append(memory_row())
+    result = repository.get_memory(
+        query, owner_id="owner-1", memory_id="memory-1", for_update=for_update
+    )
+    assert result == memory_record()
+    assert query.calls[0][2] == ("memory-1", "owner-1")
+    assert ("FOR UPDATE" in query.calls[0][1]) is for_update
+
+
+@pytest.mark.parametrize("for_update", (None, 0, 1, "true", [], {}))
+def test_memory_read_lock_refuses_non_boolean_before_query(for_update):
+    query = FakeTransaction()
+    with pytest.raises(RepositoryValidationError, match="for_update must be a boolean"):
+        PersonalizationRepository().get_memory(
+            query, owner_id="owner-1", memory_id="memory-1", for_update=for_update
+        )
+    assert query.calls == []
