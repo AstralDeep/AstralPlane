@@ -99,6 +99,13 @@ from astralplane.repositories.assignments import AssignmentRepository
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
+from astralplane.repositories.capability_publications import (
+    CapabilityPublicationConflictError,
+    CapabilityPublicationNotExpiredError,
+    CapabilityPublicationRecord,
+    CapabilityPublicationRepository,
+    CapabilityPublicationState,
+)
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
@@ -253,6 +260,10 @@ def create_completion_wake_repository() -> CompletionWakeRepository:
     return CompletionWakeRepository()
 
 
+def create_capability_publication_repository() -> CapabilityPublicationRepository:
+    return CapabilityPublicationRepository()
+
+
 def create_artifact_repository() -> ArtifactRepository:
     return ArtifactRepository()
 
@@ -405,6 +416,7 @@ class RepositoryCatalog:
     history: HistoryRepository
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
+    capability_publications: CapabilityPublicationRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -478,6 +490,7 @@ class RepositoryCatalog:
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
+                "capability_publications": self.capability_publications,
             }
         )
 
@@ -508,6 +521,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
+        capability_publications=create_capability_publication_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -764,6 +778,11 @@ __all__ = (
     "BundlePublicationReceipt",
     "BundleRecoveryDisposition",
     "BundleRecoveryResult",
+    "CapabilityPublicationConflictError",
+    "CapabilityPublicationNotExpiredError",
+    "CapabilityPublicationRecord",
+    "CapabilityPublicationRepository",
+    "CapabilityPublicationState",
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "ExecutionFence",
@@ -805,6 +824,7 @@ __all__ = (
     "create_audit_retention_repository",
     "create_authority_repository",
     "create_background_task_repository",
+    "create_capability_publication_repository",
     "create_chat_step_repository",
     "create_conversation_file_repository",
     "create_credential_repository",

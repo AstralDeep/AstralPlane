@@ -10,10 +10,10 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.004`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.005`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  `089.001`, `089.002`, and `089.003`
+  `089.001`, `089.002`, `089.003`, and `089.004`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 
@@ -21,11 +21,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.003`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.004`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.004` database must carry the exact current
+before the first migration write. A current `089.005` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -48,7 +48,7 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 43 members, in
+`create_repository_catalog()` returns the stable repository catalog. Its 44 members, in
 `RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
 `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
 `chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
@@ -57,7 +57,7 @@ AstralDeep; callers pass neutral owner context and retain transaction ownership.
 `mesh_enrollment`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`,
 `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`,
 `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
-`work_admission`, `workspaces`, and `completion_wake`.
+`work_admission`, `workspaces`, `completion_wake`, and `capability_publications`.
 
 The stable repository catalog includes four explicit stores for the first identity/agent
 cutover slice:
@@ -92,6 +92,13 @@ with live-state/terminal-coverage guards plus immutable `wake_receipt` rows. Acc
 are fenced to owner/live rows with terminal coverage enforced, and acceptance locks the
 subscription through the caller's transaction so it serializes with revocation and deletion.
 See [migration and recovery](docs/migration-and-recovery.md#089004-completion-subscriptions-and-wake-receipts).
+
+Schema `089.005` adds `capability_publication` storage through the `capability_publications`
+catalog member. An owner can publish one exact capability revision to one audience for a
+finite lifetime, withdraw or expire it with a state-revision compare-and-set fence, and read
+only live rows at a caller-supplied UTC instant. Encrypted audience metadata and its digest
+stay opaque. Discovery, IAM, invocation, and A2A transport remain in Deep. See
+[capability publication records](docs/capability-publication-records.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -209,6 +216,8 @@ The revisions after `079.001`:
   `docs/credentials-and-grants.md`.
 - `089.001` adds owner-keyed TypeSafe credential ciphertext and third-party data-sharing
   acknowledgments.
+- `089.005` adds fenced owner capability-publication records for selective host-controlled
+  A2A exposure; see [capability publication records](docs/capability-publication-records.md).
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating
