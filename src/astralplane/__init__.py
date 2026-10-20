@@ -70,6 +70,7 @@ from astralplane.api import (
     create_workspace_repository,
     initialize_empty_database,
     inspect_baseline_compatibility,
+    inspect_endpoint_readiness,
     retire_restored_sessions,
 )
 from astralplane.blob_store import (
@@ -120,6 +121,15 @@ from astralplane.database.revision import (
     DataPlaneRevision,
 )
 from astralplane.database.transaction import CommandResult, PlaneDatabase, Transaction
+from astralplane.endpoint_readiness import (
+    ENDPOINT_READINESS_CONTRACT_VERSION,
+    EndpointFence,
+    EndpointFenceError,
+    EndpointReadiness,
+    EndpointReadinessError,
+    EndpointReadinessState,
+    EndpointTopology,
+)
 from astralplane.immutable_bundle_store import (
     ArtifactCollisionError,
     ArtifactIntegrityError,
@@ -201,6 +211,7 @@ __all__ = (
     "BLOB_LAYOUT_VERSION",
     "CONTRACT_VERSION",
     "CURRENT_DATA_PLANE_REVISION",
+    "ENDPOINT_READINESS_CONTRACT_VERSION",
     "GENERATED_AGENT_BUNDLE_CONTRACT",
     "GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
@@ -257,6 +268,12 @@ __all__ = (
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "DurablePurgeExecutor",
+    "EndpointFence",
+    "EndpointFenceError",
+    "EndpointReadiness",
+    "EndpointReadinessError",
+    "EndpointReadinessState",
+    "EndpointTopology",
     "ExecutionFence",
     "ExplicitRootStreamingBlobStore",
     "FinalizedBundle",
@@ -362,6 +379,7 @@ __all__ = (
     "initialize_empty_database",
     "inspect_baseline_compatibility",
     "inspect_compatibility",
+    "inspect_endpoint_readiness",
     "paths_for",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",

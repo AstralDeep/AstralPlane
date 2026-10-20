@@ -16,6 +16,8 @@ package in-process; AstralPlane does not add a service port or a second database
   `089.001`, `089.002`, and `089.003`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
+- Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
+  externally managed PostgreSQL primary and its paired blob roots
 
 `create_postgres_runtime(...)` owns psycopg2 driver-pool construction, bounded checkout, runtime
 composition, and guarded startup. On a truly empty application schema it first installs the
@@ -211,7 +213,10 @@ The revisions after `079.001`:
   acknowledgments.
 
 Upgrade and recovery procedures for every revision are in
-[migration and recovery](docs/migration-and-recovery.md).
+[migration and recovery](docs/migration-and-recovery.md). The neutral, read-only fence evidence
+for an externally managed PostgreSQL primary and its paired blob roots, including primary loss,
+reconnect, stale writer, and promoted-endpoint refusal, is in
+[endpoint failover readiness](docs/endpoint-failover-readiness.md).
 
 ## Error diagnostics
 

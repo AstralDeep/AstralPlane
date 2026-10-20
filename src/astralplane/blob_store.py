@@ -510,6 +510,9 @@ class StreamingBlobStore(Protocol):
 
     def is_owner_absent(self, *, owner_id: str) -> bool: ...
 
+    @property
+    def root_identity_digest(self) -> str: ...
+
     def close(self) -> None: ...
 
 
@@ -1840,6 +1843,39 @@ class ExplicitRootStreamingBlobStore:
         traceback: TracebackType | None,
     ) -> None:
         self.close()
+
+    @property
+    def root_identity_digest(self) -> str:
+        with self._lifecycle_guard:
+            if self._closed:
+                raise PlaneError("blob store is closed", code="blob_store_closed")
+            root = self._root
+            identity = self._root_identity
+        try:
+            metadata = os.lstat(
+                _windows_extended_path(root) if os.name == "nt" else root
+            )
+        except OSError as exc:
+            raise PlaneError(
+                "configured blob root no longer resolves as a directory",
+                code="blob_path_unsafe",
+            ) from exc
+        if (
+            _is_reparse(metadata)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or _metadata_identity(metadata) != identity
+        ):
+            raise PlaneError(
+                "configured blob root identity changed",
+                code="blob_path_unsafe",
+            )
+        payload = (
+            b"astralplane.blob-root/v1\0"
+            + os.fsencode(root)
+            + b"\0"
+            + f"{identity[0]}\0{identity[1]}".encode("ascii")
+        )
+        return hashlib.sha256(payload).hexdigest()
 
     def _begin_owner_acquisition(self) -> None:
         with self._lifecycle_guard:

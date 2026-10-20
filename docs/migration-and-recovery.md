@@ -569,6 +569,12 @@ maintenance window has been verified:
    acceptance checks, then reopen traffic. Retain the previous and restored copies until the
    rollback window closes.
 
+The restore procedure ends with a closed-admission candidate, not a writable state. The
+read-only [endpoint failover readiness](endpoint-failover-readiness.md) facade qualifies the
+selected external PostgreSQL primary and its paired blob roots and returns fence evidence for
+reconnect and stale-writer refusal. It does not elect, promote, or fence a host, and a writable
+report does not replace restored-session retirement or reconciliation.
+
 ## Later blob-root relocation
 
 A later relocation is a separate operation: quiesce writers, reject symlink/reparse traversal,

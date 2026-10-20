@@ -217,6 +217,39 @@ def test_factory_exports_path_independent_contract(blob_root: Path) -> None:
     assert astralplane.BlobReadStream.__module__ == "astralplane.blob_store"
 
 
+def test_root_identity_digest_is_stable_opaque_and_tracks_relocation(
+    blob_root: Path,
+) -> None:
+    first = ExplicitRootStreamingBlobStore(blob_root)
+    digest = first.root_identity_digest
+    assert len(digest) == 64 and digest == digest.lower()
+    assert str(blob_root) not in digest
+    repeat = ExplicitRootStreamingBlobStore(blob_root)
+    assert repeat.root_identity_digest == digest
+    repeat.close()
+    first.close()
+    with pytest.raises(PlaneError) as closed:
+        _ = first.root_identity_digest
+    assert closed.value.code == "blob_store_closed"
+
+    second = ExplicitRootStreamingBlobStore(blob_root)
+    relocated = blob_root.with_name("relocated-blobs")
+    blob_root.rename(relocated)
+    with pytest.raises(PlaneError) as moved:
+        _ = second.root_identity_digest
+    assert moved.value.code == "blob_path_unsafe"
+    second.close()
+
+    third = ExplicitRootStreamingBlobStore(relocated)
+    assert third.root_identity_digest != digest
+    relocated.rmdir()
+    relocated.mkdir()
+    with pytest.raises(PlaneError) as replaced:
+        _ = third.root_identity_digest
+    assert replaced.value.code == "blob_path_unsafe"
+    third.close()
+
+
 def test_factory_securely_provisions_missing_absolute_root(tmp_path: Path) -> None:
     root = (tmp_path / "new" / "durable" / "blobs").resolve()
 
