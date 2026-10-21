@@ -10,10 +10,10 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.006`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.007`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  `089.001`, `089.002`, `089.003`, `089.004`, and `089.005`
+  `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 - Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
@@ -23,11 +23,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.005`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.006` database must carry the exact current
+before the first migration write. A current `089.007` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -117,6 +117,12 @@ host-sealed content and source metadata, exact create/delete receipts, owner-sco
 keyset listings, and terminal tombstones that erase ciphertext. Editing, revision history, links,
 content encryption, authorization, and audit remain outside this slice. See
 [Atlas page contracts](docs/atlas-page-contracts.md).
+
+Schema `089.007` adds immutable operation harness-profile bindings. A typed profile/version/artifact
+identity is written once under the operation owner and current execution fence; legacy operations
+read as unbound, exact replay is idempotent, changed identities conflict, and stale fences cannot
+overwrite. Runner selection, provider routing, profile rollout, and artifact availability remain in
+the host. See [operation harness profile bindings](docs/harness-binding-contracts.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -247,6 +253,8 @@ The revisions after `079.001`:
 - `089.005` adds notification preferences, ciphertext inbox entries, and delivery identities.
 - `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones; see
   [Atlas page contracts](docs/atlas-page-contracts.md).
+- `089.007` adds immutable operation harness-profile bindings; see
+  [operation harness profile bindings](docs/harness-binding-contracts.md).
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating

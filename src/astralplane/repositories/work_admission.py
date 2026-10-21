@@ -22,6 +22,11 @@ from astralplane.repositories import (
     RepositoryNotFoundError,
     RepositoryValidationError,
 )
+from astralplane.repositories.harness_bindings import (
+    HarnessProfileIdentity,
+    OperationHarnessBinding,
+    operation_harness_binding_from_row,
+)
 
 _OPERATION_KIND_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _SAFE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
@@ -2320,6 +2325,133 @@ class WorkAdmissionRepository:
             raise StaleWorkExecutionFenceError("execution fence is stale")
         return self._operation_from_row(row)
 
+    def bind_harness_profile(
+        self,
+        transaction: Transaction,
+        owner: OperationOwner,
+        fence: ExecutionFence,
+        identity: HarnessProfileIdentity,
+        *,
+        now: datetime | None = None,
+    ) -> OperationHarnessBinding:
+        owner = _validated_owner(owner)
+        fence = _validated_fence(fence)
+        if not isinstance(identity, HarnessProfileIdentity):
+            raise RepositoryValidationError(
+                "identity must be a HarnessProfileIdentity"
+            )
+        cursor = _StatementSession(transaction)
+        current_time = self._current_time(cursor, now)
+        owner_sql, owner_parameters = self._owner_clause(owner, alias="operation")
+        cursor.execute(
+            f"""
+            SELECT operation.* FROM operation_record AS operation
+            WHERE operation.operation_id = %s AND {owner_sql}
+            FOR UPDATE
+            """,
+            (str(fence.operation_id), *owner_parameters),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise WorkAdmissionNotFoundError("operation not found")
+        operation = self._operation_from_row(row)
+        if not self._fence_matches(operation, fence):
+            raise StaleWorkExecutionFenceError("execution fence is stale")
+        cursor.execute(
+            f"""
+            SELECT binding.* FROM operation_harness_binding AS binding
+            JOIN operation_record AS operation
+              ON operation.operation_id = binding.operation_id
+            WHERE binding.operation_id = %s AND {owner_sql}
+            """,
+            (str(fence.operation_id), *owner_parameters),
+        )
+        existing_row = cursor.fetchone()
+        if existing_row is not None:
+            existing = operation_harness_binding_from_row(existing_row)
+            if existing.identity == identity:
+                return existing
+            raise RepositoryConflictError(
+                "operation is bound to a different harness profile identity"
+            )
+        cursor.execute(
+            f"""
+            INSERT INTO operation_harness_binding (
+                operation_id, profile, profile_version, artifact_digest,
+                execution_generation, bound_at
+            )
+            SELECT operation.operation_id, %s, %s, %s,
+                   operation.execution_generation, %s
+            FROM operation_record AS operation
+            WHERE operation.operation_id = %s AND {owner_sql}
+              AND operation.state = 'running'
+              AND operation.execution_generation = %s
+              AND operation.execution_lease_token = %s
+            ON CONFLICT (operation_id) DO NOTHING
+            RETURNING operation_id, profile, profile_version, artifact_digest,
+                      execution_generation, bound_at
+            """,
+            (
+                identity.profile,
+                identity.version,
+                identity.artifact_digest,
+                current_time,
+                str(fence.operation_id),
+                *owner_parameters,
+                fence.execution_generation,
+                str(fence.execution_lease_token),
+            ),
+        )
+        inserted = cursor.fetchone()
+        if inserted is not None:
+            return operation_harness_binding_from_row(inserted)
+        cursor.execute(
+            f"""
+            SELECT binding.* FROM operation_harness_binding AS binding
+            JOIN operation_record AS operation
+              ON operation.operation_id = binding.operation_id
+            WHERE binding.operation_id = %s AND {owner_sql}
+            """,
+            (str(fence.operation_id), *owner_parameters),
+        )
+        raced_row = cursor.fetchone()
+        if raced_row is None:
+            raise WorkAdmissionIntegrityError(
+                "harness binding insert lost atomicity"
+            )
+        raced = operation_harness_binding_from_row(raced_row)
+        if raced.identity == identity:
+            return raced
+        raise RepositoryConflictError(
+            "operation is bound to a different harness profile identity"
+        )
+
+    def get_harness_profile_binding(
+        self,
+        transaction: Transaction,
+        owner: OperationOwner,
+        operation_id: uuid.UUID,
+    ) -> OperationHarnessBinding | None:
+        owner = _validated_owner(owner)
+        operation_id = _require_uuid(operation_id, "operation_id")
+        owner_sql, owner_parameters = self._owner_clause(owner, alias="operation")
+        cursor = _StatementSession(transaction)
+        cursor.execute(
+            f"""
+            SELECT binding.operation_id, binding.profile, binding.profile_version,
+                   binding.artifact_digest, binding.execution_generation,
+                   binding.bound_at
+            FROM operation_harness_binding AS binding
+            JOIN operation_record AS operation
+              ON operation.operation_id = binding.operation_id
+            WHERE binding.operation_id = %s AND {owner_sql}
+            LIMIT 1
+            """,
+            (str(operation_id), *owner_parameters),
+        )
+        row = cursor.fetchone()
+        return None if row is None else operation_harness_binding_from_row(row)
+
     def renew_execution_lease(
         self,
         transaction: Transaction,
@@ -2664,7 +2796,9 @@ __all__ = (
     "AdmissionClassStatus",
     "AdmissionResult",
     "ExecutionFence",
+    "HarnessProfileIdentity",
     "OperationClaim",
+    "OperationHarnessBinding",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
