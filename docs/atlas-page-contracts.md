@@ -4,7 +4,8 @@ Schema `089.006` adds the first bounded Atlas page store behind
 `create_atlas_page_repository()` and the `atlas_pages` catalog member. The repository stores
 opaque owner- and project-scoped page heads, exact create/delete command receipts, and terminal
 tombstones. It does not parse or encrypt content, authorize a caller, audit a command, expose a
-network route, edit a page, publish revisions, or store links.
+network route, edit a page, publish revisions, or store links. Schema `089.007` adds separate
+same-owner link and backlink storage described in [Atlas link contracts](atlas-link-contracts.md).
 
 ## Page identity and content
 

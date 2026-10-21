@@ -520,6 +520,28 @@ class AtlasPageRepository:
                 receipt.created_at,
             ),
         )
+        transaction.execute(
+            "UPDATE atlas_page_link_head SET link_revision=link_revision+1,"
+            "updated_at=GREATEST(updated_at,%s) WHERE owner_id=%s AND page_id IN ("
+            "SELECT source_page_id FROM atlas_page_link WHERE owner_id=%s"
+            " AND target_page_id=%s AND source_page_id<>%s)",
+            (
+                command.deleted_at,
+                command.owner_id,
+                command.owner_id,
+                command.page_id,
+                command.page_id,
+            ),
+        )
+        transaction.execute(
+            "DELETE FROM atlas_page_link WHERE owner_id=%s"
+            " AND (source_page_id=%s OR target_page_id=%s)",
+            (command.owner_id, command.page_id, command.page_id),
+        )
+        transaction.execute(
+            "DELETE FROM atlas_page_link_head WHERE owner_id=%s AND page_id=%s",
+            (command.owner_id, command.page_id),
+        )
         return AtlasPageChange(page, receipt, False)
 
     def get_page(
