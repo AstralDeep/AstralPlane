@@ -347,6 +347,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-operation-harness-bindings",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -385,6 +386,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane_receipt_claim",
         "atlas_page",
         "atlas_page_command",
+        "operation_harness_binding",
         "test_runs",
         "test_case_results",
         "test_evidence",
@@ -407,6 +409,9 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
     ]
     assert function_configurations.pop("reject_atlas_page_command_mutation") == [
         "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_operation_harness_binding_mutation") == [
+        "search_path=pg_catalog, pg_temp"
     ]
     assert set(function_configurations) == {
         "astraldeep_positive_unique_int_array",
@@ -973,6 +978,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-operation-harness-bindings",
     )
 
     cursor = fixture.connection.cursor()
