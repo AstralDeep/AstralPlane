@@ -106,6 +106,15 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas_links import (
+    AtlasLinkBatch,
+    AtlasLinkChange,
+    AtlasLinkCommandReceipt,
+    AtlasLinkCursor,
+    AtlasLinkRecord,
+    AtlasLinkRepository,
+    AtlasLinkSetCommand,
+)
 from astralplane.repositories.atlas_pages import (
     AtlasPageBatch,
     AtlasPageChange,
@@ -205,6 +214,10 @@ def create_assignment_repository() -> AssignmentRepository:
 
 def create_atlas_page_repository() -> AtlasPageRepository:
     return AtlasPageRepository()
+
+
+def create_atlas_link_repository() -> AtlasLinkRepository:
+    return AtlasLinkRepository()
 
 
 def create_identity_repository() -> IdentityRepository:
@@ -441,6 +454,7 @@ class RepositoryCatalog:
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
     atlas_pages: AtlasPageRepository
+    atlas_links: AtlasLinkRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -517,6 +531,7 @@ class RepositoryCatalog:
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
                 "atlas_pages": self.atlas_pages,
+                "atlas_links": self.atlas_links,
             }
         )
 
@@ -548,6 +563,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
         atlas_pages=create_atlas_page_repository(),
+        atlas_links=create_atlas_link_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -794,6 +810,13 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasLinkBatch",
+    "AtlasLinkChange",
+    "AtlasLinkCommandReceipt",
+    "AtlasLinkCursor",
+    "AtlasLinkRecord",
+    "AtlasLinkRepository",
+    "AtlasLinkSetCommand",
     "AtlasPageBatch",
     "AtlasPageChange",
     "AtlasPageCommandReceipt",
@@ -860,6 +883,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_link_repository",
     "create_atlas_page_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
