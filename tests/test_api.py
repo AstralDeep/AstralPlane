@@ -310,6 +310,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "maintenance",
         "mesh_enrollment",
         "notifications",
+        "push_deliveries",
         "offline_grants",
         "outbox",
         "preferences",
