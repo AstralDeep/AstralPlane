@@ -166,6 +166,14 @@ def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor)
     catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
 
+def _push_deliveries(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.push_deliveries.get_destination(
+        transaction,
+        owner_id=_OWNER,
+        destination_id=_UUID4,
+    )
+
+
 def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.stop_epochs.get(transaction, owner_id=_OWNER)
 
@@ -694,6 +702,27 @@ REPOSITORY_CONTRACT_MATRIX = (
         ),
     ),
     RepositoryContract(
+        "push_deliveries",
+        api.create_push_delivery_repository,
+        "src/astralplane/repositories/push_deliveries.py",
+        _push_deliveries,
+        _OWNER,
+        "owner_id = %s",
+        (
+            "FOR UPDATE OF delivery SKIP LOCKED",
+            "FOR SHARE OF destination",
+            "claim_id = %s",
+        ),
+        ("ON CONFLICT", "delivery_key"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryDataError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -1141,6 +1170,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_notifications_089_005:test_entry_exact_replay_returns_original",
         "tests.test_notifications_089_005:test_acknowledgment_stale_revision_conflicts",
         "tests.test_notifications_089_005:test_deleted_entry_cannot_be_acknowledged",
+    ),
+    BehavioralEvidence(
+        "push_deliveries",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
     ),
     BehavioralEvidence(
         "offline_grants",

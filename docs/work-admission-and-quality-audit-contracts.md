@@ -47,8 +47,8 @@ Plane does not decide whether an operation may execute. A reserved recovery name
 missing parent remains a host reconciliation condition, including after retention clears a
 parent link.
 
-These additive APIs and detached assignment recovery results ship in package `0.1.1` without
-changing schema `089.006`, its migration digest or the existing compatibility contract.
+These additive APIs and detached assignment recovery results shipped in package `0.1.1` without
+changing the schema current at that time, its migration digest or the compatibility contract.
 
 ## Qualification audit
 
@@ -73,7 +73,7 @@ and caller-owned rollback.
 
 Revision `074.002` introduced the qualification-audit tables. Its registry digest
 `1bb948074ec378d2a74e2b74eff29e72a6f9a6be03d3ae24ec6439fcf70f1e02` stays pinned as the accepted
-digest of a `074.002` predecessor; the current schema is `089.006`. The digest-only migration
+digest of a `074.002` predecessor; the current schema is `089.007`. The digest-only migration
 evidence in `provenance/checks.json` is the historical `074.004` record, not current evidence (see
 `provenance/README.md`). Recovery is forward-only under closed admission as described in
 `migration-and-recovery.md`; never down-migrate or rewrite audit hashes by inference.
