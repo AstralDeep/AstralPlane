@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -344,7 +344,7 @@ Never drop the tables, rewrite revision markers, or infer a downgrade.
 
 This additive edge requires the exact `089.005` registry digest
 `98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0` and its
-catalog. Current catalog digest is
+catalog. Its catalog digest is
 `88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48`.
 It adds `atlas_page` and `atlas_page_command` and alters nothing that
 exists. The page table stores a stable owner/page identity, exact optional
@@ -361,8 +361,8 @@ indexes, constraints, and lifecycle/immutability triggers and performs no write.
 Reads, listings, and writes carry the owner predicate in SQL. Deletion advances
 the current revision under its fence, erases ciphertext and source metadata, and
 leaves a terminal tombstone; replaying the original create or delete command
-cannot restore content. Editing, revision history, and links are not part of
-this edge or its repository.
+cannot restore content. Revision history and links are not part of this edge;
+`089.007` adds immutable revisions and fenced edits on the same repository.
 
 Follow the same closed-admission backup, guarded upgrade, catalog, populated
 repeat and rollback checks described above. Failed DDL rolls back with registry
@@ -382,6 +382,51 @@ governed recovery contract, and reconcile uncertain effects before reopening
 admission. Never drop the tables, rewrite revision/digest markers, restore a
 tombstone to a live page, or execute ad-hoc downgrade SQL. A restored database
 snapshot cannot recover content that was never stored in Plane.
+
+### `089.007` Atlas revisions and recovery
+
+This additive edge requires the exact `089.006` registry digest
+`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its
+catalog digest `88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48`.
+It adds `atlas_page_revision`, its bounded history index, immutable revision
+trigger, exact-head verification trigger, and the edit command's expected
+revision column and receipt constraints. It removes only the predecessor's
+one-command-per-page uniqueness so multiple edits can append separate receipts.
+Live predecessor heads are backfilled once into exact revision rows; deleted
+predecessor pages remain content-free because their ciphertext was already
+erased. No unrelated table or row is rewritten.
+
+Fenced edits insert the exact next immutable revision and advance the owner's
+page head only when revision, sources, ciphertext, digest, and edit time match
+that row. Stale fences, changed command replay, foreign owners, regressive
+clocks, exhausted safe-integer revisions, and edits to tombstones fail with a
+typed conflict or denial before a new write. Deleted page history requires an
+explicit `include_deleted=True` recovery read, and replaying an earlier edit
+cannot resurrect the page. PostgreSQL refuses revision updates, revision
+deletes, and live head changes without an exact backing revision.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. Failed DDL rolls back with registry
+metadata. The populated predecessor, repeat, interruption, namesake, and
+damaged-predecessor cases are exercised by
+`tests/integration/test_atlas_revisions_upgrade.py`; edit fences, immutable
+history, pagination, concurrency, database denial, corrupt reads, and caller
+rollback are exercised by
+`tests/repositories/test_atlas_revisions_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep `atlas_page`,
+`atlas_page_command`, and `atlas_page_revision` with the exact `089.007`
+revision/digest intact. An `089.006` binary is not compatible merely because
+these changes are additive. Prefer a reviewed forward repair through the guarded
+registry. If the previous composition must be restored, close admission and
+restore the verified pre-upgrade PostgreSQL backup and every paired durable root
+together with the exact prior application and unchanged keys. Account for
+post-backup Atlas creates, edits, and deletes, retire restored sessions through
+the governed recovery contract, and reconcile uncertain effects before reopening
+admission. Never rewrite or delete revision rows, restore a tombstone to a live
+page, or execute ad-hoc downgrade SQL. A restored database snapshot cannot
+recover content that was never stored in Plane or that was erased from a deleted
+head.
 
 ### `089.002` mesh enrollment records and recovery
 
@@ -536,7 +581,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.005` must carry its own pinned historical registry digest. A current `089.006` marker and
+`089.006` must carry its own pinned historical registry digest. A current `089.007` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -639,9 +684,10 @@ maintenance window has been verified:
    selecting a composition. A restored `066.001` state has no Plane digest and must match its
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, and `089.005` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.006` state must carry the exact current
-   registry digest and pass the current structural verifier.
+   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
+   states must carry their exact pinned historical registry digests and match their pinned
+   predecessor catalogs. A restored `089.007` state must carry the exact current registry digest
+   and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
 6. Re-run migration and required product reconciliation under closed admission, repeat the

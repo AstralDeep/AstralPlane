@@ -107,14 +107,21 @@ from astralplane.repositories.artifacts import (
 )
 from astralplane.repositories.assignments import AssignmentRepository
 from astralplane.repositories.atlas_pages import (
+    AtlasPageAppendChange,
+    AtlasPageAppendCommand,
     AtlasPageBatch,
     AtlasPageChange,
     AtlasPageCommandReceipt,
     AtlasPageCreateCommand,
     AtlasPageCursor,
     AtlasPageDeleteCommand,
+    AtlasPageEditChange,
+    AtlasPageEditCommand,
     AtlasPageRecord,
     AtlasPageRepository,
+    AtlasPageRevisionBatch,
+    AtlasPageRevisionCursor,
+    AtlasPageRevisionRecord,
 )
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
@@ -794,14 +801,21 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasPageAppendChange",
+    "AtlasPageAppendCommand",
     "AtlasPageBatch",
     "AtlasPageChange",
     "AtlasPageCommandReceipt",
     "AtlasPageCreateCommand",
     "AtlasPageCursor",
     "AtlasPageDeleteCommand",
+    "AtlasPageEditChange",
+    "AtlasPageEditCommand",
     "AtlasPageRecord",
     "AtlasPageRepository",
+    "AtlasPageRevisionBatch",
+    "AtlasPageRevisionCursor",
+    "AtlasPageRevisionRecord",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",

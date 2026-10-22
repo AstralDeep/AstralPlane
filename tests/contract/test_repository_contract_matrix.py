@@ -941,7 +941,7 @@ REPOSITORY_CONTRACT_MATRIX = (
         _OWNER,
         "owner_id=%s AND page_id=%s",
         ("pg_advisory_xact_lock", "FOR UPDATE", "revision=%s", "deleted_at IS NULL"),
-        ("request_digest", "command identity was reused"),
+        ("request_digest", "command identity was reused", "expected_revision"),
         None,
         ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
     ),
@@ -1285,14 +1285,14 @@ BEHAVIORAL_EVIDENCE = (
     ),
     BehavioralEvidence(
         "atlas_pages",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
     ),
 )
 
