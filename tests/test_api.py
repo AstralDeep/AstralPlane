@@ -18,6 +18,12 @@ import astralplane
 import astralplane.api as public_api
 from astralplane.api import (
     AsyncPlaneRuntime,
+    AtlasPageAppendCommand,
+    AtlasPageEditChange,
+    AtlasPageEditCommand,
+    AtlasPageRevisionBatch,
+    AtlasPageRevisionCursor,
+    AtlasPageRevisionRecord,
     AuthorityRepository,
     PlaneHealth,
     PlaneRuntime,
@@ -586,6 +592,12 @@ def test_package_root_exports_the_stable_composition_facade() -> None:
     assert astralplane.AuthorityRepository is PublicAuthorityRepository
     assert astralplane.create_authority_repository is create_authority_repository
     assert astralplane.create_atlas_page_repository is create_atlas_page_repository
+    assert astralplane.AtlasPageAppendCommand is AtlasPageAppendCommand
+    assert astralplane.AtlasPageEditChange is AtlasPageEditChange
+    assert astralplane.AtlasPageEditCommand is AtlasPageEditCommand
+    assert astralplane.AtlasPageRevisionBatch is AtlasPageRevisionBatch
+    assert astralplane.AtlasPageRevisionCursor is AtlasPageRevisionCursor
+    assert astralplane.AtlasPageRevisionRecord is AtlasPageRevisionRecord
     assert astralplane.create_attachment_parser_repository is create_attachment_parser_repository
     assert not hasattr(astralplane, "create_blob_store_contract")
     assert astralplane.create_background_task_repository is create_background_task_repository

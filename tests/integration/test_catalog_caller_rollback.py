@@ -26,7 +26,7 @@ from astralplane.contracts import OutboxEntry, Transaction
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
-from astralplane.repositories.atlas_pages import AtlasPageCreateCommand
+from astralplane.repositories.atlas_pages import AtlasPageCreateCommand, AtlasPageEditCommand
 from astralplane.repositories.audit import AuditEvent
 from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
@@ -1041,6 +1041,31 @@ def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction)
             created_at=10,
         ),
     )
+    catalog.atlas_pages.edit_page(
+        transaction,
+        command=AtlasPageEditCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110081",
+            page_id="11111111-1111-4111-8111-111111110080",
+            expected_revision=1,
+            sources=("synthetic/rollback-edit",),
+            content=b"synthetic-opaque-atlas-revision-ciphertext",
+            updated_at=20,
+        ),
+    )
+
+
+def _observe_atlas_rollback(transaction: Transaction) -> tuple[int, int]:
+    page = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    revisions = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page_revision WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    assert page is not None and revisions is not None
+    return int(page["value"]), int(revisions["value"])
 
 
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
@@ -1422,13 +1447,9 @@ ROLLBACK_CASES = (
     RollbackCase(
         "atlas_pages",
         _write_atlas_pages,
-        _count(
-            "atlas_page",
-            "page_id",
-            "11111111-1111-4111-8111-111111110080",
-        ),
-        1,
-        0,
+        _observe_atlas_rollback,
+        (1, 2),
+        (0, 0),
     ),
 )
 

@@ -1,6 +1,6 @@
-"""Opaque owner- and project-scoped Atlas page heads, terminal tombstones, and exact
-command receipts. Editing, revision history, links, and all content policy remain outside
-this store; callers own transactions and encrypt page content before it reaches Plane.
+"""Opaque owner- and project-scoped Atlas page heads, immutable content revisions, terminal
+tombstones, and exact command receipts. Revision bytes, edits, pagination, and replay stay
+neutral; callers own transactions and encrypt page content before it reaches Plane.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ MAX_SOURCE_CHARACTERS: Final = 512
 MAX_PROJECT_CHARACTERS: Final = 128
 MAX_SLUG_CHARACTERS: Final = 128
 MAX_PAGE_LIST: Final = 100
+MAX_REVISION_LIST: Final = 100
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -186,6 +187,45 @@ class AtlasPageDeleteCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class AtlasPageEditCommand:
+    owner_id: str = field(repr=False)
+    command_id: str
+    page_id: str
+    expected_revision: int
+    sources: tuple[str, ...]
+    content: bytes = field(repr=False)
+    updated_at: int
+
+    def __post_init__(self) -> None:
+        _owner(self.owner_id)
+        _identifier(self.command_id, "command_id")
+        _identifier(self.page_id, "page_id")
+        _integer(self.expected_revision, "expected_revision", minimum=1, maximum=MAX_REVISION - 1)
+        object.__setattr__(self, "sources", _sources(self.sources))
+        _content(self.content)
+        _integer(self.updated_at, "updated_at", maximum=MAX_TIME)
+
+    @property
+    def content_sha256(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+    @property
+    def request_digest(self) -> str:
+        return _request_digest(
+            {
+                "version": 1,
+                "kind": "atlas_page_edit",
+                "owner_id": self.owner_id,
+                "page_id": self.page_id,
+                "expected_revision": self.expected_revision,
+                "sources": list(self.sources),
+                "content_sha256": self.content_sha256,
+                "updated_at": self.updated_at,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AtlasPageRecord:
     owner_id: str = field(repr=False)
     page_id: str
@@ -240,18 +280,33 @@ class AtlasPageCommandReceipt:
     request_digest: str
     result_revision: int
     created_at: int
+    expected_revision: int | None = None
 
     def __post_init__(self) -> None:
         _owner(self.owner_id)
         _identifier(self.command_id, "command_id")
         _identifier(self.page_id, "page_id")
-        if type(self.command) is not str or self.command not in {"create", "delete"}:
-            raise RepositoryValidationError("command must be create or delete")
+        if type(self.command) is not str or self.command not in {"create", "edit", "delete"}:
+            raise RepositoryValidationError("command must be create, edit, or delete")
         _digest(self.request_digest, "request_digest")
         _integer(self.result_revision, "result_revision", minimum=1)
         _integer(self.created_at, "created_at", maximum=MAX_TIME)
-        if (self.command == "create" and self.result_revision != 1) or (
-            self.command == "delete" and self.result_revision < 2
+        if self.expected_revision is not None:
+            _integer(
+                self.expected_revision,
+                "expected_revision",
+                minimum=1,
+                maximum=MAX_REVISION - 1,
+            )
+        if self.command == "create":
+            if self.result_revision != 1 or self.expected_revision is not None:
+                raise RepositoryValidationError("command receipt revision is inconsistent")
+            return
+        if self.result_revision < 2:
+            raise RepositoryValidationError("command receipt revision is inconsistent")
+        if (
+            self.expected_revision is not None
+            and self.result_revision != self.expected_revision + 1
         ):
             raise RepositoryValidationError("command receipt revision is inconsistent")
 
@@ -303,6 +358,92 @@ class AtlasPageBatch:
             raise RepositoryValidationError("atlas page batch cursor is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class AtlasPageRevisionRecord:
+    owner_id: str = field(repr=False)
+    page_id: str
+    revision: int
+    sources: tuple[str, ...]
+    content: bytes = field(repr=False)
+    content_sha256: str
+    created_at: int
+
+    def __post_init__(self) -> None:
+        _owner(self.owner_id)
+        _identifier(self.page_id, "page_id")
+        _integer(self.revision, "revision", minimum=1)
+        object.__setattr__(self, "sources", _sources(self.sources))
+        _content(self.content)
+        _digest(self.content_sha256, "content_sha256")
+        if hashlib.sha256(self.content).hexdigest() != self.content_sha256:
+            raise RepositoryValidationError("atlas page revision digest does not match content")
+        _integer(self.created_at, "created_at", maximum=MAX_TIME)
+
+
+@dataclass(frozen=True, slots=True)
+class AtlasPageRevisionCursor:
+    owner_id: str = field(repr=False)
+    page_id: str
+    revision: int
+
+    def __post_init__(self) -> None:
+        _owner(self.owner_id)
+        _identifier(self.page_id, "page_id")
+        _integer(self.revision, "revision", minimum=1)
+
+
+@dataclass(frozen=True, slots=True)
+class AtlasPageRevisionBatch:
+    records: tuple[AtlasPageRevisionRecord, ...]
+    next_cursor: AtlasPageRevisionCursor | None
+
+    def __post_init__(self) -> None:
+        if type(self.records) is not tuple or any(
+            type(record) is not AtlasPageRevisionRecord for record in self.records
+        ):
+            raise RepositoryValidationError("atlas revision batch requires detached records")
+        if (
+            self.next_cursor is not None
+            and type(self.next_cursor) is not AtlasPageRevisionCursor
+        ):
+            raise RepositoryValidationError("atlas revision batch cursor is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class AtlasPageEditChange:
+    page: AtlasPageRecord
+    revision: AtlasPageRevisionRecord
+    receipt: AtlasPageCommandReceipt
+    replayed: bool
+
+    def __post_init__(self) -> None:
+        if type(self.page) is not AtlasPageRecord:
+            raise RepositoryValidationError("atlas page edit requires a typed page")
+        if type(self.revision) is not AtlasPageRevisionRecord:
+            raise RepositoryValidationError("atlas page edit requires a typed revision")
+        if type(self.receipt) is not AtlasPageCommandReceipt:
+            raise RepositoryValidationError("atlas page edit requires a typed receipt")
+        _boolean(self.replayed, "replayed")
+        if self.receipt.command != "edit":
+            raise RepositoryValidationError("atlas page edit receipt is inconsistent")
+        if (self.page.owner_id, self.page.page_id) != (
+            self.receipt.owner_id,
+            self.receipt.page_id,
+        ) or (self.revision.owner_id, self.revision.page_id) != (
+            self.receipt.owner_id,
+            self.receipt.page_id,
+        ):
+            raise RepositoryValidationError("atlas page edit identity is inconsistent")
+        if self.revision.revision != self.receipt.result_revision:
+            raise RepositoryValidationError("atlas page edit revision is inconsistent")
+        if self.page.deleted or self.page.revision < self.revision.revision:
+            raise RepositoryValidationError("atlas page edit result is inconsistent")
+
+
+AtlasPageAppendCommand = AtlasPageEditCommand
+AtlasPageAppendChange = AtlasPageEditChange
+
+
 def _page(row: Any) -> AtlasPageRecord | None:
     if row is None:
         return None
@@ -340,9 +481,30 @@ def _receipt(row: Any) -> AtlasPageCommandReceipt | None:
             row["request_digest"],
             row["result_revision"],
             row["created_at"],
+            row.get("expected_revision"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise RepositoryDataError("invalid stored atlas page command receipt") from exc
+
+
+def _revision(row: Any) -> AtlasPageRevisionRecord | None:
+    if row is None:
+        return None
+    try:
+        sources = row["sources"]
+        if isinstance(sources, str):
+            sources = json.loads(sources)
+        return AtlasPageRevisionRecord(
+            row["owner_id"],
+            str(row["page_id"]),
+            row["revision"],
+            tuple(sources),
+            bytes(row["content"]),
+            row["content_sha256"],
+            row["created_at"],
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RepositoryDataError("invalid stored atlas page revision") from exc
 
 
 class AtlasPageRepository:
@@ -412,6 +574,19 @@ class AtlasPageRepository:
         page = _page(row)
         if page is None:
             raise RepositoryDataError("atlas page insert returned no record")
+        transaction.execute(
+            "INSERT INTO atlas_page_revision(owner_id,page_id,revision,sources,content,"
+            "content_sha256,created_at) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)",
+            (
+                command.owner_id,
+                command.page_id,
+                1,
+                _canonical(list(command.sources)),
+                command.content,
+                command.content_sha256,
+                command.created_at,
+            ),
+        )
         receipt = AtlasPageCommandReceipt(
             command.owner_id,
             command.command_id,
@@ -423,7 +598,8 @@ class AtlasPageRepository:
         )
         transaction.execute(
             "INSERT INTO atlas_page_command(owner_id,command_id,page_id,command,"
-            "request_digest,result_revision,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+            "request_digest,result_revision,created_at,expected_revision)"
+            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 receipt.owner_id,
                 receipt.command_id,
@@ -432,6 +608,7 @@ class AtlasPageRepository:
                 receipt.request_digest,
                 receipt.result_revision,
                 receipt.created_at,
+                receipt.expected_revision,
             ),
         )
         return AtlasPageChange(page, receipt, False)
@@ -506,10 +683,12 @@ class AtlasPageRepository:
             command.request_digest,
             page.revision,
             command.deleted_at,
+            command.expected_revision,
         )
         transaction.execute(
             "INSERT INTO atlas_page_command(owner_id,command_id,page_id,command,"
-            "request_digest,result_revision,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+            "request_digest,result_revision,created_at,expected_revision)"
+            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 receipt.owner_id,
                 receipt.command_id,
@@ -518,9 +697,246 @@ class AtlasPageRepository:
                 receipt.request_digest,
                 receipt.result_revision,
                 receipt.created_at,
+                receipt.expected_revision,
             ),
         )
         return AtlasPageChange(page, receipt, False)
+
+    def edit_page(
+        self, transaction: Any, *, command: AtlasPageEditCommand
+    ) -> AtlasPageEditChange:
+        if type(command) is not AtlasPageEditCommand:
+            raise RepositoryValidationError("typed atlas page edit command required")
+        command = AtlasPageEditCommand(
+            command.owner_id,
+            command.command_id,
+            command.page_id,
+            command.expected_revision,
+            command.sources,
+            command.content,
+            command.updated_at,
+        )
+        self._lock_owner(transaction, command.owner_id)
+        stored_receipt = _receipt(
+            transaction.fetch_one(
+                "SELECT * FROM atlas_page_command WHERE owner_id=%s AND command_id=%s FOR UPDATE",
+                (command.owner_id, command.command_id),
+            )
+        )
+        if stored_receipt is not None:
+            if (
+                stored_receipt.page_id,
+                stored_receipt.command,
+                stored_receipt.request_digest,
+            ) != (command.page_id, "edit", command.request_digest):
+                raise RepositoryConflictError("atlas page command identity was reused")
+            page = self.get_page(
+                transaction,
+                owner_id=command.owner_id,
+                page_id=command.page_id,
+                include_deleted=True,
+            )
+            if page is None:
+                raise RepositoryDataError("atlas page command receipt has no page")
+            if page.deleted:
+                raise RepositoryConflictError("atlas page is deleted")
+            revision = self.get_revision(
+                transaction,
+                owner_id=command.owner_id,
+                page_id=command.page_id,
+                revision=stored_receipt.result_revision,
+                include_deleted=True,
+            )
+            if revision is None:
+                raise RepositoryDataError("atlas page edit receipt has no revision")
+            return AtlasPageEditChange(page, revision, stored_receipt, True)
+        current = _page(
+            transaction.fetch_one(
+                "SELECT * FROM atlas_page WHERE owner_id=%s AND page_id=%s FOR UPDATE",
+                (command.owner_id, command.page_id),
+            )
+        )
+        if current is None:
+            raise RepositoryNotFoundError("atlas page not found")
+        if current.deleted:
+            raise RepositoryConflictError("atlas page is deleted")
+        if current.revision != command.expected_revision:
+            raise RepositoryConflictError("atlas page revision changed")
+        if command.updated_at < current.updated_at:
+            raise RepositoryConflictError("atlas page edit clock regressed")
+        revision = AtlasPageRevisionRecord(
+            command.owner_id,
+            command.page_id,
+            current.revision + 1,
+            command.sources,
+            command.content,
+            command.content_sha256,
+            command.updated_at,
+        )
+        transaction.execute(
+            "INSERT INTO atlas_page_revision(owner_id,page_id,revision,sources,content,"
+            "content_sha256,created_at) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)",
+            (
+                revision.owner_id,
+                revision.page_id,
+                revision.revision,
+                _canonical(list(revision.sources)),
+                revision.content,
+                revision.content_sha256,
+                revision.created_at,
+            ),
+        )
+        row = transaction.fetch_one(
+            "UPDATE atlas_page SET revision=%s,sources=%s::jsonb,content=%s,"
+            "content_sha256=%s,updated_at=%s WHERE owner_id=%s AND page_id=%s"
+            " AND revision=%s AND deleted_at IS NULL RETURNING *",
+            (
+                revision.revision,
+                _canonical(list(revision.sources)),
+                revision.content,
+                revision.content_sha256,
+                revision.created_at,
+                command.owner_id,
+                command.page_id,
+                command.expected_revision,
+            ),
+        )
+        page = _page(row)
+        if page is None:
+            raise RepositoryConflictError("atlas page revision changed")
+        receipt = AtlasPageCommandReceipt(
+            command.owner_id,
+            command.command_id,
+            command.page_id,
+            "edit",
+            command.request_digest,
+            revision.revision,
+            command.updated_at,
+            command.expected_revision,
+        )
+        transaction.execute(
+            "INSERT INTO atlas_page_command(owner_id,command_id,page_id,command,"
+            "request_digest,result_revision,created_at,expected_revision)"
+            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                receipt.owner_id,
+                receipt.command_id,
+                receipt.page_id,
+                receipt.command,
+                receipt.request_digest,
+                receipt.result_revision,
+                receipt.created_at,
+                receipt.expected_revision,
+            ),
+        )
+        return AtlasPageEditChange(page, revision, receipt, False)
+
+    def append_revision(
+        self, transaction: Any, *, command: AtlasPageEditCommand
+    ) -> AtlasPageEditChange:
+        return self.edit_page(transaction, command=command)
+
+    def get_revision(
+        self,
+        query: Any,
+        *,
+        owner_id: str,
+        page_id: str,
+        revision: int,
+        include_deleted: bool = False,
+    ) -> AtlasPageRevisionRecord | None:
+        owner_id = _owner(owner_id)
+        page_id = _identifier(page_id, "page_id")
+        revision = _integer(revision, "revision", minimum=1)
+        include = _boolean(include_deleted, "include_deleted")
+        statement = (
+            "SELECT stored.* FROM atlas_page_revision AS stored"
+            " JOIN atlas_page AS page ON page.owner_id=stored.owner_id"
+            " AND page.page_id=stored.page_id"
+            " WHERE stored.owner_id=%s AND stored.page_id=%s AND stored.revision=%s"
+        )
+        if not include:
+            statement += " AND page.deleted_at IS NULL"
+        return _revision(query.fetch_one(statement, (owner_id, page_id, revision)))
+
+    def list_revisions(
+        self,
+        query: Any,
+        *,
+        owner_id: str,
+        page_id: str,
+        include_deleted: bool = False,
+        cursor: AtlasPageRevisionCursor | None = None,
+        limit: int = 50,
+    ) -> AtlasPageRevisionBatch:
+        owner_id = _owner(owner_id)
+        page_id = _identifier(page_id, "page_id")
+        include = _boolean(include_deleted, "include_deleted")
+        if type(limit) is not int or not 1 <= limit <= MAX_REVISION_LIST:
+            raise RepositoryValidationError("atlas revision limit is outside its supported bounds")
+        clauses = ["stored.owner_id=%s", "stored.page_id=%s"]
+        parameters: list[object] = [owner_id, page_id]
+        if not include:
+            clauses.append("page.deleted_at IS NULL")
+        if cursor is not None:
+            if type(cursor) is not AtlasPageRevisionCursor or (
+                cursor.owner_id,
+                cursor.page_id,
+            ) != (owner_id, page_id):
+                raise RepositoryValidationError("atlas revision cursor is invalid for this scope")
+            clauses.append("stored.revision<%s")
+            parameters.append(cursor.revision)
+        parameters.append(limit + 1)
+        rows = query.fetch_all(
+            "SELECT stored.* FROM atlas_page_revision AS stored"
+            " JOIN atlas_page AS page ON page.owner_id=stored.owner_id"
+            " AND page.page_id=stored.page_id WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY stored.revision DESC LIMIT %s",
+            tuple(parameters),
+        )
+        records = tuple(_revision(row) for row in rows[:limit])
+        next_cursor = None
+        if len(rows) > limit and records:
+            last = records[-1]
+            next_cursor = AtlasPageRevisionCursor(owner_id, page_id, last.revision)
+        return AtlasPageRevisionBatch(records, next_cursor)
+
+    def get_page_revision(
+        self,
+        query: Any,
+        *,
+        owner_id: str,
+        page_id: str,
+        revision: int,
+        include_deleted: bool = False,
+    ) -> AtlasPageRevisionRecord | None:
+        return self.get_revision(
+            query,
+            owner_id=owner_id,
+            page_id=page_id,
+            revision=revision,
+            include_deleted=include_deleted,
+        )
+
+    def list_page_revisions(
+        self,
+        query: Any,
+        *,
+        owner_id: str,
+        page_id: str,
+        include_deleted: bool = False,
+        cursor: AtlasPageRevisionCursor | None = None,
+        limit: int = 50,
+    ) -> AtlasPageRevisionBatch:
+        return self.list_revisions(
+            query,
+            owner_id=owner_id,
+            page_id=page_id,
+            include_deleted=include_deleted,
+            cursor=cursor,
+            limit=limit,
+        )
 
     def get_page(
         self,
@@ -621,16 +1037,24 @@ __all__ = (
     "MAX_PAGE_LIST",
     "MAX_PROJECT_CHARACTERS",
     "MAX_REVISION",
+    "MAX_REVISION_LIST",
     "MAX_SLUG_CHARACTERS",
     "MAX_SOURCES",
     "MAX_SOURCE_CHARACTERS",
     "MAX_TIME",
+    "AtlasPageAppendChange",
+    "AtlasPageAppendCommand",
     "AtlasPageBatch",
     "AtlasPageChange",
     "AtlasPageCommandReceipt",
     "AtlasPageCreateCommand",
     "AtlasPageCursor",
     "AtlasPageDeleteCommand",
+    "AtlasPageEditChange",
+    "AtlasPageEditCommand",
     "AtlasPageRecord",
     "AtlasPageRepository",
+    "AtlasPageRevisionBatch",
+    "AtlasPageRevisionCursor",
+    "AtlasPageRevisionRecord",
 )

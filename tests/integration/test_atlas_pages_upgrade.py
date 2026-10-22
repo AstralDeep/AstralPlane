@@ -31,7 +31,11 @@ OWNER = "atlas-upgrade-owner"
 
 def prior_runner(database):
     registry = m.MigrationRegistry(
-        m.MIGRATION_REGISTRY.migrations[:-1],
+        tuple(
+            edge
+            for edge in m.MIGRATION_REGISTRY.migrations
+            if edge.target_revision <= "089.005"
+        ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
@@ -168,11 +172,15 @@ def test_populated_089_006_upgrade_preserves_rows_adds_only_atlas_tables(predece
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
     report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-atlas-pages",)
+    assert report.applied_steps == (
+        "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM atlas_page") == ()
         assert tx.fetch_all("SELECT * FROM atlas_page_command") == ()
+        assert tx.fetch_all("SELECT * FROM atlas_page_revision") == ()
         created = AtlasPageRepository().create_page(tx, command=page_command())
         assert created.page.content == b"synthetic-opaque-upgrade-ciphertext"
     assert (
@@ -203,7 +211,10 @@ def test_interrupted_atlas_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-atlas-pages",)
+    ).applied_steps == (
+        "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+    )
 
 
 def test_atlas_namesake_or_damaged_predecessor_is_refused(predecessor):
@@ -229,6 +240,9 @@ def test_atlas_namesake_or_damaged_predecessor_is_refused(predecessor):
         "DROP TRIGGER atlas_page_lifecycle ON atlas_page",
         "DROP TRIGGER atlas_page_command_immutable ON atlas_page_command",
         "ALTER TABLE atlas_page DROP CONSTRAINT atlas_page_lifecycle_shape",
+        "DROP INDEX atlas_page_revision_history",
+        "DROP TRIGGER atlas_page_revision_immutable ON atlas_page_revision",
+        "DROP TRIGGER atlas_page_head_revision ON atlas_page",
     ],
 )
 def test_current_atlas_catalog_damage_is_refused(migrated_clone, corruption):
@@ -255,7 +269,7 @@ def test_damaged_notification_predecessor_is_refused_without_atlas_adoption(
         seed_populated(tx)
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(expected_revision="089.006")
+        current_runner(db).run(expected_revision="089.007")
     with db.transaction() as tx:
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.005"
