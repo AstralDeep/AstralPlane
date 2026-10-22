@@ -5,6 +5,7 @@ metadata, and survives an interrupted retry.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from dataclasses import replace
@@ -17,7 +18,14 @@ from test_operation_payload_postgres import settle_args
 from test_session_execution_postgres import guard, operation, seed, stored_rows
 from test_session_incarnation_postgres import issued
 
-from astralplane import RestoredSessionRetirement, SessionRetirementError, retire_restored_sessions
+from astralplane import (
+    JointRestoreError,
+    RestoreBlobEntry,
+    RestoredSessionRetirement,
+    SessionRetirementError,
+    recover_joint_restore,
+    retire_restored_sessions,
+)
 from astralplane.database.migrations import MIGRATION_DIGEST
 from astralplane.database.revision import SCHEMA_REVISION
 from astralplane.repositories import RepositoryConflictError
@@ -56,6 +64,26 @@ def target(database):
 def sessions(database):
     with database.transaction() as tx:
         return tx.fetch_all("SELECT * FROM web_session ORDER BY sid")
+
+
+def joint_restore_arguments(target, tmp_path):
+    root = tmp_path / "restored-durable-root"
+    root.mkdir()
+    content = b"synthetic preserved bytes"
+    blob = root / "preserved.bin"
+    blob.write_bytes(content)
+    entry = RestoreBlobEntry(
+        root="attachments",
+        storage_key="preserved.bin",
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    return blob, {
+        **target,
+        "blob_roots": {"attachments": root},
+        "blob_inventory": (entry,),
+        "expected_blob_roots": ("attachments",),
+    }
 
 
 def test_public_entry_retires_all_owners_without_decoding_or_initializing(
@@ -111,6 +139,71 @@ def test_wrong_expected_target_refuses_without_any_session_mutation(database, ta
     )
     with pytest.raises(SessionRetirementError, match=r"^restored session retirement unavailable$"):
         retire_restored_sessions(**changed)
+    assert sessions(database) == before
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "wrong-database",
+        "wrong-schema",
+        "wrong-revision",
+        "wrong-digest",
+        "missing-blob",
+        "extra-blob",
+        "truncated-blob",
+        "changed-content",
+        "wrong-inventory-digest",
+    ],
+)
+def test_joint_restore_refuses_unqualified_unit_without_session_mutation(
+    database, target, tmp_path, damage
+):
+    with database.transaction() as tx:
+        issued(tx)
+    before = sessions(database)
+    blob, restore = joint_restore_arguments(target, tmp_path)
+    root = blob.parent
+    if damage == "wrong-database":
+        restore["expected_database"] = "unselected-database"
+    elif damage == "wrong-schema":
+        restore["expected_schema"] = "unselected_schema"
+    elif damage == "wrong-revision":
+        restore["expected_schema_revision"] = "088.008"
+    elif damage == "wrong-digest":
+        restore["expected_migration_digest"] = "0" * 64
+    elif damage == "missing-blob":
+        blob.unlink()
+    elif damage == "extra-blob":
+        (root / "unexpected.bin").write_bytes(b"unexpected")
+    elif damage == "truncated-blob":
+        blob.write_bytes(b"synthetic")
+    elif damage == "changed-content":
+        blob.write_bytes(b"synthetic preserued bytes")
+    else:
+        restore["expected_blob_inventory_digest"] = "0" * 64
+    with pytest.raises(JointRestoreError):
+        recover_joint_restore(**restore)
+    assert sessions(database) == before
+
+
+def test_joint_restore_retirement_failure_returns_no_completion_evidence(
+    database, target, tmp_path, monkeypatch
+):
+    with database.transaction() as tx:
+        issued(tx)
+    before = sessions(database)
+    _, restore = joint_restore_arguments(target, tmp_path)
+    original = SessionRepository.retire_all_for_recovery
+
+    def interrupted(repository, transaction):
+        original(repository, transaction)
+        raise RuntimeError("synthetic interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SessionRepository, "retire_all_for_recovery", interrupted)
+        with pytest.raises(SessionRetirementError):
+            recover_joint_restore(**restore)
     assert sessions(database) == before
 
 
@@ -224,8 +317,7 @@ def test_restore_retirement_preserves_liabilities_and_authentic_settlement(
     database, target, tmp_path, outcome
 ):
     repository = AssignmentRepository()
-    blob = tmp_path / "configured-blob"
-    blob.write_bytes(b"synthetic preserved bytes")
+    blob, restore = joint_restore_arguments(target, tmp_path)
     with database.transaction() as tx:
         values = operation(tx, repository, issued=True)
         record = values[3]
@@ -245,8 +337,11 @@ def test_restore_retirement_preserves_liabilities_and_authentic_settlement(
         audit = tx.fetch_all("SELECT * FROM audit_events")
         assert grants and receipts and audit
         session_count = tx.fetch_one("SELECT count(*) AS count FROM web_session")["count"]
-    result = retire_restored_sessions(**target)
+    result = recover_joint_restore(**restore)
     assert result.retired_sessions == session_count and session_count > 0
+    repeated = recover_joint_restore(**restore)
+    assert repeated.retired_sessions == 0
+    assert repeated.evidence == result.evidence
     with database.transaction() as tx:
         assert stored_rows(tx, record.assignment_id) == before
         assert tx.fetch_all("SELECT * FROM user_offline_grant ORDER BY id") == grants

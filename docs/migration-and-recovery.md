@@ -636,17 +636,27 @@ maintenance window has been verified:
 3. Restore the verified PostgreSQL backup into the selected recovery database and restore every
    paired blob/workspace root into new explicit destinations without following links.
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
-   selecting a composition. A restored `066.001` state has no Plane digest and must match its
-   pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
-   `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, and `089.005` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.006` state must carry the exact current
-   registry digest and pass the current structural verifier.
+   selecting a composition. Supply the complete root-name set and relative-key/size/digest
+   manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
+   non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`,
+   `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`,
+   `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`,
+   `089.003`, `089.004`, and `089.005` states must carry their exact pinned historical registry
+   digests and match their pinned predecessor catalogs. A restored `089.006` state must carry the
+   exact current registry digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
-6. Re-run migration and required product reconciliation under closed admission, repeat the
-   acceptance checks, then reopen traffic. Retain the previous and restored copies until the
-   rollback window closes.
+6. Re-run migration and required product reconciliation under closed admission, then call
+   `recover_joint_restore` to repeat qualification and retire every restored session. Retain its
+   opaque evidence, repeat until retirement returns zero after quiescence, rerun the acceptance
+   checks, and only then let the host decide whether traffic may reopen. Retain the previous and
+   restored copies until the rollback window closes.
+
+A qualified restore returns only after the exact current database/catalog and every supplied blob
+root agree. Repeating it on the same quiescent unit returns equivalent evidence and a zero
+retirement count. The full public contract, denial reasons, and forward-repair procedure are in
+[joint restore qualification](joint-restore-qualification.md).
 
 If a restore, migration, reconciliation, or session-retirement transaction loses its connection or
 commit acknowledgement, keep admission closed and treat the outcome as unknown. Re-read the durable
@@ -658,7 +668,8 @@ The restore procedure ends with a closed-admission candidate, not a writable sta
 preconditions and evidence required before the host may open admission, including host-owned
 election/fencing, complete root verification, restored-session retirement, commit ambiguity, and
 forward-repair limits, are defined in
-[recovery and writable readiness](recovery-and-writable-readiness.md).
+[recovery and writable readiness](recovery-and-writable-readiness.md). The combined
+`recover_joint_restore` facade does not replace that host decision.
 
 The read-only [endpoint failover readiness](endpoint-failover-readiness.md) facade qualifies
 the selected external PostgreSQL primary and its paired blob roots and returns fence evidence
