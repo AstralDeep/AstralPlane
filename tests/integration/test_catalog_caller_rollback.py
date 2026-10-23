@@ -42,6 +42,7 @@ from astralplane.repositories.maintenance import (
     MaintenanceInputRecord,
     MaintenanceUnitRecord,
 )
+from astralplane.repositories.observations import ObservationCaptureCommand
 from astralplane.repositories.personalization_graph import ShortTermSignalRecord
 from astralplane.repositories.preferences import FeedbackRecord
 from astralplane.repositories.quality_audit import QualityTestRunRecord
@@ -1043,6 +1044,33 @@ def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction)
     )
 
 
+def _observe_observations(transaction: Transaction) -> tuple[int, int]:
+    observation = _count(
+        "tool_observation", "observation_id", "11111111-1111-4111-8111-111111110081"
+    )(transaction)
+    page = _count(
+        "tool_observation_page", "observation_id", "11111111-1111-4111-8111-111111110081"
+    )(transaction)
+    return (observation, page)
+
+
+def _write_observations(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.observations.capture(
+        transaction,
+        command=ObservationCaptureCommand(
+            owner_id=_OWNER,
+            conversation_id="rollback-conversation",
+            observation_id="11111111-1111-4111-8111-111111110081",
+            operation_id="rollback-operation",
+            source_refs=("synthetic/rollback",),
+            seal="rollback-seal-v1",
+            content=b"synthetic-opaque-observation-ciphertext",
+            created_at=10,
+            expires_at=20,
+        ),
+    )
+
+
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.completion_wake.register_subscription(
         transaction,
@@ -1279,6 +1307,13 @@ ROLLBACK_CASES = (
         (0, 0, 0),
     ),
     RollbackCase(
+        "observations",
+        _write_observations,
+        _observe_observations,
+        (1, 1),
+        (0, 0),
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1437,7 +1472,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 44
+    assert len(applicable_keys) == len(set(applicable_keys)) == 45
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name
