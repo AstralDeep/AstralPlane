@@ -166,6 +166,15 @@ def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor)
     catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
 
+def _observations(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.observations.get_observation(
+        transaction,
+        owner_id=_OWNER,
+        conversation_id="contract-conversation",
+        observation_id=_UUID4,
+    )
+
+
 def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.stop_epochs.get(transaction, owner_id=_OWNER)
 
@@ -694,6 +703,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ),
     ),
     RepositoryContract(
+        "observations",
+        api.create_observation_repository,
+        "src/astralplane/repositories/observations.py",
+        _observations,
+        _OWNER,
+        "owner_id=%s AND conversation_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "purged_at IS NULL", "capture_seq"),
+        ("request_digest", "identity was reused"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -1141,6 +1162,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_notifications_089_005:test_entry_exact_replay_returns_original",
         "tests.test_notifications_089_005:test_acknowledgment_stale_revision_conflicts",
         "tests.test_notifications_089_005:test_deleted_entry_cannot_be_acknowledged",
+    ),
+    BehavioralEvidence(
+        "observations",
+        "tests.repositories.test_observations_postgres:"
+        "test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:"
+        "test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:"
+        "test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:"
+        "test_public_observation_contract_behaviors",
     ),
     BehavioralEvidence(
         "offline_grants",

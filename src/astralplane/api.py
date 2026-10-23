@@ -157,6 +157,17 @@ from astralplane.repositories.notifications import (
     NotificationPreferenceRecord,
     NotificationRepository,
 )
+from astralplane.repositories.observations import (
+    ObservationBatch,
+    ObservationCapture,
+    ObservationCaptureCommand,
+    ObservationCursor,
+    ObservationHead,
+    ObservationPage,
+    ObservationPurge,
+    ObservationRepository,
+    ObservationUsage,
+)
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -254,6 +265,10 @@ def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
 
 def create_notification_repository() -> NotificationRepository:
     return NotificationRepository()
+
+
+def create_observation_repository() -> ObservationRepository:
+    return ObservationRepository()
 
 
 def create_stop_epoch_repository() -> StopEpochRepository:
@@ -452,6 +467,7 @@ class RepositoryCatalog:
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
     notifications: NotificationRepository
+    observations: ObservationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -496,6 +512,7 @@ class RepositoryCatalog:
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
                 "notifications": self.notifications,
+                "observations": self.observations,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -559,6 +576,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
         notifications=create_notification_repository(),
+        observations=create_observation_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -835,6 +853,15 @@ __all__ = (
     "NotificationInboxEntry",
     "NotificationPreferenceRecord",
     "NotificationRepository",
+    "ObservationBatch",
+    "ObservationCapture",
+    "ObservationCaptureCommand",
+    "ObservationCursor",
+    "ObservationHead",
+    "ObservationPage",
+    "ObservationPurge",
+    "ObservationRepository",
+    "ObservationUsage",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
@@ -881,6 +908,7 @@ __all__ = (
     "create_knowledge_repository",
     "create_maintenance_repository",
     "create_notification_repository",
+    "create_observation_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",
