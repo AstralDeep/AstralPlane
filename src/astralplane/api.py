@@ -86,6 +86,15 @@ from astralplane.immutable_bundle_store import (
     paths_for,
     runtime_metadata_for_manifest,
 )
+from astralplane.joint_restore import (
+    JOINT_RESTORE_CONTRACT_VERSION,
+    JointRestoreCompletion,
+    JointRestoreError,
+    JointRestoreEvidence,
+    RestoreBlobEntry,
+    qualify_joint_restore,
+    recover_joint_restore,
+)
 from astralplane.outbox import PostgresOutboxStore
 from astralplane.purge import (
     DurablePurgeExecutor,
@@ -785,6 +794,7 @@ __all__ = (
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_OPERATION_KIND",
+    "JOINT_RESTORE_CONTRACT_VERSION",
     "AdmissionClass",
     "AgentRevisionRecord",
     "ArtifactCollisionError",
@@ -830,6 +840,9 @@ __all__ = (
     "GeneratedAgentPublicationResultMetadata",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
+    "JointRestoreCompletion",
+    "JointRestoreError",
+    "JointRestoreEvidence",
     "NotificationDeliveryIdentity",
     "NotificationEventKind",
     "NotificationInboxEntry",
@@ -849,6 +862,7 @@ __all__ = (
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
+    "RestoreBlobEntry",
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
@@ -911,6 +925,8 @@ __all__ = (
     "inspect_baseline_compatibility",
     "inspect_endpoint_readiness",
     "paths_for",
+    "qualify_joint_restore",
+    "recover_joint_restore",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",
 )
