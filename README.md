@@ -10,10 +10,10 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.006`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.008`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  `089.001`, `089.002`, `089.003`, `089.004`, and `089.005`
+  `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 - Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
@@ -23,11 +23,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.005`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.006` database must carry the exact current
+before the first migration write. A current `089.008` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -50,7 +50,7 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 45 members, in
+`create_repository_catalog()` returns the stable repository catalog. Its 46 members, in
 `RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
 `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
 `chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
@@ -60,7 +60,7 @@ AstralDeep; callers pass neutral owner context and retain transaction ownership.
 `personalization_graph`, `purge`,
 `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`,
 `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
-`work_admission`, `workspaces`, `completion_wake`, and `atlas_pages`.
+`work_admission`, `workspaces`, `completion_wake`, `atlas_pages`, and `atlas_links`.
 
 `preferences.personalization.get_memory(query, owner_id=..., memory_id=...,
 for_update=True)` reads and locks the current owner-scoped memory row until the caller's
@@ -114,9 +114,19 @@ See [notification records](docs/notification-records.md) and
 
 Schema `089.006` adds the bounded `atlas_pages` store: stable owner/project page identities,
 host-sealed content and source metadata, exact create/delete receipts, owner-scoped reads and
-keyset listings, and terminal tombstones that erase ciphertext. Editing, revision history, links,
-content encryption, authorization, and audit remain outside this slice. See
+keyset listings, and terminal tombstones that erase current head ciphertext. Content encryption,
+authorization, and audit remain outside this slice. See
 [Atlas page contracts](docs/atlas-page-contracts.md).
+
+Schema `089.007` adds immutable `atlas_page_revision` snapshots and fenced edits. An edit inserts
+the exact next revision before atomically advancing the page head, preserves bounded keyset
+history, and rejects stale fences, invalid replay, foreign owners, and deleted pages.
+
+Schema `089.008` adds bounded same-owner `atlas_links`: at most sixteen outgoing targets per
+page, exact page/link revision fences, immutable command receipts, one-hop backlink keyset
+traversal, and tombstone cleanup for either endpoint. Project traversal, rendering, content
+policy, authorization, and audit remain outside Plane. See
+[Atlas link contracts](docs/atlas-link-contracts.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -245,8 +255,11 @@ The revisions after `079.001`:
 - `089.002` adds personal mesh enrollment and revocation records, `089.003` adds owner stop epochs,
   and `089.004` adds completion subscriptions and wake receipts.
 - `089.005` adds notification preferences, ciphertext inbox entries, and delivery identities.
-- `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones; see
+- `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones.
+- `089.007` adds immutable Atlas page revisions and fenced, repeat-safe edits; see
   [Atlas page contracts](docs/atlas-page-contracts.md).
+- `089.008` adds bounded same-owner Atlas links, link revisions, command receipts, and backlink
+  traversal; see [Atlas link contracts](docs/atlas-link-contracts.md).
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating

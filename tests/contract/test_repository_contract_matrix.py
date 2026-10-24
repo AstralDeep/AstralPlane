@@ -98,6 +98,10 @@ def _atlas_pages(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
     catalog.atlas_pages.get_page(transaction, owner_id=_OWNER, page_id=_UUID4)
 
 
+def _atlas_links(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.atlas_links.list_links(transaction, owner_id=_OWNER, page_id=_UUID4)
+
+
 def _agents(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.agents.get_agent(transaction, owner_id=_OWNER, agent_id="agent-1")
 
@@ -941,6 +945,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         _OWNER,
         "owner_id=%s AND page_id=%s",
         ("pg_advisory_xact_lock", "FOR UPDATE", "revision=%s", "deleted_at IS NULL"),
+        ("request_digest", "command identity was reused", "expected_revision"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
+        "atlas_links",
+        api.create_atlas_link_repository,
+        "src/astralplane/repositories/atlas_links.py",
+        _atlas_links,
+        _OWNER,
+        "owner_id=%s AND page_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "link revision changed", "deleted_at IS NULL"),
         ("request_digest", "command identity was reused"),
         None,
         ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
@@ -1285,14 +1301,25 @@ BEHAVIORAL_EVIDENCE = (
     ),
     BehavioralEvidence(
         "atlas_pages",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+    ),
+    BehavioralEvidence(
+        "atlas_links",
+        "tests.repositories.test_atlas_links_postgres:"
+        "test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:"
+        "test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:"
+        "test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:"
+        "test_public_atlas_link_contract_behaviors",
     ),
 )
 
