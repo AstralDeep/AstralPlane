@@ -26,7 +26,8 @@ from astralplane.contracts import OutboxEntry, Transaction
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
-from astralplane.repositories.atlas_pages import AtlasPageCreateCommand
+from astralplane.repositories.atlas_links import AtlasLinkSetCommand
+from astralplane.repositories.atlas_pages import AtlasPageCreateCommand, AtlasPageEditCommand
 from astralplane.repositories.audit import AuditEvent
 from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
@@ -1041,6 +1042,60 @@ def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction)
             created_at=10,
         ),
     )
+    catalog.atlas_pages.edit_page(
+        transaction,
+        command=AtlasPageEditCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110081",
+            page_id="11111111-1111-4111-8111-111111110080",
+            expected_revision=1,
+            sources=("synthetic/rollback-edit",),
+            content=b"synthetic-opaque-atlas-revision-ciphertext",
+            updated_at=20,
+        ),
+    )
+
+
+def _observe_atlas_rollback(transaction: Transaction) -> tuple[int, int]:
+    page = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    revisions = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page_revision WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    assert page is not None and revisions is not None
+    return int(page["value"]), int(revisions["value"])
+
+
+def _write_atlas_links(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    for suffix, slug in ((81, "rollback-link-source"), (82, "rollback-link-target")):
+        catalog.atlas_pages.create_page(
+            transaction,
+            command=AtlasPageCreateCommand(
+                owner_id=_OWNER,
+                command_id=f"11111111-1111-4111-8111-1111111100{suffix}",
+                page_id=f"11111111-1111-4111-8111-1111111100{suffix}",
+                project_id="rollback-atlas-link-project",
+                slug=slug,
+                sources=(),
+                content=b"synthetic-opaque-atlas-link-ciphertext",
+                created_at=10,
+            ),
+        )
+    catalog.atlas_links.set_links(
+        transaction,
+        command=AtlasLinkSetCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110083",
+            page_id="11111111-1111-4111-8111-111111110081",
+            expected_page_revision=1,
+            expected_link_revision=0,
+            targets=("11111111-1111-4111-8111-111111110082",),
+            updated_at=20,
+        ),
+    )
 
 
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
@@ -1422,10 +1477,17 @@ ROLLBACK_CASES = (
     RollbackCase(
         "atlas_pages",
         _write_atlas_pages,
+        _observe_atlas_rollback,
+        (1, 2),
+        (0, 0),
+    ),
+    RollbackCase(
+        "atlas_links",
+        _write_atlas_links,
         _count(
-            "atlas_page",
-            "page_id",
-            "11111111-1111-4111-8111-111111110080",
+            "atlas_page_link",
+            "source_page_id",
+            "11111111-1111-4111-8111-111111110081",
         ),
         1,
         0,
@@ -1437,7 +1499,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 44
+    assert len(applicable_keys) == len(set(applicable_keys)) == 45
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name
