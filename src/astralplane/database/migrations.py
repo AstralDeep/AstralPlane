@@ -14,6 +14,7 @@ from typing import Final
 
 from astralplane.contracts import MigrationCallable, PlaneDatabase, Transaction
 from astralplane.database.assignment_schema import ASSIGNMENT_SCHEMA_STATEMENTS
+from astralplane.database.harness_binding_schema import HARNESS_BINDING_SCHEMA_STATEMENTS
 from astralplane.database.capability_publication_schema import (
     CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS,
 )
@@ -3551,6 +3552,12 @@ def _apply_plane_schema_089_009(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_089_010(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "089.009")
+    for statement in HARNESS_BINDING_SCHEMA_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
     PLANE_SCHEMA_067_STATEMENTS[-1],
     PLANE_SCHEMA_074_STATEMENTS[-1],
@@ -3563,6 +3570,7 @@ CURRENT_SCHEMA_VERIFICATION_STATEMENTS: Final = (
 CURRENT_SCHEMA_STRUCTURE_QUERY: Final = """
 WITH owned_tables(table_name) AS (
     VALUES
+        ('operation_harness_binding'),
         ('capability_publication'),
         ('agent_host_session'),
         ('agent_ownership'),
@@ -4565,7 +4573,7 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5"
+    "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4681,6 +4689,7 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     ("089.006", ("88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48",)),
     ("089.007", ("939f224d8a11622964a53b37a63dde6ec37095636145b018486883afe70e9dff",)),
     ('089.008', ('880dedb270bb3b151685136edbae32f9b4ee42f35d1286af7a395d5532f02d70',)),
+    ('089.009', ('50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5',)),
 )
 
 
@@ -5287,6 +5296,16 @@ PLANE_SCHEMA_089_009_MIGRATION: Final = Migration(
     checksum=_statements_checksum(CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_089_009,
 )
+PLANE_SCHEMA_089_009_SCHEMA_VERIFIER_CHECKSUM: Final = ('b90a854e8d71b8193c352910d49b774b3c3c51bf74c17f50ef750f4e95782498')
+PLANE_SCHEMA_089_009_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = ('004f82523616cb70da25657815e55f04c31520fc57ed5527403771c99ae438bf')
+PLANE_SCHEMA_089_009_REGISTRY_DIGEST: Final = ('c3e2b3d2d2a2f88a7b995eb6525f6f01df463bad5129a989f7ed70be5e95ed4b')
+PLANE_SCHEMA_089_010_MIGRATION: Final = Migration(
+    name="astralplane-089-operation-harness-bindings",
+    source_revisions=("089.009",),
+    target_revision="089.010",
+    checksum=_statements_checksum(HARNESS_BINDING_SCHEMA_STATEMENTS),
+    operation=_apply_plane_schema_089_010,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -5313,6 +5332,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_089_007_MIGRATION,
         PLANE_SCHEMA_089_008_MIGRATION,
         PLANE_SCHEMA_089_009_MIGRATION,
+        PLANE_SCHEMA_089_010_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -5403,9 +5423,19 @@ if (
     ).digest != PLANE_SCHEMA_089_008_REGISTRY_DIGEST
 ):
     raise MigrationDefinitionError('historical migration registry no longer matches its digest')
+if (
+    MigrationRegistry(
+        tuple(edge for edge in MIGRATION_REGISTRY.migrations if edge.target_revision <= '089.009'),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum=PLANE_SCHEMA_089_009_SCHEMA_VERIFIER_CHECKSUM,
+        predecessor_schema_verifier=_verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=PLANE_SCHEMA_089_009_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+    ).digest != PLANE_SCHEMA_089_009_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError('historical migration registry no longer matches its digest')
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="089.009",
+    schema_revision="089.010",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -5431,6 +5461,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "089.006",
         "089.007",
         "089.008",
+        "089.009",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -5457,6 +5488,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("089.006", PLANE_SCHEMA_089_006_REGISTRY_DIGEST),
         ("089.007", PLANE_SCHEMA_089_007_REGISTRY_DIGEST),
         ("089.008", PLANE_SCHEMA_089_008_REGISTRY_DIGEST),
+        ("089.009", PLANE_SCHEMA_089_009_REGISTRY_DIGEST),
     ),
 )
 
@@ -5552,4 +5584,9 @@ __all__ = (
     "PLANE_SCHEMA_089_008_SCHEMA_VERIFIER_CHECKSUM",
     "PLANE_SCHEMA_089_008_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
     "PLANE_SCHEMA_089_008_REGISTRY_DIGEST",
+    "HARNESS_BINDING_SCHEMA_STATEMENTS",
+    "PLANE_SCHEMA_089_010_MIGRATION",
+    "PLANE_SCHEMA_089_009_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_009_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_009_REGISTRY_DIGEST",
 )

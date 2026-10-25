@@ -176,6 +176,10 @@ from astralplane.repositories.generated_agent_publications import (
     generated_agent_publication_paths,
     generated_agent_publication_recovery_operation_binding,
 )
+from astralplane.repositories.harness_bindings import (
+    HarnessProfileIdentity,
+    OperationHarnessBinding,
+)
 from astralplane.repositories.harness_cleanup import HarnessCleanupRepository
 from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.identity import IdentityRepository
@@ -894,6 +898,7 @@ __all__ = (
     "GeneratedAgentPublicationOperationBinding",
     "GeneratedAgentPublicationRepository",
     "GeneratedAgentPublicationResultMetadata",
+    "HarnessProfileIdentity",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
     "JointRestoreCompletion",
@@ -904,6 +909,7 @@ __all__ = (
     "NotificationInboxEntry",
     "NotificationPreferenceRecord",
     "NotificationRepository",
+    "OperationHarnessBinding",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",

@@ -10,7 +10,7 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.009`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.010`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
   `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
@@ -25,11 +25,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
 Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.009` database must carry the exact current
+before the first migration write. A current `089.010` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -135,6 +135,11 @@ finite lifetime, withdraw or expire it with a state-revision compare-and-set fen
 only live rows at a caller-supplied UTC instant. Encrypted audience metadata and its digest
 stay opaque. Discovery, IAM, invocation, and A2A transport remain in Deep. See
 [capability publication records](docs/capability-publication-records.md).
+Schema `089.010` adds immutable operation harness-profile bindings. A typed profile/version/artifact
+identity is written once under the operation owner and current execution fence; legacy operations
+read as unbound, exact replay is idempotent, changed identities conflict, and stale fences cannot
+overwrite. Runner selection, provider routing, profile rollout, and artifact availability remain in
+the host. See [operation harness profile bindings](docs/harness-binding-contracts.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is

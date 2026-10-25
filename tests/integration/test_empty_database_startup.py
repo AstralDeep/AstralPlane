@@ -350,6 +350,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-atlas-revisions",
         "astralplane-089-atlas-links",
         "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -392,6 +393,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "atlas_page_link",
         "atlas_page_link_head",
         "atlas_page_link_command",
+        "operation_harness_binding",
         "test_runs",
         "test_case_results",
         "test_evidence",
@@ -998,6 +1000,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-atlas-revisions",
         "astralplane-089-atlas-links",
         "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
     )
 
     cursor = fixture.connection.cursor()
