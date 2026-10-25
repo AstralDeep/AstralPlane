@@ -18,6 +18,8 @@ package in-process; AstralPlane does not add a service port or a second database
 - Reconciliation advisory lock: `(1095980114, 60002)`
 - Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
   externally managed PostgreSQL primary and its paired blob roots
+- Joint restore: `astralplane.joint-restore/v1`, exact database/catalog plus paired blob-root
+  qualification and commit-safe restored-session retirement
 
 `create_postgres_runtime(...)` owns psycopg2 driver-pool construction, bounded checkout, runtime
 composition, and guarded startup. On a truly empty application schema it first installs the
@@ -270,6 +272,12 @@ a restored PostgreSQL/blob state as writable, including host-owned election and 
 The neutral, read-only fence evidence for an externally managed PostgreSQL primary and its
 paired blob roots, including primary loss, reconnect, stale writer, and promoted-endpoint
 refusal, is in [endpoint failover readiness](docs/endpoint-failover-readiness.md).
+
+The explicit database-plus-blob restore unit is qualified by
+`qualify_joint_restore(...)` and completed by `recover_joint_restore(...)`. Both reject wrong
+roots, incomplete or changed blobs, non-current schema/digest/catalog, and failed session
+retirement through the public facade. Their repeatable, path-free evidence and forward-repair
+limits are in [joint restore qualification](docs/joint-restore-qualification.md).
 
 ## Error diagnostics
 

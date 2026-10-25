@@ -4,17 +4,17 @@
 
 This document defines the neutral, implementable preconditions for treating a restored
 PostgreSQL database and its configured blob roots as a **writable** AstralPlane recovery state.
-It specifies the recovery boundary already associated with `astralplane.recovery/v1`; it does
-not add a service port, a second database, an election protocol, or a new runtime API.
+It specifies the recovery boundary associated with `astralplane.recovery/v1`; this document
+does not add a service port, a second database, an election protocol, or an admission API.
 
 The specification status is **defined and reviewable**. The runtime status is **partial**:
 Plane already provides guarded migration, exact catalog verification, durable boot
-reconciliation, joint-restore guidance, explicit restored-session retirement, explicit blob-root
-safety, and digest-checked blob reads. Plane does not provide automatic node election, automatic
-replica promotion, a global blob inventory, backup verification, a readiness certificate, or
-reconciliation of external LETS/authority state. Those remain host or operator responsibilities.
-A successful restore, a compatible row set, or `PlaneHealth.ready` alone is not a claim that a
-state is writable.
+reconciliation, explicit joint PostgreSQL/blob restore qualification, explicit restored-session
+retirement, explicit blob-root safety, and digest-checked blob reads. Plane does not provide
+automatic node election, automatic replica promotion, backup selection, a readiness certificate,
+or reconciliation of external LETS/authority state. Those remain host or operator
+responsibilities. A successful restore, a compatible row set, or `PlaneHealth.ready` alone is not
+a claim that a state is writable.
 
 The contract applies when a personal-mesh node is lost and a host is deciding whether another
 node or a restored deployment may serve the owner's durable state. Personal-mesh membership and
@@ -121,10 +121,12 @@ Before writable admission, the host MUST verify the restored root set against th
 inventory: expected files are present, unsafe entries are refused, file counts and byte counts
 match, and SHA-256 values match the recorded durable metadata for the same recovery point. Plane
 validates the explicit root, refuses traversal and symlink/reparse crossings, and verifies
-expected size and digest on supported reads, but it does not enumerate a whole root or prove
-that a backup is complete. It MUST NOT create missing bytes from database rows, delete extra
-bytes to make the inventory agree, or silently replace mismatched content. A missing or
-mismatched blob is a failed recovery precondition.
+expected size and digest on supported reads. `qualify_joint_restore(...)` additionally compares
+one caller-supplied manifest with the exact membership and bytes of every configured root, then
+binds the result to the database fence. Plane still does not choose or validate the backup, or
+prove that the supplied manifest is complete for the original recovery point. It MUST NOT create
+missing bytes from database rows, delete extra bytes to make the inventory agree, or silently
+replace mismatched content. A missing or mismatched blob is a failed recovery precondition.
 
 ### R7 — Complete migration and reconciliation before readiness
 
@@ -140,10 +142,12 @@ reported as ready.
 ### R8 — Retire every restored session
 
 After the restore and under closed admission, the host MUST call
+`recover_joint_restore(...)` or first `qualify_joint_restore(...)` followed by
 `retire_restored_sessions(database_url=..., expected_database=..., expected_schema=...,
 expected_schema_revision=..., expected_migration_digest=...)` from the matching Plane facade.
-The call MUST verify the exact database, schema, current revision, digest, and complete catalog,
-and MUST retire every restored `web_session` row in one transaction. The host MUST run it again
+The qualified path MUST verify the exact database, schema, current revision, digest, complete
+catalog, root identities, and supplied blob inventory before retirement. The retirement call
+MUST retire every restored `web_session` row in one transaction. The host MUST run it again
 after every restore, even when the snapshot contains evidence of an earlier retirement.
 
 A successful call proves only that a committed retirement deleted the sessions observed by that
@@ -178,7 +182,7 @@ be bound to the selected composition and the exact restore candidate, and MUST c
 | Reconciliation | `ReconciliationReport.schema_revision`, `plan_digest`, `advisory_lock`, every hook identity/attempt/result digest, and `durably_complete: true`. |
 | Restore | Backup snapshot identity, maintenance window, database and every root restored, writer-quiescence/fencing reference, and successful restore verification references. |
 | Blobs | Layout version, complete absolute root set with the host's root-identity evidence, file/byte counts, and SHA-256 manifest or equivalent verification references. |
-| Sessions | First retirement count, repeat retirement result (zero after quiescence), and the target database/schema/revision/digest checked by the facade. |
+| Sessions | First retirement count, repeat retirement result (zero after quiescence), the target database/schema/revision/digest checked by the facade, and the opaque joint-restore evidence digest. |
 | Host gate | Election/fencing evidence, admission-closed reference, external authority/effect reconciliation references, approver identity, and decision time. |
 
 The record MUST NOT contain the database URL, credentials, tokens, keys, raw user content, or
@@ -280,6 +284,7 @@ binds their observable behavior to deterministic cases.
 | Guarded migration, repeat-safe edges, exact digest, and full catalog verification | `src/astralplane/database/migrations.py` |
 | Migration-then-reconciliation readiness publication | `src/astralplane/database/bootstrap.py` and `src/astralplane/reconciliation.py` |
 | Explicit restored-session retirement and its data-free failure boundary | `src/astralplane/recovery.py` and `src/astralplane/repositories/history.py` |
+| Coordinated database/blob restore qualification and evidence | `src/astralplane/joint_restore.py` |
 | Explicit roots, safe paths, digest-checked reads, staged publish, and purge capabilities | `src/astralplane/api.py` and `src/astralplane/blob_store.py` |
 | Joint database/blob restore procedure and recovery-unit definition | `docs/migration-and-recovery.md` |
 
@@ -296,9 +301,9 @@ source-token matching alone.
 | R3 | `CURRENT_DATA_PLANE_REVISION.accepts_reader_at` declares read compatibility; `MigrationRunner.run` requires the selected exact target and forward-migrates recognized predecessors. | `tests/test_recovery_writable_readiness_contract.py::test_current_revision_is_the_only_declared_writable_target` |
 | R4 | `MigrationRunner.run` and `MigrationRegistry.verify_current` refuse wrong digests, missing markers, and structural drift without relabeling. | `tests/test_schema_migrations.py::test_current_metadata_cannot_hide_structural_corruption` |
 | R5 | `create_streaming_blob_store` requires one explicit absolute root and `blob_store.py` rejects unsafe roots and path crossings. | `tests/test_blob_store.py::test_constructor_rejects_missing_relative_file_and_link_roots` |
-| R6 | Blob readers and parser leases verify expected size/digest and refuse missing, oversize, truncated, or mismatched content. | `tests/test_blob_store.py::test_reader_reports_missing_oversize_and_persisted_integrity_mismatch` |
+| R6 | `qualify_joint_restore` verifies exact manifest membership, byte counts, SHA-256 values, root identities, and the database fence; blob readers and parser leases verify expected size/digest on reads. | `tests/test_joint_restore.py::test_incomplete_or_changed_blob_inventory_is_refused` and `tests/test_blob_store.py::test_reader_reports_missing_oversize_and_persisted_integrity_mismatch` |
 | R7 | `BootInitializer` publishes ready only after the migration commits and every reconciliation hook is durably complete. | `tests/test_bootstrap.py::test_reconciliation_failure_requires_explicit_retry_before_ready` |
-| R8 | `retire_restored_sessions` retires all restored sessions on the exact current schema/digest and is repeat-safe. | `tests/repositories/test_session_restore_postgres.py::test_same_snapshot_restored_again_is_retired_again_without_marker_skip` |
+| R8 | `recover_joint_restore` qualifies the exact database/root unit and then `retire_restored_sessions` retires all restored sessions on the exact current schema/digest; both are repeat-safe. | `tests/repositories/test_session_restore_postgres.py::test_restore_retirement_preserves_liabilities_and_authentic_settlement` |
 | R9 | Plane has no election/host-policy dependency, and recovery takes an explicit target without implicit environment fallback. | `tests/architecture/test_dependency_direction.py::test_astralplane_runtime_has_no_forbidden_imports` and `tests/test_session_recovery.py::test_invalid_explicit_target_never_constructs_a_pool` |
 | R10 | `PlaneHealth`, `MigrationReport`, and `ReconciliationReport` expose local evidence, while readiness remains a host-owned decision. | `tests/test_recovery_writable_readiness_contract.py::test_health_ready_is_local_and_not_restore_readiness` and `tests/integration/test_recovery_writable_readiness.py::test_current_catalog_repeat_is_a_verified_noop` |
 | R11 | Session retirement commits or reports a data-free failure; a lost commit acknowledgement cannot become a completion claim. | `tests/repositories/test_session_restore_postgres.py::test_lost_commit_acknowledgement_returns_no_completion_and_retry_checks_actual_rows` |

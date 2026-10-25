@@ -96,6 +96,8 @@ from astralplane.api import (
     initialize_empty_database,
     inspect_baseline_compatibility,
     inspect_endpoint_readiness,
+    qualify_joint_restore,
+    recover_joint_restore,
     retire_restored_sessions,
 )
 from astralplane.blob_store import (
@@ -175,6 +177,13 @@ from astralplane.immutable_bundle_store import (
     paths_for,
     runtime_metadata_for_manifest,
 )
+from astralplane.joint_restore import (
+    JOINT_RESTORE_CONTRACT_VERSION,
+    JointRestoreCompletion,
+    JointRestoreError,
+    JointRestoreEvidence,
+    RestoreBlobEntry,
+)
 from astralplane.purge import (
     DurablePurgeExecutor,
     PostgresPurgeStore,
@@ -249,6 +258,7 @@ __all__ = (
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_OPERATION_KIND",
+    "JOINT_RESTORE_CONTRACT_VERSION",
     "MIGRATION_DIGEST",
     "MIGRATION_REGISTRY",
     "MINIMUM_CONSUMER_VERSION",
@@ -338,6 +348,9 @@ __all__ = (
     "ImmutableBundleContract",
     "ImmutableBundleStore",
     "InitializationReport",
+    "JointRestoreCompletion",
+    "JointRestoreError",
+    "JointRestoreEvidence",
     "Migration",
     "MigrationRegistry",
     "MigrationReport",
@@ -375,6 +388,7 @@ __all__ = (
     "ReconciliationReport",
     "ReconciliationRunner",
     "RepositoryCatalog",
+    "RestoreBlobEntry",
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
@@ -443,6 +457,8 @@ __all__ = (
     "inspect_compatibility",
     "inspect_endpoint_readiness",
     "paths_for",
+    "qualify_joint_restore",
+    "recover_joint_restore",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",
 )
