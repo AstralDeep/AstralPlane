@@ -18,6 +18,12 @@ import astralplane
 import astralplane.api as public_api
 from astralplane.api import (
     AsyncPlaneRuntime,
+    AtlasPageAppendCommand,
+    AtlasPageEditChange,
+    AtlasPageEditCommand,
+    AtlasPageRevisionBatch,
+    AtlasPageRevisionCursor,
+    AtlasPageRevisionRecord,
     AuthorityRepository,
     PlaneHealth,
     PlaneRuntime,
@@ -25,6 +31,7 @@ from astralplane.api import (
     create_agent_management_repository,
     create_agent_repository,
     create_artifact_repository,
+    create_atlas_link_repository,
     create_atlas_page_repository,
     create_attachment_materialization_coordinator,
     create_attachment_parser_repository,
@@ -32,6 +39,7 @@ from astralplane.api import (
     create_audit_retention_repository,
     create_authority_repository,
     create_background_task_repository,
+    create_capability_publication_repository,
     create_chat_step_repository,
     create_conversation_file_repository,
     create_credential_repository,
@@ -46,6 +54,7 @@ from astralplane.api import (
     create_maintenance_repository,
     create_mesh_enrollment_repository,
     create_notification_repository,
+    create_observation_repository,
     create_offline_grant_repository,
     create_outbox_store,
     create_personalization_graph_repository,
@@ -97,9 +106,11 @@ from astralplane.repositories.artifacts import (
     BlobMetadataRepository,
     MaterializationRepository,
 )
+from astralplane.repositories.atlas_links import AtlasLinkRepository
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
+from astralplane.repositories.capability_publications import CapabilityPublicationRepository
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
 from astralplane.repositories.credentials import CredentialRepository
@@ -114,6 +125,7 @@ from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
 from astralplane.repositories.notifications import NotificationRepository
+from astralplane.repositories.observations import ObservationRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -242,6 +254,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_saved_component_repository, SavedComponentRepository),
         (create_history_repository, HistoryRepository),
         (create_workspace_repository, WorkspaceRepository),
+        (create_atlas_link_repository, AtlasLinkRepository),
         (create_artifact_repository, ArtifactRepository),
         (create_attachment_parser_repository, AttachmentParserRepository),
         (create_preferences_repository, PreferencesRepository),
@@ -249,10 +262,12 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_personalization_graph_repository, PersonalizationGraphRepository),
         (create_scheduler_repository, SchedulerRepository),
         (create_background_task_repository, BackgroundTaskRepository),
+        (create_capability_publication_repository, CapabilityPublicationRepository),
         (create_work_admission_repository, WorkAdmissionRepository),
         (create_maintenance_repository, MaintenanceRepository),
         (create_mesh_enrollment_repository, MeshEnrollmentRepository),
         (create_notification_repository, NotificationRepository),
+        (create_observation_repository, ObservationRepository),
         (create_tracked_job_repository, TrackedJobRepository),
         (create_quality_audit_repository, QualityAuditRepository),
         (create_harness_cleanup_repository, HarnessCleanupRepository),
@@ -310,6 +325,8 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "maintenance",
         "mesh_enrollment",
         "notifications",
+        "push_deliveries",
+        "observations",
         "offline_grants",
         "outbox",
         "preferences",
@@ -330,7 +347,9 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "work_admission",
         "workspaces",
         "completion_wake",
+        "capability_publications",
         "atlas_pages",
+        "atlas_links",
     )
     assert first.history is not second.history
     assert first.generated_agent_publications is not second.generated_agent_publications
@@ -586,6 +605,14 @@ def test_package_root_exports_the_stable_composition_facade() -> None:
     assert astralplane.AuthorityRepository is PublicAuthorityRepository
     assert astralplane.create_authority_repository is create_authority_repository
     assert astralplane.create_atlas_page_repository is create_atlas_page_repository
+    assert astralplane.AtlasPageAppendCommand is AtlasPageAppendCommand
+    assert astralplane.AtlasPageEditChange is AtlasPageEditChange
+    assert astralplane.AtlasPageEditCommand is AtlasPageEditCommand
+    assert astralplane.AtlasPageRevisionBatch is AtlasPageRevisionBatch
+    assert astralplane.AtlasPageRevisionCursor is AtlasPageRevisionCursor
+    assert astralplane.AtlasPageRevisionRecord is AtlasPageRevisionRecord
+    assert astralplane.create_atlas_link_repository is create_atlas_link_repository
+    assert astralplane.create_observation_repository is create_observation_repository
     assert astralplane.create_attachment_parser_repository is create_attachment_parser_repository
     assert not hasattr(astralplane, "create_blob_store_contract")
     assert astralplane.create_background_task_repository is create_background_task_repository

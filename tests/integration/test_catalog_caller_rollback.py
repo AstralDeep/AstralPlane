@@ -26,7 +26,8 @@ from astralplane.contracts import OutboxEntry, Transaction
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.immutable_bundle_store import FinalizedBundle, canonical_bundle_digest
-from astralplane.repositories.atlas_pages import AtlasPageCreateCommand
+from astralplane.repositories.atlas_links import AtlasLinkSetCommand
+from astralplane.repositories.atlas_pages import AtlasPageCreateCommand, AtlasPageEditCommand
 from astralplane.repositories.audit import AuditEvent
 from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
@@ -42,6 +43,7 @@ from astralplane.repositories.maintenance import (
     MaintenanceInputRecord,
     MaintenanceUnitRecord,
 )
+from astralplane.repositories.observations import ObservationCaptureCommand
 from astralplane.repositories.personalization_graph import ShortTermSignalRecord
 from astralplane.repositories.preferences import FeedbackRecord
 from astralplane.repositories.quality_audit import QualityTestRunRecord
@@ -104,6 +106,33 @@ class _CatalogDatabase:
     pool: ConnectionPool
     database: PlaneDatabase
     catalog: api.RepositoryCatalog
+
+
+def _observe_observations(transaction: Transaction) -> tuple[int, int]:
+    observation = _count(
+        "tool_observation", "observation_id", "11111111-1111-4111-8111-111111110081"
+    )(transaction)
+    page = _count(
+        "tool_observation_page", "observation_id", "11111111-1111-4111-8111-111111110081"
+    )(transaction)
+    return (observation, page)
+
+
+def _write_observations(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.observations.capture(
+        transaction,
+        command=ObservationCaptureCommand(
+            owner_id=_OWNER,
+            conversation_id="rollback-conversation",
+            observation_id="11111111-1111-4111-8111-111111110081",
+            operation_id="rollback-operation",
+            source_refs=("synthetic/rollback",),
+            seal="rollback-seal-v1",
+            content=b"synthetic-opaque-observation-ciphertext",
+            created_at=10,
+            expires_at=20,
+        ),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -669,8 +698,12 @@ def _write_identity(catalog: api.RepositoryCatalog, transaction: Transaction) ->
 
 def _write_stop_epochs(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.stop_epochs.engage(
-        transaction, owner_id=_OWNER, expected_revision=0, reason="synthetic rollback",
-        actor_id=_OWNER, at=_NOW,
+        transaction,
+        owner_id=_OWNER,
+        expected_revision=0,
+        reason="synthetic rollback",
+        actor_id=_OWNER,
+        at=_NOW,
     )
 
 
@@ -1041,6 +1074,60 @@ def _write_atlas_pages(catalog: api.RepositoryCatalog, transaction: Transaction)
             created_at=10,
         ),
     )
+    catalog.atlas_pages.edit_page(
+        transaction,
+        command=AtlasPageEditCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110081",
+            page_id="11111111-1111-4111-8111-111111110080",
+            expected_revision=1,
+            sources=("synthetic/rollback-edit",),
+            content=b"synthetic-opaque-atlas-revision-ciphertext",
+            updated_at=20,
+        ),
+    )
+
+
+def _observe_atlas_rollback(transaction: Transaction) -> tuple[int, int]:
+    page = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    revisions = transaction.fetch_one(
+        "SELECT COUNT(*) AS value FROM atlas_page_revision WHERE page_id=%s",
+        ("11111111-1111-4111-8111-111111110080",),
+    )
+    assert page is not None and revisions is not None
+    return int(page["value"]), int(revisions["value"])
+
+
+def _write_atlas_links(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    for suffix, slug in ((81, "rollback-link-source"), (82, "rollback-link-target")):
+        catalog.atlas_pages.create_page(
+            transaction,
+            command=AtlasPageCreateCommand(
+                owner_id=_OWNER,
+                command_id=f"11111111-1111-4111-8111-1111111100{suffix}",
+                page_id=f"11111111-1111-4111-8111-1111111100{suffix}",
+                project_id="rollback-atlas-link-project",
+                slug=slug,
+                sources=(),
+                content=b"synthetic-opaque-atlas-link-ciphertext",
+                created_at=10,
+            ),
+        )
+    catalog.atlas_links.set_links(
+        transaction,
+        command=AtlasLinkSetCommand(
+            owner_id=_OWNER,
+            command_id="11111111-1111-4111-8111-111111110083",
+            page_id="11111111-1111-4111-8111-111111110081",
+            expected_page_revision=1,
+            expected_link_revision=0,
+            targets=("11111111-1111-4111-8111-111111110082",),
+            updated_at=20,
+        ),
+    )
 
 
 def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
@@ -1056,6 +1143,23 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
         current_revision_fence=1,
         created_at=1,
         subscription_id="11111111-1111-4111-8111-111111110076",
+    )
+
+
+def _write_capability_publications(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.capability_publications.publish(
+        transaction,
+        owner_id=_OWNER,
+        capability_id="rollback-capability",
+        audience_id="rollback-audience",
+        capability_revision="rollback-revision",
+        metadata_ciphertext="synthetic-rollback-ciphertext",
+        metadata_digest=_DIGEST_A,
+        published_at=_NOW,
+        expires_at=_NOW + timedelta(hours=1),
+        expected_revision=0,
     )
 
 
@@ -1107,6 +1211,54 @@ def _observe_notifications(transaction: Transaction) -> object:
             "notification_inbox_entry",
             "notification_delivery_identity",
         )
+    )
+
+
+def _write_push_deliveries(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    body = b"opaque-rollback-push-payload"
+    entry = catalog.notifications.create_entry(
+        transaction,
+        owner_id=_OWNER,
+        event_kind="completion",
+        source_id="rollback-push-source",
+        deduplication_key="rollback-push-notification",
+        content_format="astral.notification/v1",
+        content_ciphertext=body,
+        content_sha256=hashlib.sha256(body).hexdigest(),
+        created_at=1,
+        retention_expires_at=100,
+        entry_id="74000000-0000-4000-8000-000000000092",
+    )
+    token = b"opaque-rollback-push-token"
+    destination = catalog.push_deliveries.register_destination(
+        transaction,
+        owner_id=_OWNER,
+        destination_key="rollback-push-device",
+        token_format="astral.push-token/v1",
+        token_ciphertext=token,
+        token_sha256=hashlib.sha256(token).hexdigest(),
+        created_at=1,
+        destination_id="74000000-0000-4000-8000-000000000093",
+    )
+    catalog.push_deliveries.enqueue_delivery(
+        transaction,
+        owner_id=_OWNER,
+        entry_id=entry.entry_id,
+        destination_id=destination.destination_id,
+        delivery_key="rollback-push-delivery",
+        expected_destination_revision=destination.revision,
+        expected_token_version=destination.token_version,
+        max_attempts=2,
+        available_at=2,
+        created_at=2,
+        delivery_id="74000000-0000-4000-8000-000000000094",
+    )
+
+
+def _observe_push_deliveries(transaction: Transaction) -> object:
+    return tuple(
+        transaction.fetch_one(f"SELECT COUNT(*) AS value FROM {table}")["value"]
+        for table in ("notification_device_destination", "notification_push_delivery")
     )
 
 
@@ -1279,6 +1431,20 @@ ROLLBACK_CASES = (
         (0, 0, 0),
     ),
     RollbackCase(
+        "push_deliveries",
+        _write_push_deliveries,
+        _observe_push_deliveries,
+        (1, 1),
+        (0, 0),
+    ),
+    RollbackCase(
+        "observations",
+        _write_observations,
+        _observe_observations,
+        (1, 1),
+        (0, 0),
+    ),
+    RollbackCase(
         "offline_grants",
         _write_offline_grants,
         _count("user_offline_grant", "id", "9ef050be-0d5f-4a82-b3cb-410de6d9074a"),
@@ -1420,12 +1586,32 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "capability_publications",
+        _write_capability_publications,
+        _count(
+            "capability_publication",
+            "capability_id",
+            "rollback-capability",
+            extra_sql=" AND owner_id = %s AND audience_id = %s",
+            extra_parameters=(_OWNER, "rollback-audience"),
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
         "atlas_pages",
         _write_atlas_pages,
+        _observe_atlas_rollback,
+        (1, 2),
+        (0, 0),
+    ),
+    RollbackCase(
+        "atlas_links",
+        _write_atlas_links,
         _count(
-            "atlas_page",
-            "page_id",
-            "11111111-1111-4111-8111-111111110080",
+            "atlas_page_link",
+            "source_page_id",
+            "11111111-1111-4111-8111-111111110081",
         ),
         1,
         0,
@@ -1437,7 +1623,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 44
+    assert len(applicable_keys) == len(set(applicable_keys)) == 48
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

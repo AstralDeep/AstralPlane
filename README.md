@@ -10,24 +10,26 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.006`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.012`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
-  `089.001`, `089.002`, `089.003`, `089.004`, and `089.005`
+  `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
 - Migration advisory lock: `(1095980114, 60001)`
 - Reconciliation advisory lock: `(1095980114, 60002)`
 - Endpoint readiness: `astralplane.endpoint-readiness/v1`, read-only fence evidence for one
   externally managed PostgreSQL primary and its paired blob roots
+- Joint restore: `astralplane.joint-restore/v1`, exact database/catalog plus paired blob-root
+  qualification and commit-safe restored-session retirement
 
 `create_postgres_runtime(...)` owns psycopg2 driver-pool construction, bounded checkout, runtime
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
-Every later predecessor, from `067.001` through `089.005`, is accepted only when it carries its own
+Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.006` database must carry the exact current
+before the first migration write. A current `089.012` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -50,17 +52,8 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 45 members, in
-`RepositoryCatalog.as_mapping()` order, are `assignments`, `agent_management`, `agents`,
-`artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`,
-`chat_steps`, `conversation_files`, `credentials`, `draft_agents`,
-`generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`,
-`framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`,
-`mesh_enrollment`, `notifications`, `offline_grants`, `outbox`, `preferences`,
-`personalization_graph`, `purge`,
-`quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`,
-`scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`,
-`work_admission`, `workspaces`, `completion_wake`, and `atlas_pages`.
+`create_repository_catalog()` returns the stable repository catalog. Its 49 members, in `RepositoryCatalog.as_mapping()` order, are
+`assignments`, `agent_management`, `agents`, `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`, `chat_steps`, `conversation_files`, `credentials`, `draft_agents`, `generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`, `framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`, `mesh_enrollment`, `notifications`, `push_deliveries`, `observations`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`, `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`, `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`, `work_admission`, `workspaces`, `completion_wake`, `capability_publications`, `atlas_pages`, and `atlas_links`.
 
 `preferences.personalization.get_memory(query, owner_id=..., memory_id=...,
 for_update=True)` reads and locks the current owner-scoped memory row until the caller's
@@ -114,9 +107,44 @@ See [notification records](docs/notification-records.md) and
 
 Schema `089.006` adds the bounded `atlas_pages` store: stable owner/project page identities,
 host-sealed content and source metadata, exact create/delete receipts, owner-scoped reads and
-keyset listings, and terminal tombstones that erase ciphertext. Editing, revision history, links,
-content encryption, authorization, and audit remain outside this slice. See
+keyset listings, and terminal tombstones that erase current head ciphertext. Content encryption,
+authorization, and audit remain outside this slice. See
 [Atlas page contracts](docs/atlas-page-contracts.md).
+
+Schema `089.007` adds immutable `atlas_page_revision` snapshots and fenced edits. An edit inserts
+the exact next revision before atomically advancing the page head, preserves bounded keyset
+history, and rejects stale fences, invalid replay, foreign owners, and deleted pages.
+
+Schema `089.008` adds bounded same-owner `atlas_links`: at most sixteen outgoing targets per
+page, exact page/link revision fences, immutable command receipts, one-hop backlink keyset
+traversal, and tombstone cleanup for either endpoint. Project traversal, rendering, content
+policy, authorization, and audit remain outside Plane. See
+[Atlas link contracts](docs/atlas-link-contracts.md).
+Schema `089.009` adds `capability_publication` storage through the `capability_publications`
+catalog member. An owner can publish one exact capability revision to one audience for a
+finite lifetime, withdraw or expire it with a state-revision compare-and-set fence, and read
+only live rows at a caller-supplied UTC instant. Encrypted audience metadata and its digest
+stay opaque. Discovery, IAM, invocation, and A2A transport remain in Deep. See
+[capability publication records](docs/capability-publication-records.md).
+Schema `089.010` adds immutable operation harness-profile bindings. A typed profile/version/artifact
+identity is written once under the operation owner and current execution fence; legacy operations
+read as unbound, exact replay is idempotent, changed identities conflict, and stale fences cannot
+overwrite. Runner selection, provider routing, profile rollout, and artifact availability remain in
+the host. See [operation harness profile bindings](docs/harness-binding-contracts.md).
+Schema `089.011` adds `push_deliveries`: owner-scoped opaque device destinations with encrypted
+token ciphertext, monotonic token-version/revision fences, rotation, revocation and content-free
+deletion tombstones, plus a bounded claimed-delivery outbox keyed to a live inbox entry. Claims
+snapshot and re-check the destination token version, leases are bounded, expired claims are
+recoverable, and exact-claim late acknowledgments cannot overwrite a newer claim. Provider calls,
+token encryption, routing, IAM, and delivery policy remain in Deep. See
+[push delivery records](docs/push-delivery-records.md).
+Schema `089.012` adds the bounded `tool_observation` store: owner/conversation-scoped host-ciphertext
+tool observations with capture-order identity, operation and source references, a caller-held seal,
+SHA-256 content integrity, bounded 16 KiB pages, an absolute caller-supplied expiry within a 24-hour
+retention ceiling, a 64 MiB per-conversation capacity, tombstoned purge/expiry cleanup, and
+deterministic paged recall with end-of-source and integrity-failure states. Recall authorization,
+audience, packing, compaction, and provider policy remain with the host. See
+[observation recall contracts](docs/observation-recall-contracts.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -245,8 +273,18 @@ The revisions after `079.001`:
 - `089.002` adds personal mesh enrollment and revocation records, `089.003` adds owner stop epochs,
   and `089.004` adds completion subscriptions and wake receipts.
 - `089.005` adds notification preferences, ciphertext inbox entries, and delivery identities.
-- `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones; see
+- `089.006` adds bounded owner/project Atlas page heads, command receipts, and tombstones.
+- `089.007` adds immutable Atlas page revisions and fenced, repeat-safe edits; see
   [Atlas page contracts](docs/atlas-page-contracts.md).
+- `089.008` adds bounded same-owner Atlas links, link revisions, command receipts, and backlink
+  traversal; see [Atlas link contracts](docs/atlas-link-contracts.md).
+- `089.009` adds fenced owner capability-publication records for selective host-controlled
+  A2A exposure; see [capability publication records](docs/capability-publication-records.md).
+
+- `089.009` adds owner-scoped capability publications; see [capability publication records](docs/capability-publication-records.md).
+- `089.010` binds operations to immutable harness profile identities; see [harness binding contracts](docs/harness-binding-contracts.md).
+- `089.011` adds opaque push destinations and claimed deliveries; see [push delivery records](docs/push-delivery-records.md).
+- `089.012` adds bounded observation retention and paged recall; see [observation recall contracts](docs/observation-recall-contracts.md).
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating
@@ -257,6 +295,12 @@ a restored PostgreSQL/blob state as writable, including host-owned election and 
 The neutral, read-only fence evidence for an externally managed PostgreSQL primary and its
 paired blob roots, including primary loss, reconnect, stale writer, and promoted-endpoint
 refusal, is in [endpoint failover readiness](docs/endpoint-failover-readiness.md).
+
+The explicit database-plus-blob restore unit is qualified by
+`qualify_joint_restore(...)` and completed by `recover_joint_restore(...)`. Both reject wrong
+roots, incomplete or changed blobs, non-current schema/digest/catalog, and failed session
+retirement through the public facade. Their repeatable, path-free evidence and forward-repair
+limits are in [joint restore qualification](docs/joint-restore-qualification.md).
 
 ## Error diagnostics
 

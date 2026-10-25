@@ -347,6 +347,12 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -385,6 +391,13 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane_receipt_claim",
         "atlas_page",
         "atlas_page_command",
+        "atlas_page_revision",
+        "atlas_page_link",
+        "atlas_page_link_head",
+        "atlas_page_link_command",
+        "operation_harness_binding",
+        "tool_observation",
+        "tool_observation_page",
         "test_runs",
         "test_case_results",
         "test_evidence",
@@ -406,6 +419,36 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "search_path=pg_catalog"
     ]
     assert function_configurations.pop("reject_atlas_page_command_mutation") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_atlas_page_revision_mutation") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("verify_atlas_page_head_revision") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_atlas_page_link_mutation") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("enforce_atlas_page_link_head_advance") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_atlas_page_link_command_mutation") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_operation_harness_binding_mutation") == [
+        "search_path=pg_catalog, pg_temp"
+    ]
+    assert function_configurations.pop("enforce_tool_observation_lifecycle") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_tool_observation_delete") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_tool_observation_page_update") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("enforce_tool_observation_page_purge") == [
         "search_path=pg_catalog"
     ]
     assert set(function_configurations) == {
@@ -973,6 +1016,12 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
 
     cursor = fixture.connection.cursor()

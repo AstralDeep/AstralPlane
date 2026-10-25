@@ -3,7 +3,7 @@
 This repository slice exposes the durable identity/challenge state required by owner-confirmed
 personal-mesh enrollment. It stores only neutral records: possession proof, IAM, QR/network
 handling, and admission policy stay with the host, and private device keys never reach
-AstralPlane. The current Plane schema is `089.006`; the slice's tables arrive in the `089.002`
+AstralPlane. The current Plane schema is `089.012`; the slice's tables arrive in the `089.002`
 edge over six additive tables.
 
 ## Public composition
@@ -63,7 +63,7 @@ dispatch; concurrent revocation must wait for that caller transaction.
 The slice is purely additive over the `089.001` catalog: no existing table, column, or function
 changes, and no edge in this slice uses `IF NOT EXISTS`. The current-member assertion changes only the repository API; its mesh DDL and
 historical `089.002` edge remain unchanged. The separate owner-stop slice advances
-the current catalog to `089.003`. An older Plane binary cannot run against the newer schema. Recovery uses
+the current catalog to `089.007`. An older Plane binary cannot run against the newer schema. Recovery uses
 a qualified forward repair or the coordinated PostgreSQL/blob restore in the `089.002` section
 of [migration and recovery](migration-and-recovery.md), with the matching prior composition.
 Epoch counters are monotonic by design and are never rewritten.

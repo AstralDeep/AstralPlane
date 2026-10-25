@@ -323,6 +323,11 @@ def test_corrupt_content_digest_fails_closed_on_read(migrated_clone):
             " VALUES(%s,%s,%s,%s,1,'[]'::jsonb,%s,%s,10,10,NULL)",
             (OWNER, PAGE_B, PROJECT, "corrupt", b"tampered", "0" * 64),
         )
+        tx.execute(
+            "INSERT INTO atlas_page_revision(owner_id,page_id,revision,sources,content,"
+            "content_sha256,created_at) VALUES(%s,%s,1,'[]'::jsonb,%s,%s,10)",
+            (OWNER, PAGE_B, b"tampered", "0" * 64),
+        )
     with migrated_clone.database.transaction() as tx:
         with pytest.raises(RepositoryDataError, match="invalid stored atlas page"):
             repo.get_page(tx, owner_id=OWNER, page_id=PAGE_B)

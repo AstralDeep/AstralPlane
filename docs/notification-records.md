@@ -65,6 +65,13 @@ conflict without exposing another owner's identity or aborting the caller transa
 opaque and does not encode a channel, endpoint, token, route, provider, or IAM subject. Retries, provider selection, and whether a delivery ever occurs remain
 in Deep.
 
+## Push destinations and claimed deliveries
+
+Schema `089.007` adds the separate `push_deliveries` catalog member for opaque device destinations
+and bounded claimed-delivery outbox records. Notification policy still decides whether push applies;
+that store carries the encrypted destination token, token/revision fences, retry state, and exact
+claim acknowledgments. See [push delivery records](push-delivery-records.md).
+
 ## Public composition
 
 Use `create_notification_repository()` or `runtime.repositories.notifications`. The same records are

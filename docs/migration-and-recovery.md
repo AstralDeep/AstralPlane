@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -344,7 +344,7 @@ Never drop the tables, rewrite revision markers, or infer a downgrade.
 
 This additive edge requires the exact `089.005` registry digest
 `98a9082bb3317192cd6e48df3b63c76dbb9404814cb4a0180eb997f8737e37b0` and its
-catalog. Current catalog digest is
+catalog. Its catalog digest is
 `88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48`.
 It adds `atlas_page` and `atlas_page_command` and alters nothing that
 exists. The page table stores a stable owner/page identity, exact optional
@@ -361,8 +361,8 @@ indexes, constraints, and lifecycle/immutability triggers and performs no write.
 Reads, listings, and writes carry the owner predicate in SQL. Deletion advances
 the current revision under its fence, erases ciphertext and source metadata, and
 leaves a terminal tombstone; replaying the original create or delete command
-cannot restore content. Editing, revision history, and links are not part of
-this edge or its repository.
+cannot restore content. Revision history and links are not part of this edge;
+`089.007` adds immutable revisions and fenced edits on the same repository.
 
 Follow the same closed-admission backup, guarded upgrade, catalog, populated
 repeat and rollback checks described above. Failed DDL rolls back with registry
@@ -382,6 +382,270 @@ governed recovery contract, and reconcile uncertain effects before reopening
 admission. Never drop the tables, rewrite revision/digest markers, restore a
 tombstone to a live page, or execute ad-hoc downgrade SQL. A restored database
 snapshot cannot recover content that was never stored in Plane.
+### `089.009` owner capability publications and recovery
+
+This additive edge requires the exact `089.008` registry digest
+`3845856d7280e5ebd5e516135344b660cde8e3cff2a86f2ab50b0d4e0cf7999d` and its catalog. It adds one owner-scoped
+publication table, its live-publication index, and no provider, discovery, IAM,
+or transport object. The catalog digest immediately after this edge is
+`50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
+`58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e`. Existing notification, Atlas, mesh, stop,
+completion-wake, assignment, session, audit, grant, credential, accounting, and
+blob records remain unchanged.
+
+`capability_publication` binds an opaque capability identifier, audience
+identifier, exact capability revision, and finite lifetime. A composite
+owner/capability/audience key prevents duplicate live audience records without
+a deployment-wide published catalog. Publication metadata is stored only as
+host-encrypted ciphertext plus its host-computed SHA-256 digest. Publish,
+withdraw, and expiry transitions carry the owner predicate and state-revision
+fence in one `UPDATE`; a first publish uses `ON CONFLICT DO NOTHING` so a
+concurrent exact replay returns the winner. Withdrawal and expiry are terminal
+until an explicit republish. Active reads require published state, the
+host-supplied lower lifetime bound, and an unexpired upper bound in the same
+owner-scoped statement. No read consults the database clock, and no method
+commits or rolls back the caller's transaction.
+
+Quiesce host publication and A2A writers and verify the paired PostgreSQL and
+durable-root backup before adopting the new pin. Run the guarded registry
+through normal host initialization; verify repeat startup, retained
+representative rows, the empty new table, and the host's publish/withdraw/expire
+transactions before reopening discovery. A failed DDL transaction rolls back
+with its registry marker and leaves admission closed. Unknown, same-name, or
+damaged catalog objects fail closed rather than being adopted.
+
+**Recovery.** Once this transaction commits, keep the table and the exact
+`089.009` revision/digest intact. An `089.008` binary is not compatible merely
+because the table is additive. Prefer a reviewed forward repair. If the prior
+composition must be restored, keep admission closed and restore the verified
+pre-upgrade PostgreSQL backup and every paired durable root together with the
+unchanged encryption and audit keys. Account for post-backup publications,
+withdrawals, and expiries, retire restored sessions through the governed
+recovery contract, refresh host IAM and capability approval, and reconcile
+discovery state before reopening admission. Never drop the table or rewrite a
+revision marker to simulate downgrade. Schema qualification does not qualify
+Deep discovery, IAM, A2A invocation, or client behavior.
+
+### `089.007` Atlas revisions and recovery
+
+This additive edge requires the exact `089.006` registry digest
+`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its
+catalog digest `88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48`.
+It adds `atlas_page_revision`, its bounded history index, immutable revision
+trigger, exact-head verification trigger, and the edit command's expected
+revision column and receipt constraints. It removes only the predecessor's
+one-command-per-page uniqueness so multiple edits can append separate receipts.
+Live predecessor heads are backfilled once into exact revision rows; deleted
+predecessor pages remain content-free because their ciphertext was already
+erased. No unrelated table or row is rewritten.
+
+Fenced edits insert the exact next immutable revision and advance the owner's
+page head only when revision, sources, ciphertext, digest, and edit time match
+that row. Stale fences, changed command replay, foreign owners, regressive
+clocks, exhausted safe-integer revisions, and edits to tombstones fail with a
+typed conflict or denial before a new write. Deleted page history requires an
+explicit `include_deleted=True` recovery read, and replaying an earlier edit
+cannot resurrect the page. PostgreSQL refuses revision updates, revision
+deletes, and live head changes without an exact backing revision.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. Failed DDL rolls back with registry
+metadata. The populated predecessor, repeat, interruption, namesake, and
+damaged-predecessor cases are exercised by
+`tests/integration/test_atlas_revisions_upgrade.py`; edit fences, immutable
+history, pagination, concurrency, database denial, corrupt reads, and caller
+rollback are exercised by
+`tests/repositories/test_atlas_revisions_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep `atlas_page`,
+`atlas_page_command`, and `atlas_page_revision` with the exact `089.007`
+revision/digest intact. An `089.006` binary is not compatible merely because
+these changes are additive. Prefer a reviewed forward repair through the guarded
+registry. If the previous composition must be restored, close admission and
+restore the verified pre-upgrade PostgreSQL backup and every paired durable root
+together with the exact prior application and unchanged keys. Account for
+post-backup Atlas creates, edits, and deletes, retire restored sessions through
+the governed recovery contract, and reconcile uncertain effects before reopening
+admission. Never rewrite or delete revision rows, restore a tombstone to a live
+page, or execute ad-hoc downgrade SQL. A restored database snapshot cannot
+recover content that was never stored in Plane or that was erased from a deleted
+head.
+### `089.008` Atlas links and recovery
+
+This additive edge requires the exact `089.007` registry digest
+`fe60420679846e7ea06ca5da3cef250cde5ad75a4ca47b6eb15739893a8ebd09` and its
+catalog digest `939f224d8a11622964a53b37a63dde6ec37095636145b018486883afe70e9dff`. It adds `atlas_page_link`, `atlas_page_link_head`, and
+`atlas_page_link_command` and alters no existing table or row. The link table
+stores owner, source page, target page, link revision, and caller time with a
+reflexive-link prohibition and live foreign keys to both page identities. The
+head table stores the current link revision and last link time per source page.
+The command table stores immutable request digests and exact page/link fences.
+
+The migration infers no link from page content or legacy graph rows. A same-name
+foreign object, damaged `089.007` predecessor, partial DDL, or failed stamp
+rolls back or fails closed before adoption. Repeat startup verifies all three
+tables, both ordering indexes, constraints, and replacement/head/receipt
+triggers and performs no write. Every endpoint read and mutation carries the
+owner predicate in SQL; a cross-owner, missing, tombstoned, reflexive, duplicate,
+or over-bound endpoint is refused. Mutations replace the complete outgoing link
+set under the expected page revision and link revision. Replaying the exact
+command returns the stored receipt without writing; changed semantics conflict.
+Page deletion removes links in both directions and advances every remaining
+source-page link revision, so a stale link writer cannot resurrect a removed
+target.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat, and rollback checks described above. The populated upgrade, interruption,
+namesake, damaged-predecessor, and current-catalog damage cases are exercised by
+`tests/integration/test_atlas_links_upgrade.py`; same-owner reads, replay,
+fencing, backlink pagination, concurrency, and tombstone cleanup are exercised by
+`tests/repositories/test_atlas_links_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep all three link tables and the
+exact `089.008` revision/digest intact. An `089.007` binary is not compatible
+merely because the tables are additive. Prefer a reviewed forward repair through
+the guarded registry. If the previous composition must be restored, close
+admission and restore the verified pre-upgrade PostgreSQL backup and every
+paired durable root together with the exact prior application and unchanged
+keys. Account for post-backup link edits and page deletions, retire restored
+sessions, and reconcile uncertain effects before reopening admission. Never drop
+the tables, rewrite revision/digest markers, restore deleted endpoints, or
+execute ad-hoc downgrade SQL. A restored snapshot cannot reconstruct a replaced
+link set that was not present when the backup was taken.
+
+### `089.010` operation harness bindings and recovery
+
+This additive edge requires the exact `089.009` registry digest
+`c3e2b3d2d2a2f88a7b995eb6525f6f01df463bad5129a989f7ed70be5e95ed4b` and its
+catalog. Current catalog digest is
+`1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68`.
+It adds `operation_harness_binding`, a profile/version/artifact index, and an
+immutability function/trigger without altering operation, assignment, notification,
+guidance, credential, or audit rows.
+
+Each operation has at most one binding, written once by an owner- and
+execution-fence-qualified statement. The identity is a typed profile, numeric
+semantic version, and lowercase SHA-256 artifact digest; Plane does not store
+runner configuration, provider route, rollout flag, or arbitrary metadata keys.
+A missing binding is the legacy state and reads as unbound. Exact replay returns
+the original binding, a changed identity conflicts, a stale fence cannot write,
+and direct updates or deletes are refused. Operation retention purge removes the
+binding through its foreign-key cascade.
+
+The migration infers no harness profile for existing operations, imports no host
+catalog, and does not rewrite in-flight operation state. A same-name foreign
+object, damaged predecessor catalog, partial DDL, or failed stamp rolls back or
+fails closed before adoption. Repeat startup verifies the table, index, function,
+trigger, constraints, and foreign key and performs no write.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. The populated upgrade, interruption,
+namesake, and current-catalog damage cases are exercised by
+`tests/integration/test_harness_bindings_upgrade.py`; legacy absence, owner and
+stale-fence denials, immutable replay, restart persistence, and purge cascade are
+exercised by `tests/repositories/test_harness_bindings_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep the table and the exact
+`089.010` revision/digest intact. An `089.009` binary is not compatible merely
+because the table is additive. Prefer a reviewed forward repair through the
+guarded registry. If the previous composition must be restored, close admission
+and restore the verified pre-upgrade PostgreSQL backup and every paired durable
+root together with the exact prior application and unchanged keys. Account for
+post-backup bindings, retire restored sessions through the governed recovery
+contract, and reconcile uncertain effects before reopening admission. Never
+rewrite or drop persisted bindings, infer an operation's profile identity, or
+execute ad-hoc downgrade SQL. A restored binding does not prove that its host
+deployment artifact or profile identity is still available.
+
+### `089.011` push destinations and claimed deliveries
+
+This additive edge requires the exact `089.010` registry digest
+`facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b` and its catalog. It adds
+`notification_device_destination` and `notification_push_delivery` and alters nothing that exists.
+The destination row stores an owner-scoped opaque device key, host-encrypted token ciphertext,
+its SHA-256 and format, a monotonic `token_version`, a current `revision`, and revocation/deletion
+tombstones. Deletion clears token material. The delivery row snapshots the inbox event content,
+destination token version and revision, and carries a bounded retry policy, lease owner, claim
+identity, attempt count, availability time, and terminal acknowledgment/error state.
+
+Enqueue requires an owner-owned live inbox entry and a live destination at the caller's expected
+revision and token version. Claims select only work whose snapshot still equals the destination's
+current token version and revision, lock the delivery with `SKIP LOCKED` and the destination for
+share, and return the encrypted destination token to the host. Rotation, revocation, or deletion
+therefore makes older pending work unclaimable until the host supersedes it. Expired claims are
+reclaimed up to `max_attempts`; exhausted leases become `dead_letter`. A late acknowledgment is
+accepted only for the exact current claim identity, even after lease expiry, so it cannot mark a
+newer claim delivered. Plane never decrypts a token, calls a provider, chooses a device, or makes
+an IAM or notification-policy decision.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and rollback checks
+described above. Failed DDL rolls back with registry metadata. The populated upgrade, interruption,
+namesake, and current-catalog damage cases are exercised by
+`tests/integration/test_push_deliveries_upgrade.py`; destination, claim, retry, late
+acknowledgment, concurrency, restart, and caller-rollback behavior are exercised by
+`tests/repositories/test_push_deliveries_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact `089.011`
+revision/digest intact. An `089.010` binary is not compatible merely because these tables are
+additive. Preserve claims, retry counters, dead letters, and content-free destination tombstones
+for recovery inspection. Prefer a guarded forward repair. If the prior composition must be
+restored, close admission and restore the verified pre-upgrade PostgreSQL backup and every paired
+durable root together with the exact prior application and unchanged keys. Reconcile deliveries
+that may have reached a provider before the backup boundary before reopening, and never re-deliver
+a claimed delivery merely because its row was restored. Never drop the tables, restore a deleted
+destination token, reset attempt counters, rewrite revision/digest markers, or execute ad-hoc
+downgrade SQL.
+
+### `089.012` Tool observation records and recovery
+
+This additive edge requires the exact `089.011` registry digest
+`8677b4e37ea98a7471ca97a82bc0182aed0f68002cace976ecfaacf8487d04fc` and its
+catalog. Current catalog digest is
+`e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d`.
+It adds `tool_observation` and `tool_observation_page` and alters nothing
+that exists. The parent table stores the owner/conversation/observation
+identity, per-conversation capture order, originating operation reference,
+caller-held encryption seal, bounded source references, page extent, the
+whole-observation SHA-256 digest, the capture request digest, caller integer
+second timestamps, an absolute expiry inside a 24-hour retention ceiling, and
+a content-free tombstone. The child table stores the bounded opaque ciphertext
+pages with their per-page SHA-256 digests under the parent foreign key.
+
+The migration infers no existing observation, imports no legacy memory or
+audit rows, and does not rewrite preferences, notes, knowledge, atlas, or
+audit state. A same-name foreign object, damaged predecessor catalog, partial
+DDL, or failed stamp rolls back or fails closed before adoption. Repeat
+startup verifies both tables, indexes, constraints, and lifecycle/immutability
+triggers and performs no write. Reads, listings, recall, and writes carry the
+owner and conversation predicates in SQL. Capture replays exactly under its
+request digest and cannot exceed the bounded per-conversation capacity.
+Recall returns bounded pages with continuation or explicit end-of-source
+state, fails closed on expired, purged, foreign, or integrity-damaged
+sources, and never renews expiry. Purge and expiry sweeps tombstone the
+parent, erase every page, and leave a terminal durable tombstone; replaying
+a capture cannot restore content. Recall authorization, audience, packing,
+compaction, and provider policy remain with the host.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. Failed DDL rolls back with registry
+metadata. The populated upgrade, interruption, namesake, and current-catalog
+damage cases are exercised by `tests/integration/test_observations_upgrade.py`;
+owner isolation, replay, paged recall, expiry, purge, capacity, races,
+corruption, and caller-rollback behavior are exercised by
+`tests/repositories/test_observations_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.012` revision/digest intact. An `089.011` binary is not compatible merely
+because these tables are additive. Prefer a reviewed forward repair through the
+guarded registry. If the previous composition must be restored, close admission
+and restore the verified pre-upgrade PostgreSQL backup and every paired durable
+root together with the exact prior application and unchanged keys. Account for
+post-backup captures, recalls, and purges, retire restored sessions through the
+governed recovery contract, and reconcile uncertain effects before reopening
+admission. Never drop the tables, rewrite revision/digest markers, restore a
+tombstone to a live observation, or execute ad-hoc downgrade SQL. A restored
+database snapshot cannot recover observation content that was never stored in
+Plane, and an expired or purged observation stays unavailable after recovery.
 
 ### `089.002` mesh enrollment records and recovery
 
@@ -536,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.005` must carry its own pinned historical registry digest. A current `089.006` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.012` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -636,17 +900,25 @@ maintenance window has been verified:
 3. Restore the verified PostgreSQL backup into the selected recovery database and restore every
    paired blob/workspace root into new explicit destinations without following links.
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
-   selecting a composition. A restored `066.001` state has no Plane digest and must match its
-   pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
-   `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, and `089.005` states must carry their exact pinned historical registry digests and
-   match their pinned predecessor catalogs. A restored `089.006` state must carry the exact current
-   registry digest and pass the current structural verifier.
+   selecting a composition. Supply the complete root-name set and relative-key/size/digest
+   manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
+   non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`
+   states must carry their exact pinned historical registry digests and match their pinned
+   predecessor catalogs. A restored `089.012` state must carry the exact current registry
+   digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
-6. Re-run migration and required product reconciliation under closed admission, repeat the
-   acceptance checks, then reopen traffic. Retain the previous and restored copies until the
-   rollback window closes.
+6. Re-run migration and required product reconciliation under closed admission, then call
+   `recover_joint_restore` to repeat qualification and retire every restored session. Retain its
+   opaque evidence, repeat until retirement returns zero after quiescence, rerun the acceptance
+   checks, and only then let the host decide whether traffic may reopen. Retain the previous and
+   restored copies until the rollback window closes.
+
+A qualified restore returns only after the exact current database/catalog and every supplied blob
+root agree. Repeating it on the same quiescent unit returns equivalent evidence and a zero
+retirement count. The full public contract, denial reasons, and forward-repair procedure are in
+[joint restore qualification](joint-restore-qualification.md).
 
 If a restore, migration, reconciliation, or session-retirement transaction loses its connection or
 commit acknowledgement, keep admission closed and treat the outcome as unknown. Re-read the durable
@@ -658,7 +930,8 @@ The restore procedure ends with a closed-admission candidate, not a writable sta
 preconditions and evidence required before the host may open admission, including host-owned
 election/fencing, complete root verification, restored-session retirement, commit ambiguity, and
 forward-repair limits, are defined in
-[recovery and writable readiness](recovery-and-writable-readiness.md).
+[recovery and writable readiness](recovery-and-writable-readiness.md). The combined
+`recover_joint_restore` facade does not replace that host decision.
 
 The read-only [endpoint failover readiness](endpoint-failover-readiness.md) facade qualifies
 the selected external PostgreSQL primary and its paired blob roots and returns fence evidence

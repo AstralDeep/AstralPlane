@@ -86,6 +86,15 @@ from astralplane.immutable_bundle_store import (
     paths_for,
     runtime_metadata_for_manifest,
 )
+from astralplane.joint_restore import (
+    JOINT_RESTORE_CONTRACT_VERSION,
+    JointRestoreCompletion,
+    JointRestoreError,
+    JointRestoreEvidence,
+    RestoreBlobEntry,
+    qualify_joint_restore,
+    recover_joint_restore,
+)
 from astralplane.outbox import PostgresOutboxStore
 from astralplane.purge import (
     DurablePurgeExecutor,
@@ -106,19 +115,42 @@ from astralplane.repositories.artifacts import (
     MaterializationRepository,
 )
 from astralplane.repositories.assignments import AssignmentRepository
+from astralplane.repositories.atlas_links import (
+    AtlasLinkBatch,
+    AtlasLinkChange,
+    AtlasLinkCommandReceipt,
+    AtlasLinkCursor,
+    AtlasLinkRecord,
+    AtlasLinkRepository,
+    AtlasLinkSetCommand,
+)
 from astralplane.repositories.atlas_pages import (
+    AtlasPageAppendChange,
+    AtlasPageAppendCommand,
     AtlasPageBatch,
     AtlasPageChange,
     AtlasPageCommandReceipt,
     AtlasPageCreateCommand,
     AtlasPageCursor,
     AtlasPageDeleteCommand,
+    AtlasPageEditChange,
+    AtlasPageEditCommand,
     AtlasPageRecord,
     AtlasPageRepository,
+    AtlasPageRevisionBatch,
+    AtlasPageRevisionCursor,
+    AtlasPageRevisionRecord,
 )
 from astralplane.repositories.attachment_parsers import AttachmentParserRepository
 from astralplane.repositories.audit import AuditRepository
 from astralplane.repositories.background_tasks import BackgroundTaskRepository
+from astralplane.repositories.capability_publications import (
+    CapabilityPublicationConflictError,
+    CapabilityPublicationNotExpiredError,
+    CapabilityPublicationRecord,
+    CapabilityPublicationRepository,
+    CapabilityPublicationState,
+)
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
@@ -144,6 +176,10 @@ from astralplane.repositories.generated_agent_publications import (
     generated_agent_publication_paths,
     generated_agent_publication_recovery_operation_binding,
 )
+from astralplane.repositories.harness_bindings import (
+    HarnessProfileIdentity,
+    OperationHarnessBinding,
+)
 from astralplane.repositories.harness_cleanup import HarnessCleanupRepository
 from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.identity import IdentityRepository
@@ -157,9 +193,26 @@ from astralplane.repositories.notifications import (
     NotificationPreferenceRecord,
     NotificationRepository,
 )
+from astralplane.repositories.observations import (
+    ObservationBatch,
+    ObservationCapture,
+    ObservationCaptureCommand,
+    ObservationCursor,
+    ObservationHead,
+    ObservationPage,
+    ObservationPurge,
+    ObservationRepository,
+    ObservationUsage,
+)
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
+from astralplane.repositories.push_deliveries import (
+    ClaimedPushDelivery,
+    PushDeliveryRecord,
+    PushDeliveryRepository,
+    PushDestinationRecord,
+)
 from astralplane.repositories.quality_audit import QualityAuditRepository
 from astralplane.repositories.remote import RemoteRepository
 from astralplane.repositories.remote_proposals import RemoteOperationProposalRepository
@@ -205,6 +258,10 @@ def create_assignment_repository() -> AssignmentRepository:
 
 def create_atlas_page_repository() -> AtlasPageRepository:
     return AtlasPageRepository()
+
+
+def create_atlas_link_repository() -> AtlasLinkRepository:
+    return AtlasLinkRepository()
 
 
 def create_identity_repository() -> IdentityRepository:
@@ -256,6 +313,14 @@ def create_notification_repository() -> NotificationRepository:
     return NotificationRepository()
 
 
+def create_push_delivery_repository() -> PushDeliveryRepository:
+    return PushDeliveryRepository()
+
+
+def create_observation_repository() -> ObservationRepository:
+    return ObservationRepository()
+
+
 def create_stop_epoch_repository() -> StopEpochRepository:
     return StopEpochRepository()
 
@@ -286,6 +351,10 @@ def create_workspace_repository() -> WorkspaceRepository:
 
 def create_completion_wake_repository() -> CompletionWakeRepository:
     return CompletionWakeRepository()
+
+
+def create_capability_publication_repository() -> CapabilityPublicationRepository:
+    return CapabilityPublicationRepository()
 
 
 def create_artifact_repository() -> ArtifactRepository:
@@ -373,9 +442,7 @@ def create_encrypted_llm_config_repository() -> EncryptedLLMConfigRepository:
     return EncryptedLLMConfigRepository()
 
 
-def create_encrypted_typesafe_credential_repository() -> (
-    EncryptedTypeSafeCredentialRepository
-):
+def create_encrypted_typesafe_credential_repository() -> EncryptedTypeSafeCredentialRepository:
     return EncryptedTypeSafeCredentialRepository()
 
 
@@ -440,7 +507,9 @@ class RepositoryCatalog:
     history: HistoryRepository
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
+    capability_publications: CapabilityPublicationRepository
     atlas_pages: AtlasPageRepository
+    atlas_links: AtlasLinkRepository
     artifacts: ArtifactRepository
     attachment_parsers: AttachmentParserRepository
     preferences: PreferencesRepository
@@ -452,6 +521,8 @@ class RepositoryCatalog:
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
     notifications: NotificationRepository
+    push_deliveries: PushDeliveryRepository
+    observations: ObservationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -496,6 +567,8 @@ class RepositoryCatalog:
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
                 "notifications": self.notifications,
+                "push_deliveries": self.push_deliveries,
+                "observations": self.observations,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -516,7 +589,9 @@ class RepositoryCatalog:
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
+                "capability_publications": self.capability_publications,
                 "atlas_pages": self.atlas_pages,
+                "atlas_links": self.atlas_links,
             }
         )
 
@@ -547,7 +622,9 @@ def create_repository_catalog() -> RepositoryCatalog:
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
+        capability_publications=create_capability_publication_repository(),
         atlas_pages=create_atlas_page_repository(),
+        atlas_links=create_atlas_link_repository(),
         artifacts=create_artifact_repository(),
         attachment_parsers=create_attachment_parser_repository(),
         preferences=create_preferences_repository(),
@@ -559,6 +636,8 @@ def create_repository_catalog() -> RepositoryCatalog:
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
         notifications=create_notification_repository(),
+        push_deliveries=create_push_delivery_repository(),
+        observations=create_observation_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -569,9 +648,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         remote_operation_proposals=create_remote_operation_proposal_repository(),
         revocations=create_revocation_repository(),
         encrypted_llm_config=create_encrypted_llm_config_repository(),
-        encrypted_typesafe_credential=(
-            create_encrypted_typesafe_credential_repository()
-        ),
+        encrypted_typesafe_credential=(create_encrypted_typesafe_credential_repository()),
         audit=create_audit_repository(),
         audit_retention=create_audit_retention_repository(),
         authority=create_authority_repository(),
@@ -785,6 +862,7 @@ __all__ = (
     "GENERATED_AGENT_PUBLICATION_OPERATION_KIND",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_IDEMPOTENCY_NAMESPACE",
     "GENERATED_AGENT_PUBLICATION_RECOVERY_OPERATION_KIND",
+    "JOINT_RESTORE_CONTRACT_VERSION",
     "AdmissionClass",
     "AgentRevisionRecord",
     "ArtifactCollisionError",
@@ -794,14 +872,28 @@ __all__ = (
     "ArtifactReconciliationError",
     "AssignmentRepository",
     "AsyncPlaneRuntime",
+    "AtlasLinkBatch",
+    "AtlasLinkChange",
+    "AtlasLinkCommandReceipt",
+    "AtlasLinkCursor",
+    "AtlasLinkRecord",
+    "AtlasLinkRepository",
+    "AtlasLinkSetCommand",
+    "AtlasPageAppendChange",
+    "AtlasPageAppendCommand",
     "AtlasPageBatch",
     "AtlasPageChange",
     "AtlasPageCommandReceipt",
     "AtlasPageCreateCommand",
     "AtlasPageCursor",
     "AtlasPageDeleteCommand",
+    "AtlasPageEditChange",
+    "AtlasPageEditCommand",
     "AtlasPageRecord",
     "AtlasPageRepository",
+    "AtlasPageRevisionBatch",
+    "AtlasPageRevisionCursor",
+    "AtlasPageRevisionRecord",
     "AttachmentMaterializationCoordinator",
     "AuthorityCompareAndSetConflictError",
     "AuthorityIdempotencyConflictError",
@@ -814,6 +906,12 @@ __all__ = (
     "BundlePublicationReceipt",
     "BundleRecoveryDisposition",
     "BundleRecoveryResult",
+    "CapabilityPublicationConflictError",
+    "CapabilityPublicationNotExpiredError",
+    "CapabilityPublicationRecord",
+    "CapabilityPublicationRepository",
+    "CapabilityPublicationState",
+    "ClaimedPushDelivery",
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "EndpointFence",
@@ -828,13 +926,27 @@ __all__ = (
     "GeneratedAgentPublicationOperationBinding",
     "GeneratedAgentPublicationRepository",
     "GeneratedAgentPublicationResultMetadata",
+    "HarnessProfileIdentity",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
+    "JointRestoreCompletion",
+    "JointRestoreError",
+    "JointRestoreEvidence",
     "NotificationDeliveryIdentity",
     "NotificationEventKind",
     "NotificationInboxEntry",
     "NotificationPreferenceRecord",
     "NotificationRepository",
+    "ObservationBatch",
+    "ObservationCapture",
+    "ObservationCaptureCommand",
+    "ObservationCursor",
+    "ObservationHead",
+    "ObservationPage",
+    "ObservationPurge",
+    "ObservationRepository",
+    "ObservationUsage",
+    "OperationHarnessBinding",
     "OperationOwner",
     "OperationRecord",
     "OperationRequest",
@@ -846,9 +958,13 @@ __all__ = (
     "PlaneHealth",
     "PlaneRuntime",
     "PublishedBundle",
+    "PushDeliveryRecord",
+    "PushDeliveryRepository",
+    "PushDestinationRecord",
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
+    "RestoreBlobEntry",
     "RestoredSessionRetirement",
     "SessionRetirementError",
     "StagedBundleReceipt",
@@ -860,6 +976,7 @@ __all__ = (
     "create_agent_repository",
     "create_artifact_repository",
     "create_assignment_repository",
+    "create_atlas_link_repository",
     "create_atlas_page_repository",
     "create_attachment_materialization_coordinator",
     "create_attachment_parser_repository",
@@ -867,6 +984,7 @@ __all__ = (
     "create_audit_retention_repository",
     "create_authority_repository",
     "create_background_task_repository",
+    "create_capability_publication_repository",
     "create_chat_step_repository",
     "create_conversation_file_repository",
     "create_credential_repository",
@@ -881,6 +999,7 @@ __all__ = (
     "create_knowledge_repository",
     "create_maintenance_repository",
     "create_notification_repository",
+    "create_observation_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",
@@ -888,6 +1007,7 @@ __all__ = (
     "create_postgres_runtime",
     "create_preferences_repository",
     "create_purge_store",
+    "create_push_delivery_repository",
     "create_quality_audit_repository",
     "create_remote_operation_proposal_repository",
     "create_remote_repository",
@@ -911,6 +1031,8 @@ __all__ = (
     "inspect_baseline_compatibility",
     "inspect_endpoint_readiness",
     "paths_for",
+    "qualify_joint_restore",
+    "recover_joint_restore",
     "retire_restored_sessions",
     "runtime_metadata_for_manifest",
 )

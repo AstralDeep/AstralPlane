@@ -28,9 +28,9 @@ qualification of the schema, the repositories, and changed lines is the CI workf
   migration and recovery cases, all passed. The recorded digests of
   `src/astralplane/database/migrations.py`, `src/astralplane/database/revision.py`, both integration
   suites, `docs/migration-and-recovery.md`, and the recorder no longer match current bytes, and the
-  current schema is `089.006`; only its `066.001` baseline builder and pre-split fixture inputs
+  current schema is `089.012`; only its `066.001` baseline builder and pre-split fixture inputs
   still match. The current migration registry digest is
-  `1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1`.
+  `58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e`.
   `tests/test_provenance.py` checks only its format, status, and case count and that
   the two slice records citing it agree with it; it does not compare its input digests with current
   bytes. Running the recorder again rewrites the file, so this description changes with it.

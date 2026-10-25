@@ -123,6 +123,12 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -235,6 +241,12 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(predecessor):
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
 
 
@@ -359,6 +371,12 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(prede
         "astralplane-089-completion-wake",
         "astralplane-089-notification-records",
         "astralplane-089-atlas-pages",
+        "astralplane-089-atlas-revisions",
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
     for _ in range(2):
         with db.transaction() as tx:

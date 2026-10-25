@@ -82,6 +82,15 @@ class RepositoryContract:
     failure_evidence: tuple[str, ...]
 
 
+def _observations(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.observations.get_observation(
+        transaction,
+        owner_id=_OWNER,
+        conversation_id="contract-conversation",
+        observation_id=_UUID4,
+    )
+
+
 def _agent_management(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.agent_management.get_list_context(
         transaction,
@@ -96,6 +105,10 @@ def _assignments(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -
 
 def _atlas_pages(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.atlas_pages.get_page(transaction, owner_id=_OWNER, page_id=_UUID4)
+
+
+def _atlas_links(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.atlas_links.list_links(transaction, owner_id=_OWNER, page_id=_UUID4)
 
 
 def _agents(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
@@ -166,6 +179,14 @@ def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor)
     catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
 
+def _push_deliveries(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.push_deliveries.get_destination(
+        transaction,
+        owner_id=_OWNER,
+        destination_id=_UUID4,
+    )
+
+
 def _stop_epochs(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.stop_epochs.get(transaction, owner_id=_OWNER)
 
@@ -179,6 +200,18 @@ def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecuto
         observed_terminal="completed",
         observed_revision=1,
         accepted_at=1,
+    )
+
+
+def _capability_publications(
+    catalog: api.RepositoryCatalog,
+    transaction: FailingExecutor,
+) -> None:
+    catalog.capability_publications.get(
+        transaction,
+        owner_id=_OWNER,
+        capability_id="capability-1",
+        audience_id="audience-1",
     )
 
 
@@ -694,6 +727,39 @@ REPOSITORY_CONTRACT_MATRIX = (
         ),
     ),
     RepositoryContract(
+        "push_deliveries",
+        api.create_push_delivery_repository,
+        "src/astralplane/repositories/push_deliveries.py",
+        _push_deliveries,
+        _OWNER,
+        "owner_id = %s",
+        (
+            "FOR UPDATE OF delivery SKIP LOCKED",
+            "FOR SHARE OF destination",
+            "claim_id = %s",
+        ),
+        ("ON CONFLICT", "delivery_key"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryDataError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
+        "observations",
+        api.create_observation_repository,
+        "src/astralplane/repositories/observations.py",
+        _observations,
+        _OWNER,
+        "owner_id=%s AND conversation_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "purged_at IS NULL", "capture_seq"),
+        ("request_digest", "identity was reused"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
         "offline_grants",
         api.create_offline_grant_repository,
         "src/astralplane/repositories/offline_grants.py",
@@ -934,6 +1000,22 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "capability_publications",
+        api.create_capability_publication_repository,
+        "src/astralplane/repositories/capability_publications.py",
+        _capability_publications,
+        _OWNER,
+        "owner_id = %s",
+        ("FOR UPDATE", "state_revision = %s", "publication_state = 'published'"),
+        ("ON CONFLICT", "replay", "capability publication revision is stale"),
+        None,
+        (
+            "CapabilityPublicationConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryDataError",
+        ),
+    ),
+    RepositoryContract(
         "atlas_pages",
         api.create_atlas_page_repository,
         "src/astralplane/repositories/atlas_pages.py",
@@ -941,6 +1023,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         _OWNER,
         "owner_id=%s AND page_id=%s",
         ("pg_advisory_xact_lock", "FOR UPDATE", "revision=%s", "deleted_at IS NULL"),
+        ("request_digest", "command identity was reused", "expected_revision"),
+        None,
+        ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
+        "atlas_links",
+        api.create_atlas_link_repository,
+        "src/astralplane/repositories/atlas_links.py",
+        _atlas_links,
+        _OWNER,
+        "owner_id=%s AND page_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "link revision changed", "deleted_at IS NULL"),
         ("request_digest", "command identity was reused"),
         None,
         ("RepositoryConflictError", "RepositoryDataError", "RepositoryNotFoundError"),
@@ -1143,6 +1237,24 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_notifications_089_005:test_deleted_entry_cannot_be_acknowledged",
     ),
     BehavioralEvidence(
+        "push_deliveries",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+        "tests.repositories.test_push_deliveries_postgres:"
+        "test_public_push_delivery_contract_behaviors",
+    ),
+    BehavioralEvidence(
+        "observations",
+        "tests.repositories.test_observations_postgres:test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:test_public_observation_contract_behaviors",
+        "tests.repositories.test_observations_postgres:test_public_observation_contract_behaviors",
+    ),
+    BehavioralEvidence(
         "offline_grants",
         "tests.repositories.test_offline_grants:test_owner_get_and_exchange_lookup_use_owner_and_live_predicates",
         "tests.repositories.test_offline_grants:test_create_grant_accepts_exact_replay_after_lifecycle_change",
@@ -1284,15 +1396,33 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
     ),
     BehavioralEvidence(
+        "capability_publications",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_owner_scope_and_active_reads_never_cross_owners",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_exact_publish_replay_is_idempotent_and_changed_replay_conflicts",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_stale_withdraw_and_concurrent_first_publish_are_fenced",
+        "tests.repositories.test_capability_publications_postgres:"
+        "test_caller_failure_rolls_back_and_restart_reads_durable_state",
+    ),
+    BehavioralEvidence(
         "atlas_pages",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
-        "tests.repositories.test_atlas_pages_postgres:"
-        "test_public_atlas_page_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+        "tests.repositories.test_atlas_revisions_postgres:"
+        "test_public_atlas_revision_contract_behaviors",
+    ),
+    BehavioralEvidence(
+        "atlas_links",
+        "tests.repositories.test_atlas_links_postgres:test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:test_public_atlas_link_contract_behaviors",
+        "tests.repositories.test_atlas_links_postgres:test_public_atlas_link_contract_behaviors",
     ),
 )
 
