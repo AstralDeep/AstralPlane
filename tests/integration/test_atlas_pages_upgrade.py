@@ -32,9 +32,7 @@ OWNER = "atlas-upgrade-owner"
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge
-            for edge in m.MIGRATION_REGISTRY.migrations
-            if edge.target_revision <= "089.005"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.005"
         ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.005"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_005_SCHEMA_VERIFIER_CHECKSUM,
@@ -65,9 +63,7 @@ def prior_runner(database):
 def atlas_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge
-            for edge in m.MIGRATION_REGISTRY.migrations
-            if edge.target_revision <= "089.006"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.006"
         ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.006"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_006_SCHEMA_VERIFIER_CHECKSUM,
@@ -212,8 +208,8 @@ def test_populated_089_006_upgrade_preserves_rows_adds_only_atlas_tables(predece
         "astralplane-089-capability-publications",
         "astralplane-089-operation-harness-bindings",
         "astralplane-089-push-deliveries",
-                                       "astralplane-089-observation-records",
-                                   )
+        "astralplane-089-observation-records",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM atlas_page") == ()
@@ -224,7 +220,13 @@ def test_populated_089_006_upgrade_preserves_rows_adds_only_atlas_tables(predece
         assert tx.fetch_all("SELECT * FROM atlas_page_link_command") == ()
         created = AtlasPageRepository().create_page(tx, command=page_command())
         assert created.page.content == b"synthetic-opaque-upgrade-ciphertext"
-    assert atlas_runner(db).run(expected_revision="089.006").already_current
+    assert (
+        current_runner(db)
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+        .already_current
+    )
+    with pytest.raises(SchemaRevisionError):
+        atlas_runner(db).run(expected_revision="089.006")
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="089.005")
 
@@ -255,8 +257,8 @@ def test_interrupted_atlas_edge_rolls_back_and_retries(predecessor):
         "astralplane-089-capability-publications",
         "astralplane-089-operation-harness-bindings",
         "astralplane-089-push-deliveries",
-                           "astralplane-089-observation-records",
-                       )
+        "astralplane-089-observation-records",
+    )
 
 
 def test_atlas_namesake_or_damaged_predecessor_is_refused(predecessor):

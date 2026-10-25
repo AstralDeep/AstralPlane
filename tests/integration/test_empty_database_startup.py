@@ -436,6 +436,21 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
     assert function_configurations.pop("reject_atlas_page_link_command_mutation") == [
         "search_path=pg_catalog"
     ]
+    assert function_configurations.pop("reject_operation_harness_binding_mutation") == [
+        "search_path=pg_catalog, pg_temp"
+    ]
+    assert function_configurations.pop("enforce_tool_observation_lifecycle") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_tool_observation_delete") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_tool_observation_page_update") == [
+        "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("enforce_tool_observation_page_purge") == [
+        "search_path=pg_catalog"
+    ]
     assert set(function_configurations) == {
         "astraldeep_positive_unique_int_array",
         "astralplane_attachment_id_is_canonical",
