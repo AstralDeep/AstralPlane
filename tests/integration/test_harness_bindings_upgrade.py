@@ -34,8 +34,7 @@ DIGEST = "e" * 64
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge for edge in m.MIGRATION_REGISTRY.migrations
-            if edge.target_revision <= "089.009"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.009"
         ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.009"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_009_SCHEMA_VERIFIER_CHECKSUM,
@@ -137,10 +136,12 @@ def test_populated_089_010_upgrade_preserves_rows_and_binds_only_on_request(pred
         tables = seed_populated(tx)
         owner, fence, operation_id = _seed_running_operation(tx)
         before = retained_rows(tx, tables)
-    report = current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+    assert report.applied_steps == (
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
-    assert report.applied_steps == ("astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM operation_harness_binding") == ()
@@ -174,9 +175,7 @@ def test_interrupted_harness_binding_edge_rolls_back_and_retries(predecessor):
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert (
-            tx.fetch_one(
-                "SELECT to_regclass('operation_harness_binding') AS relation"
-            )["relation"]
+            tx.fetch_one("SELECT to_regclass('operation_harness_binding') AS relation")["relation"]
             is None
         )
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
@@ -184,27 +183,25 @@ def test_interrupted_harness_binding_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
+    ).applied_steps == (
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
 
 
 def test_harness_binding_namesake_predecessor_is_refused(predecessor):
     db = predecessor.database
     with db.transaction() as tx:
-        tx.execute(
-            "CREATE TABLE operation_harness_binding (operation_id UUID PRIMARY KEY)"
-        )
+        tx.execute("CREATE TABLE operation_harness_binding (operation_id UUID PRIMARY KEY)")
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(
-            expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-        )
+        current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
             "089.009"
         )
         assert (
-            tx.fetch_one(
-                "SELECT to_regclass('operation_harness_binding') AS relation"
-            )["relation"]
+            tx.fetch_one("SELECT to_regclass('operation_harness_binding') AS relation")["relation"]
             is not None
         )
 
@@ -228,6 +225,4 @@ def test_current_harness_binding_catalog_damage_is_refused(migrated_clone, corru
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(db).run(
-            expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-        )
+        current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)

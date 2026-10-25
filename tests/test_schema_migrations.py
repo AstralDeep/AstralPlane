@@ -667,6 +667,7 @@ def test_088_007_scheduler_policy_edge_is_pinned_to_the_exact_088_006_registry()
 
     edge = canonical.PLANE_SCHEMA_088_007_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-14] is edge
     assert edge.name == "astralplane-088-scheduler-policy"
     assert edge.source_revisions == ("088.006",)
     assert edge.target_revision == "088.007"
@@ -708,6 +709,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
 
     edge = canonical.PLANE_SCHEMA_088_008_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-13] is edge
     assert edge.name == "astralplane-088-framework-credentials"
     assert edge.source_revisions == ("088.007",)
     assert edge.target_revision == "088.008"
@@ -732,7 +734,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
@@ -752,6 +754,7 @@ def test_089_001_typesafe_credential_edge_is_pinned_to_the_exact_088_008_registr
 
     edge = canonical.PLANE_SCHEMA_089_001_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-12] is edge
     assert edge.name == "astralplane-089-typesafe-credentials"
     assert edge.source_revisions == ("088.008",)
     assert edge.target_revision == "089.001"
@@ -790,6 +793,7 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
 
     edge = canonical.PLANE_SCHEMA_089_002_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-11] is edge
     assert edge.name == "astralplane-089-mesh-enrollment-records"
     assert edge.source_revisions == ("089.001",)
     assert edge.target_revision == "089.002"
@@ -823,9 +827,9 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (
@@ -849,6 +853,7 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
 
     edge = canonical.PLANE_SCHEMA_089_004_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-9] is edge
     assert edge.name == "astralplane-089-completion-wake"
     assert edge.source_revisions == ("089.003",)
     assert edge.target_revision == "089.004"
@@ -866,9 +871,9 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
         canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("completion_subscription", "wake_receipt"):
@@ -881,6 +886,7 @@ def test_089_006_atlas_page_edge_is_pinned_to_the_exact_089_005_registry() -> No
 
     edge = canonical.PLANE_SCHEMA_089_006_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-7] is edge
     assert edge.name == "astralplane-089-atlas-pages"
     assert edge.source_revisions == ("089.005",)
     assert edge.target_revision == "089.006"
@@ -905,7 +911,7 @@ def test_089_006_atlas_page_edge_is_pinned_to_the_exact_089_005_registry() -> No
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.005") == (
         canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("atlas_page", "atlas_page_command"):
         assert f"('{table}')" in query_tables
@@ -917,6 +923,7 @@ def test_089_007_atlas_revision_edge_is_pinned_to_the_exact_089_006_registry() -
 
     edge = canonical.PLANE_SCHEMA_089_007_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-6] is edge
     assert edge.name == "astralplane-089-atlas-revisions"
     assert edge.source_revisions == ("089.006",)
     assert edge.target_revision == "089.007"
@@ -947,7 +954,7 @@ def test_089_007_atlas_revision_edge_is_pinned_to_the_exact_089_006_registry() -
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.006") == (
         canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('atlas_page_revision')" in query_tables
 
@@ -958,6 +965,7 @@ def test_089_008_atlas_link_edge_is_pinned_to_the_exact_089_007_registry() -> No
 
     edge = canonical.PLANE_SCHEMA_089_008_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
     assert edge.name == "astralplane-089-atlas-links"
     assert edge.source_revisions == ("089.007",)
     assert edge.target_revision == "089.008"
@@ -989,7 +997,7 @@ def test_089_008_atlas_link_edge_is_pinned_to_the_exact_089_007_registry() -> No
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.007") == (
         canonical.PLANE_SCHEMA_089_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("atlas_page_link", "atlas_page_link_head", "atlas_page_link_command"):
         assert f"('{table}')" in query_tables
@@ -1014,6 +1022,7 @@ def test_089_009_capability_publication_edge_is_pinned_to_the_exact_089_008_regi
 
     edge = canonical.PLANE_SCHEMA_089_009_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
     assert edge.name == "astralplane-089-capability-publications"
     assert edge.source_revisions == ("089.008",)
     assert edge.target_revision == "089.009"
@@ -1045,9 +1054,9 @@ def test_089_009_capability_publication_edge_is_pinned_to_the_exact_089_008_regi
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.008") == (
         canonical.PLANE_SCHEMA_089_008_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('capability_publication')" in query_tables
@@ -1064,6 +1073,7 @@ def test_089_010_harness_binding_edge_is_pinned_to_the_exact_089_009_registry() 
 
     edge = canonical.PLANE_SCHEMA_089_010_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-089-operation-harness-bindings"
     assert edge.source_revisions == ("089.009",)
     assert edge.target_revision == "089.010"
@@ -1097,5 +1107,59 @@ def test_089_010_harness_binding_edge_is_pinned_to_the_exact_089_009_registry() 
         canonical.PLANE_SCHEMA_089_009_REGISTRY_DIGEST
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
     )
+
+
+def test_089_012_observation_edge_is_pinned_to_the_exact_089_011_registry() -> None:
+    import astralplane.database.migrations as canonical
+    from astralplane.database.observation_schema import OBSERVATION_SCHEMA_STATEMENTS
+
+    edge = canonical.PLANE_SCHEMA_089_012_MIGRATION
+    assert edge in canonical.MIGRATION_REGISTRY.migrations
+    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert edge.name == "astralplane-089-observation-records"
+    assert edge.source_revisions == ("089.011",)
+    assert edge.target_revision == "089.012"
+    assert edge.checksum == canonical._statements_checksum(OBSERVATION_SCHEMA_STATEMENTS)
+
+    ddl = "\n".join(OBSERVATION_SCHEMA_STATEMENTS)
+    for table in ("tool_observation", "tool_observation_page"):
+        assert f"CREATE TABLE {table}" in ddl
+    assert "CREATE UNIQUE INDEX tool_observation_recall" in ddl
+    assert "CREATE INDEX tool_observation_expiry" in ddl
+    assert "PRIMARY KEY(owner_id,conversation_id,observation_id)" in ddl
+    assert "UNIQUE(owner_id,conversation_id,capture_seq)" in ddl
+    assert "tool_observation_retention_window CHECK(" in ddl
+    assert "expires_at<=created_at+86400" in ddl
+    assert "octet_length(content) BETWEEN 1 AND 16384" in ddl
+    assert "observation_octets BETWEEN 0 AND 8388608" in ddl
+    assert "tool_observation_lifecycle" in ddl
+    assert "tool_observation_delete" in ddl
+    assert "tool_observation_page_immutable" in ddl
+    assert "tool_observation_page_purge" in ddl
+    assert "ALTER TABLE" not in ddl
+    assert "IF NOT EXISTS" not in ddl
+
+    assert canonical.PLANE_SCHEMA_089_011_REGISTRY_DIGEST == (
+        "8677b4e37ea98a7471ca97a82bc0182aed0f68002cace976ecfaacf8487d04fc"
+    )
+    assert canonical.PLANE_SCHEMA_089_011_SCHEMA_VERIFIER_CHECKSUM == (
+        "a2f00c314f47ff36e9f522db4e332cad4ac7af3d1a82622909a390eed22f0b7a"
+    )
+    assert canonical.PLANE_SCHEMA_089_011_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
+        "136f65bce0a5c757ebc3a035da0d5b7426c750b13d40023dc8999df880bd58d1"
+    )
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.011"] == (
+        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d",
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.011") == (
+        canonical.PLANE_SCHEMA_089_011_REGISTRY_DIGEST
+    )
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
+    assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
+    )
+    query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
+    for table in ("tool_observation", "tool_observation_page"):
+        assert f"('{table}')" in query_tables

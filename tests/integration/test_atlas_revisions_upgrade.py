@@ -150,6 +150,7 @@ def test_populated_089_007_upgrade_backfills_live_heads_and_preserves_deleted_pa
         "astralplane-089-capability-publications",
                                        "astralplane-089-operation-harness-bindings",
                                        "astralplane-089-push-deliveries",
+                                       "astralplane-089-observation-records",
                                    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -235,7 +236,7 @@ def test_populated_089_007_upgrade_backfills_live_heads_and_preserves_deleted_pa
     with db.transaction() as tx:
         assert tx.fetch_one("SELECT count(*) AS count FROM atlas_page_revision")["count"] == 2
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
-            "089.008"
+            m.CURRENT_DATA_PLANE_REVISION.schema_revision
         )
 
 
@@ -275,6 +276,7 @@ def test_interrupted_089_007_edge_rolls_back_and_retries(predecessor):
         "astralplane-089-capability-publications",
                            "astralplane-089-operation-harness-bindings",
                            "astralplane-089-push-deliveries",
+                           "astralplane-089-observation-records",
                        )
 
 

@@ -30,10 +30,12 @@ def at_089_008(database, registry=None):
         registry
         if registry is not None
         else m.MigrationRegistry(
-            tuple(edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.008"),
-            current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(
-                tx, "089.008"
+            tuple(
+                edge
+                for edge in m.MIGRATION_REGISTRY.migrations
+                if edge.target_revision <= "089.008"
             ),
+            current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.008"),
             current_schema_verifier_checksum=m.PLANE_SCHEMA_089_008_SCHEMA_VERIFIER_CHECKSUM,
             predecessor_schema_verifier=m._verify_predecessor_plane_schema,
             predecessor_schema_verifier_checksum=(
@@ -88,13 +90,20 @@ def test_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
     db = empty_postgres_schema.database
     tables, before = populated_predecessor(db)
     report = current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
+    assert report.applied_steps == (
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM capability_publication") == ()
-    assert current(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).already_current
+    assert (
+        current(db)
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+        .already_current
+    )
     with pytest.raises(SchemaRevisionError):
         at_089_008(db).run(expected_revision="089.008")
 
@@ -117,9 +126,11 @@ def test_committed_publication_survives_repeat_and_restart(empty_postgres_schema
             expires_at=AT + timedelta(hours=1),
             expected_revision=0,
         )
-    assert current(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).already_current
+    assert (
+        current(db)
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+        .already_current
+    )
     with db.transaction() as tx:
         fresh = CapabilityPublicationRepository()
         assert (
@@ -142,9 +153,9 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
         raise RuntimeError("synthetic migration interruption")
 
     registry = m.MigrationRegistry(
-        (
-            *m.MIGRATION_REGISTRY.migrations[:-1],
-            replace(m.PLANE_SCHEMA_089_009_MIGRATION, operation=interrupted),
+        tuple(
+            replace(edge, operation=interrupted) if edge.target_revision == "089.009" else edge
+            for edge in m.MIGRATION_REGISTRY.migrations
         ),
         current_schema_verifier=m._verify_current_plane_schema,
         current_schema_verifier_checksum=m.CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -160,12 +171,16 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
             is None
         )
         assert (
-            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.008"
+            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.008"
         )
     assert current(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
+    ).applied_steps == (
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
 
 
 def test_current_catalog_damage_is_refused(empty_postgres_schema):
@@ -174,8 +189,7 @@ def test_current_catalog_damage_is_refused(empty_postgres_schema):
     current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         tx.execute(
-            "ALTER TABLE capability_publication "
-            "DROP CONSTRAINT capability_publication_state_shape"
+            "ALTER TABLE capability_publication DROP CONSTRAINT capability_publication_state_shape"
         )
     with pytest.raises(SchemaRevisionError):
         current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
@@ -190,8 +204,7 @@ def test_namesake_is_not_adopted(empty_postgres_schema):
         current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert (
-            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"]
-            == "089.008"
+            tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.008"
         )
         assert (
             tx.fetch_one("SELECT to_regclass('capability_publication_owner_live') AS relation")[

@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -385,11 +385,11 @@ snapshot cannot recover content that was never stored in Plane.
 ### `089.009` owner capability publications and recovery
 
 This additive edge requires the exact `089.008` registry digest
-`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its catalog. It adds one owner-scoped
+`3845856d7280e5ebd5e516135344b660cde8e3cff2a86f2ab50b0d4e0cf7999d` and its catalog. It adds one owner-scoped
 publication table, its live-publication index, and no provider, discovery, IAM,
-or transport object. The current canonical catalog digest is
-`f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d`; the current migration registry digest is
-`aba2a6410531d6351b335faec8a5130657c6c1cce043b695512b236643724946`. Existing notification, Atlas, mesh, stop,
+or transport object. The catalog digest immediately after this edge is
+`50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
+`58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -516,9 +516,9 @@ link set that was not present when the backup was taken.
 ### `089.010` operation harness bindings and recovery
 
 This additive edge requires the exact `089.009` registry digest
-`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its
+`c3e2b3d2d2a2f88a7b995eb6525f6f01df463bad5129a989f7ed70be5e95ed4b` and its
 catalog. Current catalog digest is
-`1c46381c978140a8f4dfc2af71c8cd99621abd31125363764b6194f3a7a341aa`.
+`1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68`.
 It adds `operation_harness_binding`, a profile/version/artifact index, and an
 immutability function/trigger without altering operation, assignment, notification,
 guidance, credential, or audit rows.
@@ -560,7 +560,7 @@ deployment artifact or profile identity is still available.
 ### `089.011` push destinations and claimed deliveries
 
 This additive edge requires the exact `089.010` registry digest
-`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its catalog. It adds
+`facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b` and its catalog. It adds
 `notification_device_destination` and `notification_push_delivery` and alters nothing that exists.
 The destination row stores an owner-scoped opaque device key, host-encrypted token ciphertext,
 its SHA-256 and format, a monotonic `token_version`, a current `revision`, and revocation/deletion
@@ -595,6 +595,57 @@ that may have reached a provider before the backup boundary before reopening, an
 a claimed delivery merely because its row was restored. Never drop the tables, restore a deleted
 destination token, reset attempt counters, rewrite revision/digest markers, or execute ad-hoc
 downgrade SQL.
+
+### `089.012` Tool observation records and recovery
+
+This additive edge requires the exact `089.011` registry digest
+`8677b4e37ea98a7471ca97a82bc0182aed0f68002cace976ecfaacf8487d04fc` and its
+catalog. Current catalog digest is
+`e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d`.
+It adds `tool_observation` and `tool_observation_page` and alters nothing
+that exists. The parent table stores the owner/conversation/observation
+identity, per-conversation capture order, originating operation reference,
+caller-held encryption seal, bounded source references, page extent, the
+whole-observation SHA-256 digest, the capture request digest, caller integer
+second timestamps, an absolute expiry inside a 24-hour retention ceiling, and
+a content-free tombstone. The child table stores the bounded opaque ciphertext
+pages with their per-page SHA-256 digests under the parent foreign key.
+
+The migration infers no existing observation, imports no legacy memory or
+audit rows, and does not rewrite preferences, notes, knowledge, atlas, or
+audit state. A same-name foreign object, damaged predecessor catalog, partial
+DDL, or failed stamp rolls back or fails closed before adoption. Repeat
+startup verifies both tables, indexes, constraints, and lifecycle/immutability
+triggers and performs no write. Reads, listings, recall, and writes carry the
+owner and conversation predicates in SQL. Capture replays exactly under its
+request digest and cannot exceed the bounded per-conversation capacity.
+Recall returns bounded pages with continuation or explicit end-of-source
+state, fails closed on expired, purged, foreign, or integrity-damaged
+sources, and never renews expiry. Purge and expiry sweeps tombstone the
+parent, erase every page, and leave a terminal durable tombstone; replaying
+a capture cannot restore content. Recall authorization, audience, packing,
+compaction, and provider policy remain with the host.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, populated
+repeat and rollback checks described above. Failed DDL rolls back with registry
+metadata. The populated upgrade, interruption, namesake, and current-catalog
+damage cases are exercised by `tests/integration/test_observations_upgrade.py`;
+owner isolation, replay, paged recall, expiry, purge, capacity, races,
+corruption, and caller-rollback behavior are exercised by
+`tests/repositories/test_observations_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact
+`089.012` revision/digest intact. An `089.011` binary is not compatible merely
+because these tables are additive. Prefer a reviewed forward repair through the
+guarded registry. If the previous composition must be restored, close admission
+and restore the verified pre-upgrade PostgreSQL backup and every paired durable
+root together with the exact prior application and unchanged keys. Account for
+post-backup captures, recalls, and purges, retire restored sessions through the
+governed recovery contract, and reconcile uncertain effects before reopening
+admission. Never drop the tables, rewrite revision/digest markers, restore a
+tombstone to a live observation, or execute ad-hoc downgrade SQL. A restored
+database snapshot cannot recover observation content that was never stored in
+Plane, and an expired or purged observation stays unavailable after recovery.
 
 ### `089.002` mesh enrollment records and recovery
 
@@ -749,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.011` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.012` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -851,12 +902,10 @@ maintenance window has been verified:
 4. Verify restored revision, table/record checks, blob membership, byte counts, and SHA-256 before
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
-   non-current metadata, and a damaged catalog before any session mutation. A restored `066.001` state has no Plane digest and must match its
-   pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
-   `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
-   `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`,
-   `089.007`, `089.008` states must carry their exact pinned historical registry digests and match their
-   pinned predecessor catalogs. A restored `089.011` state must carry the exact current registry
+   non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`
+   states must carry their exact pinned historical registry digests and match their pinned
+   predecessor catalogs. A restored `089.012` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

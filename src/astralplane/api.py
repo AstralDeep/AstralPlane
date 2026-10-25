@@ -193,6 +193,17 @@ from astralplane.repositories.notifications import (
     NotificationPreferenceRecord,
     NotificationRepository,
 )
+from astralplane.repositories.observations import (
+    ObservationBatch,
+    ObservationCapture,
+    ObservationCaptureCommand,
+    ObservationCursor,
+    ObservationHead,
+    ObservationPage,
+    ObservationPurge,
+    ObservationRepository,
+    ObservationUsage,
+)
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
@@ -304,6 +315,10 @@ def create_notification_repository() -> NotificationRepository:
 
 def create_push_delivery_repository() -> PushDeliveryRepository:
     return PushDeliveryRepository()
+
+
+def create_observation_repository() -> ObservationRepository:
+    return ObservationRepository()
 
 
 def create_stop_epoch_repository() -> StopEpochRepository:
@@ -427,9 +442,7 @@ def create_encrypted_llm_config_repository() -> EncryptedLLMConfigRepository:
     return EncryptedLLMConfigRepository()
 
 
-def create_encrypted_typesafe_credential_repository() -> (
-    EncryptedTypeSafeCredentialRepository
-):
+def create_encrypted_typesafe_credential_repository() -> EncryptedTypeSafeCredentialRepository:
     return EncryptedTypeSafeCredentialRepository()
 
 
@@ -509,6 +522,7 @@ class RepositoryCatalog:
     mesh_enrollment: MeshEnrollmentRepository
     notifications: NotificationRepository
     push_deliveries: PushDeliveryRepository
+    observations: ObservationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -554,6 +568,7 @@ class RepositoryCatalog:
                 "mesh_enrollment": self.mesh_enrollment,
                 "notifications": self.notifications,
                 "push_deliveries": self.push_deliveries,
+                "observations": self.observations,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -622,6 +637,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         mesh_enrollment=create_mesh_enrollment_repository(),
         notifications=create_notification_repository(),
         push_deliveries=create_push_delivery_repository(),
+        observations=create_observation_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -632,9 +648,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         remote_operation_proposals=create_remote_operation_proposal_repository(),
         revocations=create_revocation_repository(),
         encrypted_llm_config=create_encrypted_llm_config_repository(),
-        encrypted_typesafe_credential=(
-            create_encrypted_typesafe_credential_repository()
-        ),
+        encrypted_typesafe_credential=(create_encrypted_typesafe_credential_repository()),
         audit=create_audit_repository(),
         audit_retention=create_audit_retention_repository(),
         authority=create_authority_repository(),
@@ -842,7 +856,6 @@ def create_postgres_runtime(
 
 
 __all__ = (
-    "ClaimedPushDelivery",
     "ENDPOINT_READINESS_CONTRACT_VERSION",
     "GENERATED_AGENT_BUNDLE_CONTRACT",
     "GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE",
@@ -898,6 +911,7 @@ __all__ = (
     "CapabilityPublicationRecord",
     "CapabilityPublicationRepository",
     "CapabilityPublicationState",
+    "ClaimedPushDelivery",
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "EndpointFence",
@@ -923,6 +937,15 @@ __all__ = (
     "NotificationInboxEntry",
     "NotificationPreferenceRecord",
     "NotificationRepository",
+    "ObservationBatch",
+    "ObservationCapture",
+    "ObservationCaptureCommand",
+    "ObservationCursor",
+    "ObservationHead",
+    "ObservationPage",
+    "ObservationPurge",
+    "ObservationRepository",
+    "ObservationUsage",
     "OperationHarnessBinding",
     "OperationOwner",
     "OperationRecord",
@@ -976,6 +999,7 @@ __all__ = (
     "create_knowledge_repository",
     "create_maintenance_repository",
     "create_notification_repository",
+    "create_observation_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",

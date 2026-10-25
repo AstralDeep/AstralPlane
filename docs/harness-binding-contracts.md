@@ -39,10 +39,10 @@ available after the operation leaves `running`, so terminal evidence can be insp
 ## Upgrade and recovery
 
 The guarded `089.009 -> 089.010` edge requires the exact `089.009` registry digest
-`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its catalog. It adds one
+`c3e2b3d2d2a2f88a7b995eb6525f6f01df463bad5129a989f7ed70be5e95ed4b` and its catalog. It adds one
 table, one index, one immutability function, and one trigger without changing existing operation,
 assignment, notification, guidance, or audit rows. Current catalog digest is
-`1c46381c978140a8f4dfc2af71c8cd99621abd31125363764b6194f3a7a341aa`.
+`1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68`.
 
 Quiesce writers and apply the edge through normal host initialization. Verify repeat startup,
 legacy operations read as unbound, and an owner/fenced bind followed by a new repository instance

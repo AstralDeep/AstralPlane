@@ -123,8 +123,11 @@ def test_populated_push_upgrade_preserves_rows_and_supports_claim_acknowledgment
 ):
     db = empty_postgres_schema.database
     tables, before, entry = populated_predecessor(db)
-    report = current(db).run(expected_revision="089.011")
-    assert report.applied_steps == ("astralplane-089-push-deliveries",)
+    report = current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+    assert report.applied_steps == (
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
     repo = PushDeliveryRepository()
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -173,10 +176,14 @@ def test_populated_push_upgrade_preserves_rows_and_supports_claim_acknowledgment
             ).status
             == "delivered"
         )
-    assert current(db).run(expected_revision="089.011").already_current
+    assert (
+        current(db)
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
+        .already_current
+    )
     assert (
         BaselineMigrationRunner(db, current(db))
-        .run(expected_revision="089.011")
+        .run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
         .already_current
     )
     with pytest.raises(SchemaRevisionError):
@@ -192,23 +199,19 @@ def test_interrupted_push_edge_rolls_back_and_can_retry(empty_postgres_schema):
         raise RuntimeError("synthetic push migration interruption")
 
     registry = m.MigrationRegistry(
-        (
-            *tuple(
-                edge
-                for edge in m.MIGRATION_REGISTRY.migrations
-                if edge.target_revision <= "089.010"
-            ),
-            replace(m.PLANE_SCHEMA_089_011_MIGRATION, operation=interrupted),
+        tuple(
+            replace(edge, operation=interrupted) if edge.target_revision == "089.011" else edge
+            for edge in m.MIGRATION_REGISTRY.migrations
         ),
-        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.011"),
+        current_schema_verifier=m._verify_current_plane_schema,
         current_schema_verifier_checksum=m.CURRENT_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic push migration interruption"):
-        m.MigrationRunner(
-            db, revision=m.CURRENT_DATA_PLANE_REVISION, registry=registry
-        ).run(expected_revision="089.011")
+        m.MigrationRunner(db, revision=m.CURRENT_DATA_PLANE_REVISION, registry=registry).run(
+            expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+        )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert (
@@ -218,16 +221,17 @@ def test_interrupted_push_edge_rolls_back_and_can_retry(empty_postgres_schema):
             is None
         )
         assert (
-            tx.fetch_one("SELECT to_regclass('notification_push_delivery') AS relation")[
-                "relation"
-            ]
+            tx.fetch_one("SELECT to_regclass('notification_push_delivery') AS relation")["relation"]
             is None
         )
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
             "089.010"
         )
-    assert current(db).run(expected_revision="089.011").applied_steps == (
+    assert current(db).run(
+        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
+    ).applied_steps == (
         "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
 
 
@@ -235,19 +239,15 @@ def test_push_namesake_is_refused_before_adoption(empty_postgres_schema):
     db = empty_postgres_schema.database
     populated_predecessor(db)
     with db.transaction() as tx:
-        tx.execute(
-            "CREATE TABLE notification_device_destination (owner_id TEXT PRIMARY KEY)"
-        )
+        tx.execute("CREATE TABLE notification_device_destination (owner_id TEXT PRIMARY KEY)")
     with pytest.raises(SchemaRevisionError):
-        current(db).run(expected_revision="089.011")
+        current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
             "089.010"
         )
         assert (
-            tx.fetch_one("SELECT to_regclass('notification_push_delivery') AS relation")[
-                "relation"
-            ]
+            tx.fetch_one("SELECT to_regclass('notification_push_delivery') AS relation")["relation"]
             is None
         )
 
@@ -268,4 +268,4 @@ def test_current_push_catalog_damage_is_refused(migrated_clone, corruption):
     with db.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current(db).run(expected_revision="089.011")
+        current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)

@@ -223,6 +223,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-089-capability-publications",
         "astralplane-089-operation-harness-bindings",
         "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

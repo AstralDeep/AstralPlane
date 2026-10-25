@@ -87,7 +87,7 @@ one.
 ## Migration and recovery
 
 The `089.010 -> 089.011` edge requires the exact `089.010` registry digest
-`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and complete predecessor
+`facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b` and complete predecessor
 catalog. It performs no backfill, infers no destination or delivery, and alters no existing table.
 A repeat run verifies both tables' constraints and indexes as part of the current catalog and
 performs no write. Partial DDL or a failed stamp rolls back with the registry metadata; a same-name

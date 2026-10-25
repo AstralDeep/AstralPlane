@@ -71,6 +71,7 @@ from astralplane.api import (
     create_maintenance_repository,
     create_mesh_enrollment_repository,
     create_notification_repository,
+    create_observation_repository,
     create_offline_grant_repository,
     create_outbox_store,
     create_personalization_graph_repository,
@@ -237,6 +238,17 @@ from astralplane.repositories.notifications import (
     NotificationPreferenceRecord,
     NotificationRepository,
 )
+from astralplane.repositories.observations import (
+    ObservationBatch,
+    ObservationCapture,
+    ObservationCaptureCommand,
+    ObservationCursor,
+    ObservationHead,
+    ObservationPage,
+    ObservationPurge,
+    ObservationRepository,
+    ObservationUsage,
+)
 from astralplane.repositories.push_deliveries import (
     ClaimedPushDelivery,
     PushDeliveryRecord,
@@ -265,7 +277,6 @@ from astralplane.repositories.work_admission import (
 __version__ = PACKAGE_VERSION
 
 __all__ = (
-    "ClaimedPushDelivery",
     "ADVISORY_LOCK_IDS",
     "BLOB_LAYOUT_VERSION",
     "CONTRACT_VERSION",
@@ -347,6 +358,7 @@ __all__ = (
     "CapabilityPublicationRecord",
     "CapabilityPublicationRepository",
     "CapabilityPublicationState",
+    "ClaimedPushDelivery",
     "CommandResult",
     "CompatibilityReport",
     "CompatibilityState",
@@ -384,6 +396,15 @@ __all__ = (
     "NotificationInboxEntry",
     "NotificationPreferenceRecord",
     "NotificationRepository",
+    "ObservationBatch",
+    "ObservationCapture",
+    "ObservationCaptureCommand",
+    "ObservationCursor",
+    "ObservationHead",
+    "ObservationPage",
+    "ObservationPurge",
+    "ObservationRepository",
+    "ObservationUsage",
     "OperationHarnessBinding",
     "OperationOwner",
     "OperationRecord",
@@ -455,6 +476,7 @@ __all__ = (
     "create_maintenance_repository",
     "create_mesh_enrollment_repository",
     "create_notification_repository",
+    "create_observation_repository",
     "create_offline_grant_repository",
     "create_outbox_store",
     "create_personalization_graph_repository",

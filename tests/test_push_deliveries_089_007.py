@@ -106,7 +106,7 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
 
     edge = canonical.PLANE_SCHEMA_089_011_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
     assert edge.name == "astralplane-089-push-deliveries"
     assert edge.source_revisions == ("089.010",)
     assert edge.target_revision == "089.011"
@@ -123,26 +123,26 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
     assert "IF NOT EXISTS" not in ddl
 
     assert canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST == (
-        "1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1"
+        "facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.012"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.010") == (
         canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST
     )
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.010"] == (
-        "88896cd0498562ecd0b4d610c4453f7ed01f527e0845cacf7300d88374578e48",
+        "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "2d8c09367b6fc19288ac004c09110494de874d20a3eff2128b99b8a8b71219d0"
+        "e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "f8443daf6cb3d2318b4bef4db8908c54fb31a44e58cb22e78de5da9f8f6b52c1"
+        "e2bb080e5dc95c3c90cd46b4e3dde7c366c9b2d68d6c7c337f794e6920462e1e"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "39531bab71952c76ac52f1ad57c5c0173ea3723968b70f9809a89d4a8e4f7e02"
+        "bbd0d0cededef7d894ef3fb43a840e3d104e06e55c813137ee6a6a73d5ad7398"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "dc89d8adb83cab43ddaa74bc7515ffb637d64001398aa957a2dc39390939b69a"
+        "58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e"
     )
 
 

@@ -26,9 +26,7 @@ PAGE_TWO = "50000000-0000-4000-8000-000000000002"
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge
-            for edge in m.MIGRATION_REGISTRY.migrations
-            if edge.target_revision <= "089.007"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.007"
         ),
         current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.007"),
         current_schema_verifier_checksum=m.PLANE_SCHEMA_089_007_SCHEMA_VERIFIER_CHECKSUM,
@@ -115,7 +113,13 @@ def test_populated_089_008_upgrade_preserves_pages_and_adds_only_link_tables(pre
         before = retained_rows(tx, tables)
         pages_before = retained_rows(tx, ("atlas_page", "atlas_page_command"))
     report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
+    assert report.applied_steps == (
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert retained_rows(tx, ("atlas_page", "atlas_page_command")) == pages_before
@@ -171,12 +175,16 @@ def test_interrupted_atlas_link_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
+    ).applied_steps == (
+        "astralplane-089-atlas-links",
+        "astralplane-089-capability-publications",
+        "astralplane-089-operation-harness-bindings",
+        "astralplane-089-push-deliveries",
+        "astralplane-089-observation-records",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, ("atlas_page", "atlas_page_command")) == pages_before
-        assert tx.fetch_one(
-            "SELECT count(*) AS count FROM atlas_page_link"
-        )["count"] == 0
+        assert tx.fetch_one("SELECT count(*) AS count FROM atlas_page_link")["count"] == 0
         assert first.page_id == PAGE_ONE
 
 
@@ -210,9 +218,7 @@ def test_damaged_atlas_page_predecessor_is_refused_without_link_adoption(predece
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
             "089.007"
         )
-        assert (
-            tx.fetch_one("SELECT to_regclass('atlas_page_link') AS relation")["relation"] is None
-        )
+        assert tx.fetch_one("SELECT to_regclass('atlas_page_link') AS relation")["relation"] is None
 
 
 @pytest.mark.parametrize(

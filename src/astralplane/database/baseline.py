@@ -51,6 +51,7 @@ _KNOWN_REVISIONS: Final = frozenset(
         "089.009",
         "089.010",
         "089.011",
+        "089.012",
     }
 )
 _SCHEMA_META_TABLE: Final = "schema_meta"
