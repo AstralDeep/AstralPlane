@@ -1182,6 +1182,54 @@ def _observe_notifications(transaction: Transaction) -> object:
     )
 
 
+def _write_push_deliveries(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    body = b"opaque-rollback-push-payload"
+    entry = catalog.notifications.create_entry(
+        transaction,
+        owner_id=_OWNER,
+        event_kind="completion",
+        source_id="rollback-push-source",
+        deduplication_key="rollback-push-notification",
+        content_format="astral.notification/v1",
+        content_ciphertext=body,
+        content_sha256=hashlib.sha256(body).hexdigest(),
+        created_at=1,
+        retention_expires_at=100,
+        entry_id="74000000-0000-4000-8000-000000000092",
+    )
+    token = b"opaque-rollback-push-token"
+    destination = catalog.push_deliveries.register_destination(
+        transaction,
+        owner_id=_OWNER,
+        destination_key="rollback-push-device",
+        token_format="astral.push-token/v1",
+        token_ciphertext=token,
+        token_sha256=hashlib.sha256(token).hexdigest(),
+        created_at=1,
+        destination_id="74000000-0000-4000-8000-000000000093",
+    )
+    catalog.push_deliveries.enqueue_delivery(
+        transaction,
+        owner_id=_OWNER,
+        entry_id=entry.entry_id,
+        destination_id=destination.destination_id,
+        delivery_key="rollback-push-delivery",
+        expected_destination_revision=destination.revision,
+        expected_token_version=destination.token_version,
+        max_attempts=2,
+        available_at=2,
+        created_at=2,
+        delivery_id="74000000-0000-4000-8000-000000000094",
+    )
+
+
+def _observe_push_deliveries(transaction: Transaction) -> object:
+    return tuple(
+        transaction.fetch_one(f"SELECT COUNT(*) AS value FROM {table}")["value"]
+        for table in ("notification_device_destination", "notification_push_delivery")
+    )
+
+
 def _write_workspaces(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.workspaces.canvas.create(
         transaction,
@@ -1349,6 +1397,13 @@ ROLLBACK_CASES = (
         _observe_notifications,
         (1, 1, 1),
         (0, 0, 0),
+    ),
+    RollbackCase(
+        "push_deliveries",
+        _write_push_deliveries,
+        _observe_push_deliveries,
+        (1, 1),
+        (0, 0),
     ),
     RollbackCase(
         "offline_grants",

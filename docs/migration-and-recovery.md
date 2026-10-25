@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -557,6 +557,45 @@ rewrite or drop persisted bindings, infer an operation's profile identity, or
 execute ad-hoc downgrade SQL. A restored binding does not prove that its host
 deployment artifact or profile identity is still available.
 
+### `089.011` push destinations and claimed deliveries
+
+This additive edge requires the exact `089.010` registry digest
+`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its catalog. It adds
+`notification_device_destination` and `notification_push_delivery` and alters nothing that exists.
+The destination row stores an owner-scoped opaque device key, host-encrypted token ciphertext,
+its SHA-256 and format, a monotonic `token_version`, a current `revision`, and revocation/deletion
+tombstones. Deletion clears token material. The delivery row snapshots the inbox event content,
+destination token version and revision, and carries a bounded retry policy, lease owner, claim
+identity, attempt count, availability time, and terminal acknowledgment/error state.
+
+Enqueue requires an owner-owned live inbox entry and a live destination at the caller's expected
+revision and token version. Claims select only work whose snapshot still equals the destination's
+current token version and revision, lock the delivery with `SKIP LOCKED` and the destination for
+share, and return the encrypted destination token to the host. Rotation, revocation, or deletion
+therefore makes older pending work unclaimable until the host supersedes it. Expired claims are
+reclaimed up to `max_attempts`; exhausted leases become `dead_letter`. A late acknowledgment is
+accepted only for the exact current claim identity, even after lease expiry, so it cannot mark a
+newer claim delivered. Plane never decrypts a token, calls a provider, chooses a device, or makes
+an IAM or notification-policy decision.
+
+Follow the same closed-admission backup, guarded upgrade, catalog, repeat and rollback checks
+described above. Failed DDL rolls back with registry metadata. The populated upgrade, interruption,
+namesake, and current-catalog damage cases are exercised by
+`tests/integration/test_push_deliveries_upgrade.py`; destination, claim, retry, late
+acknowledgment, concurrency, restart, and caller-rollback behavior are exercised by
+`tests/repositories/test_push_deliveries_postgres.py`.
+
+**Recovery.** Once this transaction commits, keep both tables and the exact `089.011`
+revision/digest intact. An `089.010` binary is not compatible merely because these tables are
+additive. Preserve claims, retry counters, dead letters, and content-free destination tombstones
+for recovery inspection. Prefer a guarded forward repair. If the prior composition must be
+restored, close admission and restore the verified pre-upgrade PostgreSQL backup and every paired
+durable root together with the exact prior application and unchanged keys. Reconcile deliveries
+that may have reached a provider before the backup boundary before reopening, and never re-deliver
+a claimed delivery merely because its row was restored. Never drop the tables, restore a deleted
+destination token, reset attempt counters, rewrite revision/digest markers, or execute ad-hoc
+downgrade SQL.
+
 ### `089.002` mesh enrollment records and recovery
 
 This additive edge requires the exact `089.001` registry and catalog. It adds
@@ -710,7 +749,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.010` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.011` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -817,7 +856,7 @@ maintenance window has been verified:
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
    `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`,
    `089.007`, `089.008` states must carry their exact pinned historical registry digests and match their
-   pinned predecessor catalogs. A restored `089.010` state must carry the exact current registry
+   pinned predecessor catalogs. A restored `089.011` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.

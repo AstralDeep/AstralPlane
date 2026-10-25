@@ -32,10 +32,12 @@ Scheduler, maintenance, voice, workspace publication, and history composition re
 product-level PostgreSQL suites in AstralDeep; those callers use the same public Plane repositories
 and application runtime.
 
-Assignments additionally exercise real concurrent claim, shared-budget reservation, control/permit
+Push deliveries additionally exercise opaque destination rotation/revocation/deletion, stale-token
+claim denial, concurrent claim exclusion, expired-lease recovery, and exact-claim late
+acknowledgment fencing. Assignments additionally exercise real concurrent claim, shared-budget reservation, control/permit
 ordering, remote-proposal creation/link rollback, and account retirement. Its behavioral matrix entry
 executes the same isolated PostgreSQL owner/replay/claim cases used by the dedicated assignment suite.
 
-This evidence uses repositories against the current `089.010` schema. A future catalog addition
+This evidence uses repositories against the current `089.011` schema. A future catalog addition
 must add both a failure/attribution probe and executable behavioral evidence before the
 exact-catalog assertion can pass.

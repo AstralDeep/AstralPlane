@@ -196,6 +196,12 @@ from astralplane.repositories.notifications import (
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
+from astralplane.repositories.push_deliveries import (
+    ClaimedPushDelivery,
+    PushDeliveryRecord,
+    PushDeliveryRepository,
+    PushDestinationRecord,
+)
 from astralplane.repositories.quality_audit import QualityAuditRepository
 from astralplane.repositories.remote import RemoteRepository
 from astralplane.repositories.remote_proposals import RemoteOperationProposalRepository
@@ -294,6 +300,10 @@ def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
 
 def create_notification_repository() -> NotificationRepository:
     return NotificationRepository()
+
+
+def create_push_delivery_repository() -> PushDeliveryRepository:
+    return PushDeliveryRepository()
 
 
 def create_stop_epoch_repository() -> StopEpochRepository:
@@ -498,6 +508,7 @@ class RepositoryCatalog:
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
     notifications: NotificationRepository
+    push_deliveries: PushDeliveryRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
     quality_audit: QualityAuditRepository
@@ -542,6 +553,7 @@ class RepositoryCatalog:
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
                 "notifications": self.notifications,
+                "push_deliveries": self.push_deliveries,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
                 "preferences": self.preferences,
@@ -609,6 +621,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
         notifications=create_notification_repository(),
+        push_deliveries=create_push_delivery_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
         quality_audit=create_quality_audit_repository(),
@@ -829,6 +842,7 @@ def create_postgres_runtime(
 
 
 __all__ = (
+    "ClaimedPushDelivery",
     "ENDPOINT_READINESS_CONTRACT_VERSION",
     "GENERATED_AGENT_BUNDLE_CONTRACT",
     "GENERATED_AGENT_PUBLICATION_IDEMPOTENCY_NAMESPACE",
@@ -921,6 +935,9 @@ __all__ = (
     "PlaneHealth",
     "PlaneRuntime",
     "PublishedBundle",
+    "PushDeliveryRecord",
+    "PushDeliveryRepository",
+    "PushDestinationRecord",
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
@@ -966,6 +983,7 @@ __all__ = (
     "create_postgres_runtime",
     "create_preferences_repository",
     "create_purge_store",
+    "create_push_delivery_repository",
     "create_quality_audit_repository",
     "create_remote_operation_proposal_repository",
     "create_remote_repository",

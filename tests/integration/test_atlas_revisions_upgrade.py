@@ -149,6 +149,7 @@ def test_populated_089_007_upgrade_backfills_live_heads_and_preserves_deleted_pa
         "astralplane-089-atlas-links",
         "astralplane-089-capability-publications",
                                        "astralplane-089-operation-harness-bindings",
+                                       "astralplane-089-push-deliveries",
                                    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -273,6 +274,7 @@ def test_interrupted_089_007_edge_rolls_back_and_retries(predecessor):
         "astralplane-089-atlas-links",
         "astralplane-089-capability-publications",
                            "astralplane-089-operation-harness-bindings",
+                           "astralplane-089-push-deliveries",
                        )
 
 

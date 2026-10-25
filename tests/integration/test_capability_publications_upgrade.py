@@ -88,7 +88,7 @@ def test_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
     db = empty_postgres_schema.database
     tables, before = populated_predecessor(db)
     report = current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings",)
+    assert report.applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM capability_publication") == ()
@@ -165,7 +165,7 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
         )
     assert current(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings",)
+    ).applied_steps == ("astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
 
 
 def test_current_catalog_damage_is_refused(empty_postgres_schema):

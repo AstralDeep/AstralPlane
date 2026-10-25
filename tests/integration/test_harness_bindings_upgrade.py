@@ -140,7 +140,7 @@ def test_populated_089_010_upgrade_preserves_rows_and_binds_only_on_request(pred
     report = current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
     )
-    assert report.applied_steps == ("astralplane-089-operation-harness-bindings",)
+    assert report.applied_steps == ("astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM operation_harness_binding") == ()
@@ -184,7 +184,7 @@ def test_interrupted_harness_binding_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-operation-harness-bindings",)
+    ).applied_steps == ("astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
 
 
 def test_harness_binding_namesake_predecessor_is_refused(predecessor):

@@ -115,7 +115,7 @@ def test_populated_089_008_upgrade_preserves_pages_and_adds_only_link_tables(pre
         before = retained_rows(tx, tables)
         pages_before = retained_rows(tx, ("atlas_page", "atlas_page_command"))
     report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings",)
+    assert report.applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert retained_rows(tx, ("atlas_page", "atlas_page_command")) == pages_before
@@ -171,7 +171,7 @@ def test_interrupted_atlas_link_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings",)
+    ).applied_steps == ("astralplane-089-atlas-links", "astralplane-089-capability-publications", "astralplane-089-operation-harness-bindings", "astralplane-089-push-deliveries",)
     with db.transaction() as tx:
         assert retained_rows(tx, ("atlas_page", "atlas_page_command")) == pages_before
         assert tx.fetch_one(

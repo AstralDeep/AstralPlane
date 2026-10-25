@@ -732,7 +732,7 @@ def test_088_008_framework_credentials_edge_is_pinned_to_the_exact_088_007_regis
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("088.007") == (
         canonical.PLANE_SCHEMA_088_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.001"] == (
         "4123d3bae2d73e369c65ca715ccaf47bdf3560e5ae09a3dc967fe26abd2517f7",
     )
@@ -823,9 +823,9 @@ def test_089_002_mesh_enrollment_edge_is_pinned_to_the_exact_089_001_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.001") == (
         canonical.PLANE_SCHEMA_089_001_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68"
+        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in (
@@ -866,9 +866,9 @@ def test_089_004_completion_wake_edge_is_pinned_to_the_exact_089_003_registry() 
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.003") == (
         canonical.PLANE_SCHEMA_089_003_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68"
+        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("completion_subscription", "wake_receipt"):
@@ -905,7 +905,7 @@ def test_089_006_atlas_page_edge_is_pinned_to_the_exact_089_005_registry() -> No
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.005") == (
         canonical.PLANE_SCHEMA_089_005_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("atlas_page", "atlas_page_command"):
         assert f"('{table}')" in query_tables
@@ -947,7 +947,7 @@ def test_089_007_atlas_revision_edge_is_pinned_to_the_exact_089_006_registry() -
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.006") == (
         canonical.PLANE_SCHEMA_089_006_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('atlas_page_revision')" in query_tables
 
@@ -989,7 +989,7 @@ def test_089_008_atlas_link_edge_is_pinned_to_the_exact_089_007_registry() -> No
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.007") == (
         canonical.PLANE_SCHEMA_089_007_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     for table in ("atlas_page_link", "atlas_page_link_head", "atlas_page_link_command"):
         assert f"('{table}')" in query_tables
@@ -1045,9 +1045,9 @@ def test_089_009_capability_publication_edge_is_pinned_to_the_exact_089_008_regi
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.008") == (
         canonical.PLANE_SCHEMA_089_008_REGISTRY_DIGEST
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.010"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.011"
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68"
+        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
     )
     query_tables = canonical.CURRENT_SCHEMA_STRUCTURE_QUERY
     assert "('capability_publication')" in query_tables
@@ -1097,5 +1097,5 @@ def test_089_010_harness_binding_edge_is_pinned_to_the_exact_089_009_registry() 
         canonical.PLANE_SCHEMA_089_009_REGISTRY_DIGEST
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68"
+        "f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d"
     )
