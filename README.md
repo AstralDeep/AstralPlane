@@ -10,7 +10,7 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.008`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.009`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
   `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
@@ -25,11 +25,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
 Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.008` database must carry the exact current
+before the first migration write. A current `089.009` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -129,6 +129,12 @@ page, exact page/link revision fences, immutable command receipts, one-hop backl
 traversal, and tombstone cleanup for either endpoint. Project traversal, rendering, content
 policy, authorization, and audit remain outside Plane. See
 [Atlas link contracts](docs/atlas-link-contracts.md).
+Schema `089.009` adds `capability_publication` storage through the `capability_publications`
+catalog member. An owner can publish one exact capability revision to one audience for a
+finite lifetime, withdraw or expire it with a state-revision compare-and-set fence, and read
+only live rows at a caller-supplied UTC instant. Encrypted audience metadata and its digest
+stay opaque. Discovery, IAM, invocation, and A2A transport remain in Deep. See
+[capability publication records](docs/capability-publication-records.md).
 
 `agents.reconcile_validation_policy_for_administration(...)` is the atomic, advisory-locked
 startup surface for a Deep-supplied opaque product-policy revision. Exact marker replay is
@@ -262,6 +268,8 @@ The revisions after `079.001`:
   [Atlas page contracts](docs/atlas-page-contracts.md).
 - `089.008` adds bounded same-owner Atlas links, link revisions, command receipts, and backlink
   traversal; see [Atlas link contracts](docs/atlas-link-contracts.md).
+- `089.009` adds fenced owner capability-publication records for selective host-controlled
+  A2A exposure; see [capability publication records](docs/capability-publication-records.md).
 
 Upgrade and recovery procedures for every revision are in
 [migration and recovery](docs/migration-and-recovery.md). The neutral preconditions for treating

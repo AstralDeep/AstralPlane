@@ -55,6 +55,7 @@ from astralplane.api import (
     create_audit_retention_repository,
     create_authority_repository,
     create_background_task_repository,
+    create_capability_publication_repository,
     create_chat_step_repository,
     create_conversation_file_repository,
     create_credential_repository,
@@ -205,6 +206,13 @@ from astralplane.reconciliation_store import (
     PostgresReconciliationCoordinator,
     PostgresReconciliationSession,
 )
+from astralplane.repositories.capability_publications import (
+    CapabilityPublicationConflictError,
+    CapabilityPublicationNotExpiredError,
+    CapabilityPublicationRecord,
+    CapabilityPublicationRepository,
+    CapabilityPublicationState,
+)
 from astralplane.repositories.drafts import DraftAgentRecord, DraftPublicationRecord
 from astralplane.repositories.generated_agent_publications import (
     GENERATED_AGENT_BUNDLE_CONTRACT,
@@ -324,6 +332,11 @@ __all__ = (
     "BundlePublicationReceipt",
     "BundleRecoveryDisposition",
     "BundleRecoveryResult",
+    "CapabilityPublicationConflictError",
+    "CapabilityPublicationNotExpiredError",
+    "CapabilityPublicationRecord",
+    "CapabilityPublicationRepository",
+    "CapabilityPublicationState",
     "CommandResult",
     "CompatibilityReport",
     "CompatibilityState",
@@ -411,6 +424,7 @@ __all__ = (
     "create_audit_retention_repository",
     "create_authority_repository",
     "create_background_task_repository",
+    "create_capability_publication_repository",
     "create_chat_step_repository",
     "create_conversation_file_repository",
     "create_credential_repository",

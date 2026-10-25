@@ -935,6 +935,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             "astralplane-089-atlas-pages",
             "astralplane-089-atlas-revisions",
             "astralplane-089-atlas-links",
+            "astralplane-089-capability-publications",
         )
         assert runner.run(
             expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision

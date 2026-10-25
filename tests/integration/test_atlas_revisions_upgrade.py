@@ -147,7 +147,8 @@ def test_populated_089_007_upgrade_backfills_live_heads_and_preserves_deleted_pa
     assert report.applied_steps == (
         "astralplane-089-atlas-revisions",
         "astralplane-089-atlas-links",
-    )
+        "astralplane-089-capability-publications",
+                                   )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         revisions = tx.fetch_all(
@@ -269,7 +270,8 @@ def test_interrupted_089_007_edge_rolls_back_and_retries(predecessor):
     ).applied_steps == (
         "astralplane-089-atlas-revisions",
         "astralplane-089-atlas-links",
-    )
+        "astralplane-089-capability-publications",
+                       )
 
 
 def test_atlas_revision_namesake_or_damaged_predecessor_is_refused(predecessor):

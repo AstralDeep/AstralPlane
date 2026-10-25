@@ -1114,6 +1114,23 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_capability_publications(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.capability_publications.publish(
+        transaction,
+        owner_id=_OWNER,
+        capability_id="rollback-capability",
+        audience_id="rollback-audience",
+        capability_revision="rollback-revision",
+        metadata_ciphertext="synthetic-rollback-ciphertext",
+        metadata_digest=_DIGEST_A,
+        published_at=_NOW,
+        expires_at=_NOW + timedelta(hours=1),
+        expected_revision=0,
+    )
+
+
 def _write_notifications(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.notifications.put_preferences(
         transaction,
@@ -1470,6 +1487,19 @@ ROLLBACK_CASES = (
             "completion_subscription",
             "subscription_id",
             "11111111-1111-4111-8111-111111110076",
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
+        "capability_publications",
+        _write_capability_publications,
+        _count(
+            "capability_publication",
+            "capability_id",
+            "rollback-capability",
+            extra_sql=" AND owner_id = %s AND audience_id = %s",
+            extra_parameters=(_OWNER, "rollback-audience"),
         ),
         1,
         0,

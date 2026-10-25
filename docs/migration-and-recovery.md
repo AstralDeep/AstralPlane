@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -382,6 +382,49 @@ governed recovery contract, and reconcile uncertain effects before reopening
 admission. Never drop the tables, rewrite revision/digest markers, restore a
 tombstone to a live page, or execute ad-hoc downgrade SQL. A restored database
 snapshot cannot recover content that was never stored in Plane.
+### `089.009` owner capability publications and recovery
+
+This additive edge requires the exact `089.008` registry digest
+`1176ee5a65f74e0447abe2e63bb90808acc40289acd1a6a09ec6a10ae1a967b1` and its catalog. It adds one owner-scoped
+publication table, its live-publication index, and no provider, discovery, IAM,
+or transport object. The current canonical catalog digest is
+`f29082fa679712468d596e832bdbdc7b4e8cb428cbb4c09e24a234f6ca38400d`; the current migration registry digest is
+`aba2a6410531d6351b335faec8a5130657c6c1cce043b695512b236643724946`. Existing notification, Atlas, mesh, stop,
+completion-wake, assignment, session, audit, grant, credential, accounting, and
+blob records remain unchanged.
+
+`capability_publication` binds an opaque capability identifier, audience
+identifier, exact capability revision, and finite lifetime. A composite
+owner/capability/audience key prevents duplicate live audience records without
+a deployment-wide published catalog. Publication metadata is stored only as
+host-encrypted ciphertext plus its host-computed SHA-256 digest. Publish,
+withdraw, and expiry transitions carry the owner predicate and state-revision
+fence in one `UPDATE`; a first publish uses `ON CONFLICT DO NOTHING` so a
+concurrent exact replay returns the winner. Withdrawal and expiry are terminal
+until an explicit republish. Active reads require published state, the
+host-supplied lower lifetime bound, and an unexpired upper bound in the same
+owner-scoped statement. No read consults the database clock, and no method
+commits or rolls back the caller's transaction.
+
+Quiesce host publication and A2A writers and verify the paired PostgreSQL and
+durable-root backup before adopting the new pin. Run the guarded registry
+through normal host initialization; verify repeat startup, retained
+representative rows, the empty new table, and the host's publish/withdraw/expire
+transactions before reopening discovery. A failed DDL transaction rolls back
+with its registry marker and leaves admission closed. Unknown, same-name, or
+damaged catalog objects fail closed rather than being adopted.
+
+**Recovery.** Once this transaction commits, keep the table and the exact
+`089.009` revision/digest intact. An `089.008` binary is not compatible merely
+because the table is additive. Prefer a reviewed forward repair. If the prior
+composition must be restored, keep admission closed and restore the verified
+pre-upgrade PostgreSQL backup and every paired durable root together with the
+unchanged encryption and audit keys. Account for post-backup publications,
+withdrawals, and expiries, retire restored sessions through the governed
+recovery contract, refresh host IAM and capability approval, and reconcile
+discovery state before reopening admission. Never drop the table or rewrite a
+revision marker to simulate downgrade. Schema qualification does not qualify
+Deep discovery, IAM, A2A invocation, or client behavior.
 
 ### `089.007` Atlas revisions and recovery
 
@@ -623,7 +666,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.008` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.009` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -729,8 +772,8 @@ maintenance window has been verified:
    pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`,
    `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`,
    `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`,
-   and `089.007` states must carry their exact pinned historical registry digests and match their
-   pinned predecessor catalogs. A restored `089.008` state must carry the exact current registry
+   `089.007`, `089.008` states must carry their exact pinned historical registry digests and match their
+   pinned predecessor catalogs. A restored `089.009` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
