@@ -1,6 +1,6 @@
-"""Feedback, onboarding-state, personalization profile/memory, theme, and
+"""Feedback, onboarding-state, personalization profile/memory, theme, chat organization and
 data-sharing-consent persistence. Grouped behind PreferencesRepository; used by
-AstralDeep's feedback, onboarding, and personalization repository modules.
+AstralDeep's feedback, onboarding, personalization and history modules.
 """
 
 from __future__ import annotations
@@ -37,6 +37,16 @@ _FEEDBACK_LIFECYCLES = frozenset({"active", "retracted", "superseded"})
 _ONBOARDING_STATES = frozenset({"completed", "in_progress", "not_started", "skipped"})
 _MEMORY_CATEGORIES = frozenset({"context", "goal", "preference", "profession", "workflow_tag"})
 _MEMORY_SOURCES = frozenset({"explicit", "promoted"})
+CHAT_ORGANIZATION_KEY = "chat_organization"
+CHAT_ORGANIZATION_FLAGS = ("pinned", "archived")
+CHAT_ORGANIZATION_LIMIT = 500
+
+
+@dataclass(frozen=True, slots=True)
+class ChatOrganizationRecord:
+    owner_id: str
+    pinned: tuple[str, ...]
+    archived: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1613,6 +1623,35 @@ class DataSharingAcknowledgmentRepository:
         return record is not None and record.notice_version == version
 
 
+def _chat_organization(value: object) -> dict[str, list[str]]:
+    if value is None:
+        return {flag: [] for flag in CHAT_ORGANIZATION_FLAGS}
+    if not isinstance(value, Mapping):
+        raise RepositoryDataError("persisted chat organization must be an object")
+    out: dict[str, list[str]] = {}
+    for flag in CHAT_ORGANIZATION_FLAGS:
+        items = value.get(flag, [])
+        if (
+            not isinstance(items, (list, tuple))
+            or any(not isinstance(item, str) or not item for item in items)
+            or len(items) != len(set(items))
+        ):
+            raise RepositoryDataError(
+                "persisted chat organization lists must hold distinct identities"
+            )
+        out[flag] = list(items)
+    return out
+
+
+def _preferences_document(row: Mapping[str, Any] | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+    if not isinstance(preferences, Mapping):
+        raise RepositoryDataError("persisted preferences document must be an object")
+    return dict(preferences)
+
+
 class PreferencesRepository:
     def __init__(self) -> None:
         self.skills = SkillsRepository()
@@ -1667,8 +1706,92 @@ class PreferencesRepository:
         if result.rowcount != 1:
             raise RepositoryConflictError("chat notice preference update was not applied")
 
+    def get_chat_organization(
+        self, query: QueryExecutor, *, owner_id: str
+    ) -> ChatOrganizationRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s", (owner_id,)
+        )
+        organization = _chat_organization(_preferences_document(row).get(CHAT_ORGANIZATION_KEY))
+        return ChatOrganizationRecord(
+            owner_id, tuple(organization["pinned"]), tuple(organization["archived"])
+        )
+
+    def set_chat_flag(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        flag: str,
+        value: bool,
+    ) -> ChatOrganizationRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        if flag not in CHAT_ORGANIZATION_FLAGS:
+            raise RepositoryValidationError("chat organization flag is unsupported")
+        if type(value) is not bool:
+            raise RepositoryValidationError("chat organization value must be boolean")
+        owned = transaction.fetch_one(
+            "SELECT 1 AS present FROM chats WHERE id = %s AND user_id = %s",
+            (conversation_id, owner_id),
+        )
+        if owned is None:
+            raise RepositoryNotFoundError(
+                "conversation was not found", metadata={"operation": "chat_organization.set"}
+            )
+        transaction.execute(
+            "INSERT INTO user_preferences (user_id, preferences, updated_at) "
+            "VALUES (%s, '{}', 0) ON CONFLICT (user_id) DO NOTHING",
+            (owner_id,),
+        )
+        row = transaction.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s FOR UPDATE",
+            (owner_id,),
+        )
+        if row is None:
+            raise RepositoryConflictError("chat organization preference row disappeared")
+        preferences = _preferences_document(row)
+        organization = _chat_organization(preferences.get(CHAT_ORGANIZATION_KEY))
+        known = sorted({item for items in organization.values() for item in items})
+        present = {
+            str(_row_value(found, "id"))
+            for found in transaction.fetch_all(
+                "SELECT id FROM chats WHERE user_id = %s AND id = ANY(%s)", (owner_id, known)
+            )
+        }
+        organization = {
+            name: [item for item in items if item in present]
+            for name, items in organization.items()
+        }
+        current = [item for item in organization[flag] if item != conversation_id]
+        if value:
+            if len(current) >= CHAT_ORGANIZATION_LIMIT:
+                raise RepositoryValidationError(
+                    "too many conversations carry this flag",
+                    metadata={"maximum": CHAT_ORGANIZATION_LIMIT},
+                )
+            current.insert(0, conversation_id)
+        organization[flag] = current
+        preferences[CHAT_ORGANIZATION_KEY] = organization
+        result = transaction.execute(
+            "UPDATE user_preferences SET preferences = %s, "
+            "updated_at = GREATEST(COALESCE(updated_at, 0) + 1, "
+            "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT) "
+            "WHERE user_id = %s",
+            (_canonical_json(preferences, "preferences"), owner_id),
+        )
+        if result.rowcount != 1:
+            raise RepositoryConflictError("chat organization update was not applied")
+        return ChatOrganizationRecord(
+            owner_id, tuple(organization["pinned"]), tuple(organization["archived"])
+        )
+
 
 __all__ = (
+    "CHAT_ORGANIZATION_LIMIT",
+    "ChatOrganizationRecord",
     "DataSharingAcknowledgmentRecord",
     "DataSharingAcknowledgmentRepository",
     "FeedbackCommentCandidate",
