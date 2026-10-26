@@ -42,7 +42,7 @@ jobs:
 
   postgresql:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 18
     env:
       ASTRALPLANE_TEST_POSTGRES_DSN: postgresql://astralplane:astralplane_ci@127.0.0.1:5432/astralplane
       ASTRALDEEP_SOURCE_REPO: ${{ github.workspace }}/source-deep
@@ -84,7 +84,7 @@ jobs:
             --baseline-sha "$MAIN_SHA" --report main-upgrade.json
       - name: Run the complete Python suite against PostgreSQL
         run: |
-          uv run --frozen --group ci pytest -q -p no:cacheprovider \
+          uv run --frozen --group ci pytest -q -p no:cacheprovider --durations=25 \
             --cov=astralplane --cov=examples --cov=scripts.check_changed_coverage \
             --cov=scripts.import_staging_fixture \
             --cov=scripts.migrate_qualification_database \
