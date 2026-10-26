@@ -1,6 +1,7 @@
 """Tests for astralplane.database.migrations and baseline.py: a fresh empty PostgreSQL
 database reaches the current schema revision idempotently, with index, constraint,
-and host/session contract checks along the way.
+and host/session contract checks along the way. The 074.004 attachment cases clone a
+074.003 lineage template from tests/fixtures/migrated_template.py and apply that edge alone.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -39,9 +41,15 @@ from astralplane.database.migrations import (
     PLANE_SCHEMA_074_003_MIGRATION,
     PLANE_SCHEMA_074_003_REGISTRY_DIGEST,
     PLANE_SCHEMA_074_003_SCHEMA_VERIFIER_CHECKSUM,
+    PLANE_SCHEMA_074_004_MIGRATION,
+    PLANE_SCHEMA_074_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+    PLANE_SCHEMA_074_004_REGISTRY_DIGEST,
+    PLANE_SCHEMA_074_004_SCHEMA_VERIFIER_CHECKSUM,
     PLANE_SCHEMA_074_MIGRATION,
     MigrationRegistry,
+    MigrationReport,
     MigrationRunner,
+    _verify_predecessor_plane_schema,
 )
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.revision import DataPlaneRevision
@@ -69,7 +77,7 @@ from astralplane.repositories.work_admission import (
     WorkAdmissionNotFoundError,
     WorkAdmissionRepository,
 )
-from tests.fixtures.migrated_template import MigratedDatabase
+from tests.fixtures.migrated_template import LineageTemplates, MigratedDatabase, bound_clone
 from tests.fixtures.pre_split.loader import (
     TEST_DATABASE_ENV,
     FixtureLoadError,
@@ -106,6 +114,14 @@ class _EmptySchema:
     database: PlaneDatabase
 
 
+@dataclass(frozen=True, slots=True)
+class _FreshBoot:
+    schema: _EmptySchema
+    decoy_schema: str
+    first: MigrationReport
+    second: MigrationReport
+
+
 @dataclass(slots=True)
 class _EmptyDatabase:
     administrator: Any
@@ -129,7 +145,7 @@ def _quoted_database_identity(value: str, *, prefix: str) -> str:
     return f'"{value}"'
 
 
-def _historical_074_003_runner(database: PlaneDatabase) -> MigrationRunner:
+def historical_074_003_runner(database: PlaneDatabase) -> MigrationRunner:
     registry = MigrationRegistry(
         (
             PLANE_SCHEMA_067_MIGRATION,
@@ -149,8 +165,36 @@ def _historical_074_003_runner(database: PlaneDatabase) -> MigrationRunner:
     return MigrationRunner(database, revision=revision, registry=registry)
 
 
-@pytest.fixture
-def empty_postgres_schema() -> Iterator[_EmptySchema]:
+def lineage_074_004_runner(database: PlaneDatabase) -> MigrationRunner:
+    registry = MigrationRegistry(
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+            PLANE_SCHEMA_074_003_MIGRATION,
+            PLANE_SCHEMA_074_004_MIGRATION,
+        ),
+        current_schema_verifier=lambda transaction: _verify_predecessor_plane_schema(
+            transaction, "074.004"
+        ),
+        current_schema_verifier_checksum=PLANE_SCHEMA_074_004_SCHEMA_VERIFIER_CHECKSUM,
+        predecessor_schema_verifier=_verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=(
+            PLANE_SCHEMA_074_004_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+        ),
+    )
+    assert registry.digest == PLANE_SCHEMA_074_004_REGISTRY_DIGEST
+    revision = DataPlaneRevision(
+        schema_revision="074.004",
+        read_compatible_from=("066.001", "067.001", "074.001", "074.002", "074.003"),
+        migration_digest=registry.digest,
+        accepted_predecessor_digests=(("074.003", PLANE_SCHEMA_074_003_REGISTRY_DIGEST),),
+    )
+    return MigrationRunner(database, revision=revision, registry=registry)
+
+
+@contextmanager
+def _empty_schema() -> Iterator[_EmptySchema]:
     database_url = os.environ.get(TEST_DATABASE_ENV)
     if database_url is None:
         pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
@@ -178,6 +222,51 @@ def empty_postgres_schema() -> Iterator[_EmptySchema]:
     finally:
         drop_postgres_fixture(connection, schema=schema)
         connection.close()
+
+
+@pytest.fixture
+def empty_postgres_schema() -> Iterator[_EmptySchema]:
+    with _empty_schema() as fixture:
+        yield fixture
+
+
+@pytest.fixture(scope="module")
+def fresh_schema_boot() -> Iterator[_FreshBoot]:
+    with _empty_schema() as fixture:
+        decoy_schema = f"astralplane_fixture_{uuid.uuid4().hex}"
+        quoted_decoy = _quoted_schema(decoy_schema)
+        cursor = fixture.connection.cursor()
+        try:
+            cursor.execute(f"CREATE SCHEMA {quoted_decoy}")
+            cursor.execute(f"CREATE TABLE {quoted_decoy}.saved_components (component_id TEXT)")
+            cursor.execute(
+                f"CREATE TABLE {quoted_decoy}.workspace_snapshot "
+                "(turn_message_id INTEGER, "
+                "CONSTRAINT fk_workspace_snapshot_turn_message CHECK (TRUE))"
+            )
+            fixture.connection.commit()
+            runner = BaselineMigrationRunner(
+                fixture.database,
+                MigrationRunner(
+                    fixture.database,
+                    revision=CURRENT_DATA_PLANE_REVISION,
+                    registry=MIGRATION_REGISTRY,
+                ),
+            )
+            first = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+            second = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+            yield _FreshBoot(fixture, decoy_schema, first, second)
+        finally:
+            fixture.connection.rollback()
+            cursor.execute(f"DROP SCHEMA IF EXISTS {quoted_decoy} CASCADE")
+            fixture.connection.commit()
+            cursor.close()
+
+
+@pytest.fixture
+def historical_074_003(lineage_templates: LineageTemplates) -> Iterator[MigratedDatabase]:
+    with bound_clone(lineage_templates.template(historical_074_003_runner)) as clone:
+        yield clone
 
 
 @pytest.fixture
@@ -309,18 +398,11 @@ def test_template0_public_schema_with_arbitrary_owner_is_not_normalized(
 
 
 def test_empty_database_reaches_current_revision_and_repeats_safely(
-    empty_postgres_schema: _EmptySchema,
+    fresh_schema_boot: _FreshBoot,
 ) -> None:
-    fixture = empty_postgres_schema
-    migration = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
-    runner = BaselineMigrationRunner(fixture.database, migration)
-
-    first = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    second = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    fixture = fresh_schema_boot.schema
+    first = fresh_schema_boot.first
+    second = fresh_schema_boot.second
     compatibility = inspect_baseline_compatibility(fixture.database)
 
     assert first.source_revision is None
@@ -861,31 +943,17 @@ def test_hot_message_queries_use_the_declared_composite_index(
 
 
 def test_fresh_baseline_ignores_same_table_columns_in_another_schema(
-    empty_postgres_schema: _EmptySchema,
+    fresh_schema_boot: _FreshBoot,
 ) -> None:
-    fixture = empty_postgres_schema
-    decoy_schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    quoted_decoy = _quoted_schema(decoy_schema)
+    fixture = fresh_schema_boot.schema
     cursor = fixture.connection.cursor()
     try:
-        cursor.execute(f"CREATE SCHEMA {quoted_decoy}")
-        cursor.execute(f"CREATE TABLE {quoted_decoy}.saved_components (component_id TEXT)")
         cursor.execute(
-            f"CREATE TABLE {quoted_decoy}.workspace_snapshot "
-            "(turn_message_id INTEGER, "
-            "CONSTRAINT fk_workspace_snapshot_turn_message CHECK (TRUE))"
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name IN ('saved_components', 'workspace_snapshot')",
+            (fresh_schema_boot.decoy_schema,),
         )
-        fixture.connection.commit()
-
-        BaselineMigrationRunner(
-            fixture.database,
-            MigrationRunner(
-                fixture.database,
-                revision=CURRENT_DATA_PLANE_REVISION,
-                registry=MIGRATION_REGISTRY,
-            ),
-        ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-
+        assert cursor.fetchone() == (2,)
         cursor.execute(
             "SELECT is_nullable, data_type "
             "FROM information_schema.columns "
@@ -902,8 +970,6 @@ def test_fresh_baseline_ignores_same_table_columns_in_another_schema(
         assert cursor.fetchone() == (1,)
     finally:
         fixture.connection.rollback()
-        cursor.execute(f"DROP SCHEMA IF EXISTS {quoted_decoy} CASCADE")
-        fixture.connection.commit()
         cursor.close()
 
 
@@ -1450,15 +1516,13 @@ def test_concurrent_quality_reviews_serialize_chain_and_case_transition(
     ),
 )
 def test_074_004_refuses_unaddressable_legacy_ready_attachment_before_mutation(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     owner_id: str,
     attachment_id: str,
     filename: str,
     storage_path: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1525,12 +1589,10 @@ def test_074_004_refuses_unaddressable_legacy_ready_attachment_before_mutation(
     ids=("windows-separators", "mixed-separators"),
 )
 def test_074_004_accepts_canonical_windows_legacy_attachment_locator_without_rewriting(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     storage_path: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1549,11 +1611,8 @@ def test_074_004_accepts_canonical_windows_legacy_attachment_locator_without_rew
     finally:
         cursor.close()
 
-    MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    report = lineage_074_004_runner(fixture.database).run(expected_revision="074.004")
+    assert report.applied_steps == ("astralplane-074-pending-attachment-materialization",)
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1569,11 +1628,9 @@ def test_074_004_accepts_canonical_windows_legacy_attachment_locator_without_rew
 
 
 def test_074_004_backfills_predecessor_ready_without_admitting_stale_shaped_inserts(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1593,11 +1650,8 @@ def test_074_004_backfills_predecessor_ready_without_admitting_stale_shaped_inse
     finally:
         cursor.close()
 
-    MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    report = lineage_074_004_runner(fixture.database).run(expected_revision="074.004")
+    assert report.applied_steps == ("astralplane-074-pending-attachment-materialization",)
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1655,12 +1709,10 @@ def test_074_004_backfills_predecessor_ready_without_admitting_stale_shaped_inse
 
 
 def test_074_004_seeds_legacy_owner_fence_before_casefold_alias_admission(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     owner_id = "LegacyOwner"
     alias_owner_id = owner_id.casefold()
     attachment_id = "legacy-owner-attachment"
@@ -1687,11 +1739,8 @@ def test_074_004_seeds_legacy_owner_fence_before_casefold_alias_admission(
     finally:
         cursor.close()
 
-    MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    report = lineage_074_004_runner(fixture.database).run(expected_revision="074.004")
+    assert report.applied_steps == ("astralplane-074-pending-attachment-materialization",)
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -1776,13 +1825,11 @@ def test_074_004_seeds_legacy_owner_fence_before_casefold_alias_admission(
 
 @pytest.mark.parametrize("physical_shape", ["hidden_temp", "published_final"])
 def test_074_004_refuses_partial_pending_predecessor_without_exposing_or_clearing_it(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
     physical_shape: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     blob = tmp_path / "owner-1" / "attachment-1"
     blob.mkdir(parents=True)
     physical = blob / (
@@ -1867,15 +1914,13 @@ def test_074_004_refuses_partial_pending_predecessor_without_exposing_or_clearin
     ],
 )
 def test_074_004_refuses_partial_typed_purge_scope_without_retargeting_bytes(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
     scope: str,
     object_id: str,
     storage_key: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     residual = tmp_path / "owner-1" / "attachment-1" / "fixture.bin"
     residual.parent.mkdir(parents=True)
     residual.write_bytes(b"must remain behind failed startup")
@@ -1933,12 +1978,10 @@ def test_074_004_refuses_partial_typed_purge_scope_without_retargeting_bytes(
     ],
 )
 def test_074_004_refuses_hostile_precreated_namesakes_without_stamping(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     hostile_object: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     statement = {
         "owner_table": "CREATE TABLE astralplane_blob_owner_state (unsafe TEXT)",
         "owner_function": (
@@ -1992,12 +2035,10 @@ def test_074_004_refuses_hostile_precreated_namesakes_without_stamping(
     ],
 )
 def test_074_004_refuses_tampered_predecessor_before_canonicalization(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tamper_kind: str,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     cursor = fixture.connection.cursor()
     try:
         if tamper_kind == "audit_function":
@@ -2361,12 +2402,10 @@ def test_current_verifier_never_resolves_missing_owned_table_from_later_search_p
 
 
 def test_074_004_legacy_exact_manual_review_has_evidence_bound_operator_recovery(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     owner_id = "legacy:owner-1"
     key = ".astralplane-legacy/CON?.bin"
     locator_digest = hashlib.sha256(f"{owner_id}\0{key}".encode()).hexdigest()
@@ -2390,12 +2429,10 @@ def test_074_004_legacy_exact_manual_review_has_evidence_bound_operator_recovery
     finally:
         cursor.close()
 
-    current = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
+    edge = lineage_074_004_runner(fixture.database)
+    assert edge.run(expected_revision="074.004").applied_steps == (
+        "astralplane-074-pending-attachment-materialization",
     )
-    current.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2448,12 +2485,10 @@ def test_074_004_legacy_exact_manual_review_has_evidence_bound_operator_recovery
 
 
 def test_074_004_quarantines_live_attachment_legacy_tombstone_before_later_typed_delete(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     owner_id = "legacy-live-owner"
     attachment_id = "legacy-live-attachment"
     legacy_key = "legacy/file.bin"
@@ -2494,11 +2529,8 @@ def test_074_004_quarantines_live_attachment_legacy_tombstone_before_later_typed
     finally:
         cursor.close()
 
-    MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    report = lineage_074_004_runner(fixture.database).run(expected_revision="074.004")
+    assert report.applied_steps == ("astralplane-074-pending-attachment-materialization",)
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2556,14 +2588,12 @@ def test_074_004_quarantines_live_attachment_legacy_tombstone_before_later_typed
     ids=("extant-bytes", "already-absent", "coexisting-legacy-manual"),
 )
 def test_074_004_schedules_every_legacy_deleted_attachment_for_typed_cleanup(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
     tmp_path,
     physical_present: bool,
     legacy_conflict: bool,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     owner_id = "legacy-owner-1"
     attachment_id = "legacy-attachment-1"
     filename = "file.bin"
@@ -2618,13 +2648,11 @@ def test_074_004_schedules_every_legacy_deleted_attachment_for_typed_cleanup(
         fixture_blob.parent.mkdir(parents=True)
         fixture_blob.write_bytes(payload)
 
-    current = MigrationRunner(
-        fixture.database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
+    edge = lineage_074_004_runner(fixture.database)
+    assert edge.run(expected_revision="074.004").applied_steps == (
+        "astralplane-074-pending-attachment-materialization",
     )
-    current.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    current.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    assert edge.run(expected_revision="074.004").already_current
     cursor = fixture.connection.cursor()
     try:
         cursor.execute(
@@ -2667,11 +2695,9 @@ def test_074_004_schedules_every_legacy_deleted_attachment_for_typed_cleanup(
 
 
 def test_074_004_deleted_attachment_schedule_failure_rolls_back_every_schema_and_data_write(
-    empty_postgres_schema: _EmptySchema,
+    historical_074_003: MigratedDatabase,
 ) -> None:
-    fixture = empty_postgres_schema
-    historical = _historical_074_003_runner(fixture.database)
-    BaselineMigrationRunner(fixture.database, historical).run(expected_revision="074.003")
+    fixture = historical_074_003
     owner_id = "legacy-owner-1"
     attachment_id = "legacy-attachment-1"
     typed_digest = hashlib.sha256(
