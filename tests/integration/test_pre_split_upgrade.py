@@ -1,15 +1,16 @@
 """Tests for astralplane.database.migrations: the pre-split PostgreSQL and blob fixture
 upgrades to the current schema, repeats as a no-op, rejects predecessor damage, and
-rolls back cleanly on failure.
+rolls back cleanly on failure. The loaded fixture and its one representative upgrade are
+built once as template databases (tests/fixtures/migrated_template.py) and cloned per test.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,24 +32,28 @@ from astralplane.database.migrations import (
     PLANE_SCHEMA_067_REGISTRY_DIGEST,
     PLANE_SCHEMA_074_001_REGISTRY_DIGEST,
     PLANE_SCHEMA_074_002_MIGRATION,
+    PLANE_SCHEMA_074_002_REGISTRY_DIGEST,
+    PLANE_SCHEMA_074_002_SCHEMA_VERIFIER_CHECKSUM,
     PLANE_SCHEMA_074_003_MIGRATION,
     PLANE_SCHEMA_074_004_MIGRATION,
     PLANE_SCHEMA_074_MIGRATION,
     Migration,
     MigrationRegistry,
+    MigrationReport,
     MigrationRunner,
 )
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.revision import DataPlaneRevision
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import SchemaRevisionError
+from tests.fixtures.migrated_template import DatabaseTemplate, MigratedDatabase, bound_clone
 from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
+    BlobEvidence,
     FixtureLoadError,
     FixtureLoadReport,
-    connect_fixture_database,
     drop_postgres_fixture,
     load_fixture,
+    materialize_blob_fixture,
     verify_blob_fixture,
 )
 
@@ -226,53 +231,176 @@ def _current_runner(fixture: _LoadedFixture) -> MigrationRunner:
     )
 
 
-@pytest.fixture
-def pre_split_postgres(tmp_path: Path) -> Iterator[_LoadedFixture]:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    blob_root = (tmp_path / "pre-split-blobs").resolve()
-    loaded = False
-    try:
-        report = load_fixture(
-            connection,
-            schema=schema,
-            blob_root=blob_root,
+def _lineage_runner(
+    fixture: _LoadedFixture,
+    migrations: tuple[Migration, ...],
+    *,
+    revision: str,
+    verifier_checksum: str,
+    digest: str,
+    predecessor_checksum: str | None = None,
+) -> MigrationRunner:
+    registry = MigrationRegistry(
+        migrations,
+        current_schema_verifier=lambda transaction: (
+            migrations_module._verify_predecessor_plane_schema(transaction, revision)
+        ),
+        current_schema_verifier_checksum=verifier_checksum,
+        predecessor_schema_verifier=(
+            None
+            if predecessor_checksum is None
+            else migrations_module._verify_predecessor_plane_schema
+        ),
+        predecessor_schema_verifier_checksum=predecessor_checksum,
+    )
+    assert registry.digest == digest
+    accepted = tuple(
+        pair
+        for pair in CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
+        if pair[0] < revision
+    )
+    return MigrationRunner(
+        fixture.database,
+        revision=DataPlaneRevision(
+            schema_revision=revision,
+            read_compatible_from=tuple(
+                value
+                for value in CURRENT_DATA_PLANE_REVISION.read_compatible_from
+                if value < revision
+            ),
+            migration_digest=registry.digest,
+            accepted_predecessor_digests=accepted,
+        ),
+        registry=registry,
+    )
+
+
+_AUDIT_CLASS_QUERY = (
+    "SELECT event_id::text, actor_user_id, event_class FROM audit_events ORDER BY event_id"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedTemplate:
+    template: DatabaseTemplate
+    report: FixtureLoadReport
+    before: dict[str, tuple[tuple[object, ...], ...]]
+    audit_classes: tuple[tuple[object, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _UpgradedTemplate:
+    template: DatabaseTemplate
+    loaded: _LoadedTemplate
+    first: MigrationReport
+    after_first: dict[str, tuple[tuple[object, ...], ...]]
+    metadata_after_first: dict[str, str]
+    blob_evidence_before: tuple[BlobEvidence, ...]
+    blob_evidence_after: tuple[BlobEvidence, ...]
+
+
+@pytest.fixture(scope="module")
+def loaded_pre_split_template(
+    postgres_administrator_dsn: str,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[_LoadedTemplate]:
+    blob_root = (tmp_path_factory.mktemp("pre-split-template") / "pre-split-blobs").resolve()
+    captured: dict[str, Any] = {}
+
+    def load(built: MigratedDatabase) -> None:
+        captured["report"] = load_fixture(
+            built.connection, schema=built.schema, blob_root=blob_root
         )
-        loaded = True
-        _configure_search_path(connection, schema)
-        database = PlaneDatabase(ConnectionPool(_NonClosingDriverPool(connection)))
+        _configure_search_path(built.connection, built.schema)
+        captured["before"] = _representative_snapshot(built.connection)
+        captured["audit_classes"] = _query_all(built.connection, _AUDIT_CLASS_QUERY)
+
+    with DatabaseTemplate.prepare(
+        postgres_administrator_dsn, load, create_schema=False
+    ) as template:
+        yield _LoadedTemplate(template=template, **captured)
+
+
+@pytest.fixture(scope="module")
+def upgraded_pre_split_template(
+    loaded_pre_split_template: _LoadedTemplate,
+) -> Iterator[_UpgradedTemplate]:
+    loaded = loaded_pre_split_template
+    blob_root = Path(loaded.report.blob_root)
+    captured: dict[str, Any] = {}
+
+    def upgrade(built: MigratedDatabase) -> None:
+        captured["blob_evidence_before"] = verify_blob_fixture(blob_root)
+        captured["first"] = MigrationRunner(
+            PlaneDatabase(ConnectionPool(_NonClosingDriverPool(built.connection))),
+            revision=CURRENT_DATA_PLANE_REVISION,
+            registry=MIGRATION_REGISTRY,
+        ).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+        captured["after_first"] = _representative_snapshot(built.connection)
+        captured["metadata_after_first"] = _metadata(built.connection)
+        captured["blob_evidence_after"] = verify_blob_fixture(blob_root)
+
+    with DatabaseTemplate.prepare(
+        loaded.template.administrator_dsn,
+        upgrade,
+        source=loaded.template,
+        create_schema=False,
+    ) as template:
+        yield _UpgradedTemplate(template=template, loaded=loaded, **captured)
+
+
+@contextmanager
+def _cloned_fixture(
+    template: DatabaseTemplate,
+    report: FixtureLoadReport,
+    tmp_path: Path,
+) -> Iterator[_LoadedFixture]:
+    blob_root = (tmp_path / "pre-split-blobs").resolve()
+    materialize_blob_fixture(blob_root)
+    with bound_clone(template) as clone:
         yield _LoadedFixture(
-            connection=connection,
-            schema=schema,
+            connection=clone.connection,
+            schema=clone.schema,
             blob_root=blob_root,
             report=report,
-            database=database,
+            database=PlaneDatabase(ConnectionPool(_NonClosingDriverPool(clone.connection))),
         )
-    finally:
-        if loaded or _schema_exists(connection, schema):
-            drop_postgres_fixture(connection, schema=schema)
-        connection.close()
+
+
+@pytest.fixture
+def pre_split_postgres(
+    loaded_pre_split_template: _LoadedTemplate,
+    tmp_path: Path,
+) -> Iterator[_LoadedFixture]:
+    with _cloned_fixture(
+        loaded_pre_split_template.template, loaded_pre_split_template.report, tmp_path
+    ) as fixture:
+        yield fixture
+
+
+@pytest.fixture
+def upgraded_pre_split(
+    upgraded_pre_split_template: _UpgradedTemplate,
+    tmp_path: Path,
+) -> Iterator[tuple[_UpgradedTemplate, _LoadedFixture]]:
+    with _cloned_fixture(
+        upgraded_pre_split_template.template,
+        upgraded_pre_split_template.loaded.report,
+        tmp_path,
+    ) as fixture:
+        yield upgraded_pre_split_template, fixture
 
 
 def test_pre_split_audit_classes_match_historical_product_contract(
-    pre_split_postgres: _LoadedFixture,
+    upgraded_pre_split: tuple[_UpgradedTemplate, _LoadedFixture],
 ) -> None:
-    fixture = pre_split_postgres
+    evidence, fixture = upgraded_pre_split
     expected = (
         ("00000000-0000-4000-8000-000000000401", "fixture-owner-a", "agent_tool_call"),
         ("00000000-0000-4000-8000-000000000402", "fixture-owner-a", "agent_tool_call"),
         ("00000000-0000-4000-8000-000000000403", "fixture-owner-b", "auth"),
     )
-    statement = (
-        "SELECT event_id::text, actor_user_id, event_class FROM audit_events ORDER BY event_id"
-    )
-    assert _query_all(fixture.connection, statement) == expected
+    assert evidence.loaded.audit_classes == expected
     inventory = json.loads(
         (Path(__file__).parents[1] / "fixtures/pre_split/database.json").read_text(encoding="utf-8")
     )
@@ -283,18 +411,16 @@ def test_pre_split_audit_classes_match_historical_product_contract(
         )
         == expected
     )
-    before = _representative_snapshot(fixture.connection)
+    assert evidence.first.source_revision == "066.001"
 
-    _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-
-    assert _query_all(fixture.connection, statement) == expected
-    assert _representative_snapshot(fixture.connection) == before
+    assert _query_all(fixture.connection, _AUDIT_CLASS_QUERY) == expected
+    assert _representative_snapshot(fixture.connection) == evidence.loaded.before
 
 
 def test_pre_split_upgrade_preserves_representative_database_and_blobs(
-    pre_split_postgres: _LoadedFixture,
+    upgraded_pre_split: tuple[_UpgradedTemplate, _LoadedFixture],
 ) -> None:
-    fixture = pre_split_postgres
+    evidence, fixture = upgraded_pre_split
     expected = json.loads(
         (Path(__file__).parents[1] / "fixtures" / "pre_split" / "expected.json").read_text(
             encoding="utf-8"
@@ -306,12 +432,9 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "loaderSha256": fixture.report.loader_sha256,
         "sourceBlob": fixture.report.legacy_baseline_source_blob,
     } == expected["legacyBaseline"]
-    before = _representative_snapshot(fixture.connection)
-    blob_evidence = verify_blob_fixture(fixture.blob_root)
-
-    report = _current_runner(fixture).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    before = evidence.loaded.before
+    blob_evidence = evidence.blob_evidence_before
+    report = evidence.first
 
     assert report.source_revision == "066.001"
     assert report.target_revision == CURRENT_DATA_PLANE_REVISION.schema_revision
@@ -354,6 +477,7 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         fixture.connection,
         "SELECT speech_backend, transport FROM voice_session ORDER BY session_id",
     ) == (("llm_factory", "livekit"),)
+    assert evidence.blob_evidence_after == blob_evidence
     assert verify_blob_fixture(fixture.blob_root) == blob_evidence
     assert _query_all(
         fixture.connection,
@@ -458,22 +582,23 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
 
 
 def test_repeat_upgrade_is_a_noop_with_identical_evidence(
-    pre_split_postgres: _LoadedFixture,
+    upgraded_pre_split: tuple[_UpgradedTemplate, _LoadedFixture],
 ) -> None:
-    fixture = pre_split_postgres
-    runner = _current_runner(fixture)
-    first = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    after_first = _representative_snapshot(fixture.connection)
-    metadata_after_first = _metadata(fixture.connection)
+    evidence, fixture = upgraded_pre_split
+    first = evidence.first
+    assert _representative_snapshot(fixture.connection) == evidence.after_first
+    assert _metadata(fixture.connection) == evidence.metadata_after_first
 
-    second = runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    second = _current_runner(fixture).run(
+        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+    )
 
     assert first.applied_steps
     assert second.already_current
     assert second.applied_steps == ()
     assert second.migration_digest == first.migration_digest == MIGRATION_DIGEST
-    assert _representative_snapshot(fixture.connection) == after_first
-    assert _metadata(fixture.connection) == metadata_after_first
+    assert _representative_snapshot(fixture.connection) == evidence.after_first
+    assert _metadata(fixture.connection) == evidence.metadata_after_first
 
 
 def test_post_load_predecessor_damage_is_rejected_before_any_migration_repair(
@@ -572,40 +697,24 @@ def test_transactional_failure_rolls_back_both_edges_and_retry_recovers(
     ) == (0,)
     assert _representative_snapshot(fixture.connection) == before
 
-    recovered = _current_runner(fixture).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    recovered = _lineage_runner(
+        fixture,
+        (PLANE_SCHEMA_067_MIGRATION, PLANE_SCHEMA_074_MIGRATION, PLANE_SCHEMA_074_002_MIGRATION),
+        revision="074.002",
+        verifier_checksum=PLANE_SCHEMA_074_002_SCHEMA_VERIFIER_CHECKSUM,
+        digest=PLANE_SCHEMA_074_002_REGISTRY_DIGEST,
+    ).run(expected_revision="074.002")
 
     assert recovered.applied_steps == (
         "astralplane-067-transactional-recovery",
         "astralplane-074-lets-authority",
         "astralplane-074-quality-audit-ownership",
-        "astralplane-074-current-runtime-contract",
-        "astralplane-074-pending-attachment-materialization",
-        "astralplane-075-client-local-speech",
-        "astralplane-079-persistent-assignments",
-        "astralplane-088-one-shot-operations",
-        "astralplane-088-session-incarnation",
-        "astralplane-088-session-issuer",
-        "astralplane-088-declarative-agents",
-        "astralplane-088-owner-guidance",
-        "astralplane-088-selected-input",
-        "astralplane-088-scheduler-policy",
-        "astralplane-088-framework-credentials",
-        "astralplane-089-typesafe-credentials",
-        "astralplane-089-mesh-enrollment-records",
-        "astralplane-owner-stop-epochs",
-        "astralplane-089-completion-wake",
-        "astralplane-089-notification-records",
-        "astralplane-089-atlas-pages",
-        "astralplane-089-atlas-revisions",
-        "astralplane-089-atlas-links",
-        "astralplane-089-capability-publications",
-        "astralplane-089-operation-harness-bindings",
-        "astralplane-089-push-deliveries",
-        "astralplane-089-observation-records",
     )
-    assert _metadata(fixture.connection)["revision"] == CURRENT_DATA_PLANE_REVISION.schema_revision
+    assert _metadata(fixture.connection) == {
+        "astralplane_migration_digest": PLANE_SCHEMA_074_002_REGISTRY_DIGEST,
+        "revision": "074.002",
+    }
+    assert _representative_snapshot(fixture.connection) == before
 
 
 def test_075_direct_apply_rejects_a_wrong_predecessor_without_mutation(
@@ -700,34 +809,23 @@ def test_075_failure_rolls_back_backend_column_and_forward_retry_recovers(
         "AND column_name = 'speech_backend'",
     ) == (0,)
 
-    recovered = _current_runner(fixture).run(
-        expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-    )
+    recovered = _lineage_runner(
+        fixture,
+        (
+            PLANE_SCHEMA_067_MIGRATION,
+            PLANE_SCHEMA_074_MIGRATION,
+            PLANE_SCHEMA_074_002_MIGRATION,
+            PLANE_SCHEMA_074_003_MIGRATION,
+            PLANE_SCHEMA_074_004_MIGRATION,
+            migrations_module.PLANE_SCHEMA_075_MIGRATION,
+        ),
+        revision="075.001",
+        verifier_checksum="bc32928ec26f75eec92c632a536cb9853d3e6db6e3fc45c271ea69abde5510fe",
+        predecessor_checksum="81c7e111ab56966bf4c4bf2b6f1be7e96bfd12a5f988ce86e6d5df1dc605d1c4",
+        digest=migrations_module.PLANE_SCHEMA_075_REGISTRY_DIGEST,
+    ).run(expected_revision="075.001")
     assert recovered.source_revision == "074.004"
-    assert recovered.applied_steps == (
-        "astralplane-075-client-local-speech",
-        "astralplane-079-persistent-assignments",
-        "astralplane-088-one-shot-operations",
-        "astralplane-088-session-incarnation",
-        "astralplane-088-session-issuer",
-        "astralplane-088-declarative-agents",
-        "astralplane-088-owner-guidance",
-        "astralplane-088-selected-input",
-        "astralplane-088-scheduler-policy",
-        "astralplane-088-framework-credentials",
-        "astralplane-089-typesafe-credentials",
-        "astralplane-089-mesh-enrollment-records",
-        "astralplane-owner-stop-epochs",
-        "astralplane-089-completion-wake",
-        "astralplane-089-notification-records",
-        "astralplane-089-atlas-pages",
-        "astralplane-089-atlas-revisions",
-        "astralplane-089-atlas-links",
-        "astralplane-089-capability-publications",
-        "astralplane-089-operation-harness-bindings",
-        "astralplane-089-push-deliveries",
-        "astralplane-089-observation-records",
-    )
+    assert recovered.applied_steps == ("astralplane-075-client-local-speech",)
     assert _query_one(
         fixture.connection,
         "SELECT speech_backend, transport FROM voice_session",
@@ -839,17 +937,18 @@ def test_blob_stage_failure_creates_neither_schema_nor_published_root(
 
 
 def test_documented_joint_restore_returns_to_066_then_reapplies_upgrade(
-    pre_split_postgres: _LoadedFixture,
+    upgraded_pre_split: tuple[_UpgradedTemplate, _LoadedFixture],
     tmp_path: Path,
 ) -> None:
     from astralplane.repositories.atlas_pages import AtlasPageDeleteCommand
     from tests.integration.test_atlas_pages_upgrade import page_command
 
-    fixture = pre_split_postgres
-    baseline_snapshot = _representative_snapshot(fixture.connection)
+    evidence, fixture = upgraded_pre_split
+    baseline_snapshot = evidence.loaded.before
     baseline_digest = fixture.report.fixture_digest
     original_blob_evidence = verify_blob_fixture(fixture.blob_root)
-    _current_runner(fixture).run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+    assert evidence.blob_evidence_before == original_blob_evidence
+    assert _metadata(fixture.connection) == evidence.metadata_after_first
 
     pages = create_repository_catalog().atlas_pages
     command = page_command()
