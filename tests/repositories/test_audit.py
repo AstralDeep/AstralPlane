@@ -7,24 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import uuid
-from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Any
 
 import pytest
 from _support import ScriptedTransaction
 
-from astralplane.database.baseline import BaselineMigrationRunner
-from astralplane.database.migrations import (
-    CURRENT_DATA_PLANE_REVISION,
-    MIGRATION_REGISTRY,
-    MigrationRunner,
-)
-from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import PlaneError
 from astralplane.repositories.audit import (
@@ -39,71 +29,15 @@ from astralplane.repositories.audit import (
     canonical_json,
     verify_records,
 )
-from tests.fixtures.pre_split.loader import (
-    TEST_DATABASE_ENV,
-    FixtureLoadError,
-    connect_fixture_database,
-    drop_postgres_fixture,
-)
+from tests.fixtures.migrated_template import MigratedDatabase
 
 NOW = datetime(2026, 8, 13, 20, tzinfo=UTC)
 KEY = b"k" * 32
 
 
-class _SingleConnectionDriverPool:
-    def __init__(self, connection: Any) -> None:
-        self.connection = connection
-        self.borrowed = False
-
-    def getconn(self) -> Any:
-        if self.borrowed:
-            raise RuntimeError("audit integration connection is already borrowed")
-        self.borrowed = True
-        return self.connection
-
-    def putconn(self, connection: Any, *, close: bool = False) -> None:
-        if connection is not self.connection or not self.borrowed or close:
-            raise RuntimeError("audit integration connection was returned in an invalid state")
-        self.borrowed = False
-
-    def closeall(self) -> None:
-        return None
-
-
 @pytest.fixture
-def audit_postgres_database() -> Iterator[PlaneDatabase]:
-    database_url = os.environ.get(TEST_DATABASE_ENV)
-    if database_url is None:
-        pytest.skip(f"set {TEST_DATABASE_ENV} to an isolated PostgreSQL test database")
-    try:
-        connection = connect_fixture_database(database_url)
-    except FixtureLoadError as exc:
-        pytest.fail(str(exc))
-    schema = f"astralplane_fixture_{uuid.uuid4().hex}"
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f'CREATE SCHEMA "{schema}"')
-        cursor.execute(f'SET search_path TO "{schema}", pg_catalog')
-        connection.commit()
-    finally:
-        cursor.close()
-
-    pool = ConnectionPool(_SingleConnectionDriverPool(connection))
-    database = PlaneDatabase(pool)
-    try:
-        migration = MigrationRunner(
-            database,
-            revision=CURRENT_DATA_PLANE_REVISION,
-            registry=MIGRATION_REGISTRY,
-        )
-        BaselineMigrationRunner(database, migration).run(
-            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-        )
-        yield database
-    finally:
-        pool.close()
-        drop_postgres_fixture(connection, schema=schema)
-        connection.close()
+def audit_postgres_database(migrated_clone: MigratedDatabase) -> PlaneDatabase:
+    return migrated_clone.database
 
 
 def authenticate(key_id: str, payload: bytes) -> bytes:

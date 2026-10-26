@@ -64,7 +64,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "3a991bcc22c25672746d063a79f470f2a08b8a2d89a08ab8ee2bfcc6a0de1977"
+          "sha256": "c0083af2ccb868282e7b9d5a9f3ebb93cb6807d0b1211388490bf4e021c70111"
         },
         {
           "path": "tests/test_revision.py",
@@ -83,7 +83,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "3a991bcc22c25672746d063a79f470f2a08b8a2d89a08ab8ee2bfcc6a0de1977"
+          "sha256": "c0083af2ccb868282e7b9d5a9f3ebb93cb6807d0b1211388490bf4e021c70111"
         }
       ],
       "task": "T085",
@@ -98,7 +98,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "3a991bcc22c25672746d063a79f470f2a08b8a2d89a08ab8ee2bfcc6a0de1977"
+          "sha256": "c0083af2ccb868282e7b9d5a9f3ebb93cb6807d0b1211388490bf4e021c70111"
         },
         {
           "path": "tests/test_audit_retention.py",
@@ -764,7 +764,7 @@
       "resultPaths": [
         {
           "path": "tests/repositories/test_audit.py",
-          "sha256": "3a991bcc22c25672746d063a79f470f2a08b8a2d89a08ab8ee2bfcc6a0de1977"
+          "sha256": "c0083af2ccb868282e7b9d5a9f3ebb93cb6807d0b1211388490bf4e021c70111"
         },
         {
           "path": "tests/test_audit_retention.py",
