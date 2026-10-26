@@ -13,9 +13,7 @@ from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.completion_wake import CompletionWakeRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -91,8 +89,19 @@ def current(database, registry=None):
     return m.MigrationRunner(database, revision=revision, registry=capped)
 
 
+@pytest.fixture
+def predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(at_089_004)) as clone:
+        yield clone
+
+
+@pytest.fixture
+def notification_current(lineage_templates):
+    with bound_clone(lineage_templates.template(current)) as clone:
+        yield clone
+
+
 def populated_predecessor(db):
-    BaselineMigrationRunner(db, at_089_004(db)).run(expected_revision="089.004")
     wake = CompletionWakeRepository()
     with db.transaction() as tx:
         tables = populated(tx)
@@ -122,8 +131,8 @@ def populated_predecessor(db):
     return tables, before
 
 
-def test_notification_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_notification_populated_upgrade_preserves_rows_and_repeats(predecessor):
+    db = predecessor.database
     tables, before = populated_predecessor(db)
     report = current(db).run(expected_revision="089.005")
     assert report.applied_steps == ("astralplane-089-notification-records",)
@@ -141,8 +150,8 @@ def test_notification_populated_upgrade_preserves_rows_and_repeats(empty_postgre
         at_089_004(db).run(expected_revision="089.004")
 
 
-def test_notification_partial_migration_rolls_back_and_can_retry(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_notification_partial_migration_rolls_back_and_can_retry(predecessor):
+    db = predecessor.database
     tables, before = populated_predecessor(db)
 
     def interrupted(tx):
@@ -179,9 +188,9 @@ def test_notification_partial_migration_rolls_back_and_can_retry(empty_postgres_
     )
 
 
-def test_notification_current_catalog_damage_is_refused(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, current(db)).run(expected_revision="089.005")
+def test_notification_current_catalog_damage_is_refused(notification_current):
+    db = notification_current.database
+    assert current(db).run(expected_revision="089.005").already_current
     with db.transaction() as tx:
         tx.execute(
             "ALTER TABLE notification_inbox_entry "
@@ -191,8 +200,8 @@ def test_notification_current_catalog_damage_is_refused(empty_postgres_schema):
         current(db).run(expected_revision="089.005")
 
 
-def test_notification_namesake_is_not_adopted(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_notification_namesake_is_not_adopted(predecessor):
+    db = predecessor.database
     populated_predecessor(db)
     with db.transaction() as tx:
         tx.execute("CREATE TABLE notification_preference (owner_id TEXT PRIMARY KEY)")

@@ -12,7 +12,6 @@ from datetime import timedelta
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.harness_bindings import HarnessProfileIdentity
 from astralplane.repositories.work_admission import (
@@ -23,7 +22,7 @@ from astralplane.repositories.work_admission import (
     OwnerScope,
     WorkAdmissionRepository,
 )
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_atlas_pages_upgrade import seed_populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -69,14 +68,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="089.009"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture

@@ -11,12 +11,9 @@ from dataclasses import replace
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.history import SessionRecord, SessionRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 OWNER = "mesh-enrollment-upgrade-owner"
@@ -76,11 +73,14 @@ def populated(tx):
     return tuple(dict.fromkeys((*tables, "web_session")))
 
 
-def test_populated_089_001_upgrade_keeps_rows_and_adds_only_mesh_tables(
-    empty_postgres_schema,
-):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="089.001")
+@pytest.fixture
+def predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(prior_runner)) as clone:
+        yield clone
+
+
+def test_populated_089_001_upgrade_keeps_rows_and_adds_only_mesh_tables(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)

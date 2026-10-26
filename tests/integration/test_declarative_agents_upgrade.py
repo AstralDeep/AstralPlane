@@ -10,11 +10,10 @@ from datetime import UTC, datetime
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.agents import AgentRepository
 from astralplane.repositories.drafts import DraftAgentRepository
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 
@@ -52,14 +51,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="088.003"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture
@@ -299,12 +292,12 @@ def test_migration_failure_rolls_back_all_ddl_then_retries_exact_edge(predecesso
             tx.fetch_one("SELECT to_regclass('user_agent_command_receipt') AS relation")["relation"]
             is None
         )
-    assert current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps
-    assert current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).already_current
+    from tests.integration.test_guidance_storage_upgrade import prior_runner as at_088_004
+
+    assert at_088_004(db).run(expected_revision="088.004").applied_steps == (
+        "astralplane-088-declarative-agents",
+    )
+    assert at_088_004(db).run(expected_revision="088.004").already_current
 
 
 @pytest.mark.parametrize(

@@ -13,10 +13,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.scheduler import ScheduledJob, SchedulerRepository
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 OWNER = "scheduler-upgrade-owner"
@@ -55,14 +54,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="088.006"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture
@@ -236,11 +229,12 @@ def test_007_interruption_rolls_back_populated006_and_recovery_repeats(predecess
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "088.006"
         )
-    assert (
-        "astralplane-088-scheduler-policy"
-        in current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
+    from tests.integration.test_framework_credentials_upgrade import prior_runner as at_088_007
+
+    assert at_088_007(db).run(expected_revision="088.007").applied_steps == (
+        "astralplane-088-scheduler-policy",
     )
-    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
+    assert at_088_007(db).run(expected_revision="088.007").already_current
     with db.transaction() as tx:
         assert _restricted_to(retained_rows(tx, tables), _known_columns(before)) == before
 

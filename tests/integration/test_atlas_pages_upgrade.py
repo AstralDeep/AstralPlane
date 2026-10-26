@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.atlas_pages import (
     AtlasPageCreateCommand,
@@ -22,7 +21,7 @@ from astralplane.repositories.atlas_pages import (
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.notifications import NotificationRepository
 from astralplane.repositories.stop_epochs import StopEpochRepository
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -98,14 +97,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="089.005"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture

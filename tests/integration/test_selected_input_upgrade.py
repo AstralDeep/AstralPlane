@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.agent_models import definition_snapshot
 from astralplane.repositories.assignments import AssignmentRepository, canonical, digest
@@ -19,7 +18,7 @@ from astralplane.repositories.guidance_models import (
     SkillCommand,
     SkillDefinition,
 )
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_declarative_agents_upgrade import seed_existing_agents
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
@@ -56,14 +55,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="088.005"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture
@@ -199,8 +192,12 @@ def test_006_interruption_rolls_back_populated005_and_recovery_repeats(predecess
         assert retained_rows(tx, tables) == before
         m._verify_predecessor_plane_schema(tx, "088.005")
         assert tx.fetch_one("SELECT to_regclass('assignment_selected_agent') AS t")["t"] is None
-    assert current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
-    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
+    from tests.integration.test_scheduler_policy_upgrade import prior_runner as at_088_006
+
+    assert at_088_006(db).run(expected_revision="088.006").applied_steps == (
+        "astralplane-088-selected-input",
+    )
+    assert at_088_006(db).run(expected_revision="088.006").already_current
 
 
 @pytest.mark.parametrize(

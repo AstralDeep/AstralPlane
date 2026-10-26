@@ -12,7 +12,7 @@ from astralplane.api import create_repository_catalog
 from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 
 
 def old_runner(database):
@@ -49,14 +49,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, old_runner(database)).run(
-            expected_revision="088.001"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(old_runner)
 
 
 @pytest.fixture
@@ -225,29 +219,14 @@ def test_failed_identity_edge_rolls_back_issuance_and_can_retry(predecessor):
     with db.transaction() as tx:
         m._verify_predecessor_plane_schema(tx, "088.001")
         assert tx.fetch_one("SELECT count(*) AS n FROM web_session")["n"] == 1
-    assert current_runner(db).run(
-        expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == (
+    from tests.integration.test_session_issuer_upgrade import prior_runner as at_088_002
+
+    assert at_088_002(db).run(expected_revision="088.002").applied_steps == (
         "astralplane-088-session-incarnation",
-        "astralplane-088-session-issuer",
-        "astralplane-088-declarative-agents",
-        "astralplane-088-owner-guidance",
-        "astralplane-088-selected-input",
-        "astralplane-088-scheduler-policy",
-        "astralplane-088-framework-credentials",
-        "astralplane-089-typesafe-credentials",
-        "astralplane-089-mesh-enrollment-records",
-        "astralplane-owner-stop-epochs",
-        "astralplane-089-completion-wake",
-        "astralplane-089-notification-records",
-        "astralplane-089-atlas-pages",
-        "astralplane-089-atlas-revisions",
-        "astralplane-089-atlas-links",
-        "astralplane-089-capability-publications",
-        "astralplane-089-operation-harness-bindings",
-        "astralplane-089-push-deliveries",
-        "astralplane-089-observation-records",
     )
+    assert at_088_002(db).run(expected_revision="088.002").already_current
+    with db.transaction() as tx:
+        assert tx.fetch_one("SELECT count(*) AS n FROM web_session")["n"] == 1
 
 
 def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(predecessor):

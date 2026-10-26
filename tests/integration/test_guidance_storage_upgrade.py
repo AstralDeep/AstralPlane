@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.agent_models import definition_snapshot
 from astralplane.repositories.agents import DeclarativeAgentCommand
@@ -17,7 +16,7 @@ from astralplane.repositories.assignments import canonical
 from astralplane.repositories.guidance import SkillsRepository
 from astralplane.repositories.guidance_models import SkillCommand, SkillDefinition
 from astralplane.repositories.preferences import MemoryRecord, PreferencesRepository
-from tests.fixtures.migrated_template import DatabaseTemplate, bound_clone
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_declarative_agents_upgrade import seed_existing_agents
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
@@ -56,14 +55,8 @@ def current_runner(database):
 
 
 @pytest.fixture(scope="module")
-def predecessor_template(postgres_administrator_dsn):
-    with DatabaseTemplate.build(
-        postgres_administrator_dsn,
-        lambda database: BaselineMigrationRunner(database, prior_runner(database)).run(
-            expected_revision="088.004"
-        ),
-    ) as template:
-        yield template
+def predecessor_template(lineage_templates):
+    return lineage_templates.template(prior_runner)
 
 
 @pytest.fixture
@@ -253,8 +246,14 @@ def test_new_edge_rollback_preserves_populated_predecessor_and_can_repeat(predec
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT to_regclass('explicit_note_current') AS t")["t"] is None
-    assert current_runner(db).run(expected_revision=HEAD_REVISION).applied_steps
-    assert current_runner(db).run(expected_revision=HEAD_REVISION).already_current
+    from tests.integration.test_selected_input_upgrade import prior_runner as at_088_005
+
+    assert at_088_005(db).run(expected_revision="088.005").applied_steps == (
+        "astralplane-088-owner-guidance",
+    )
+    assert at_088_005(db).run(expected_revision="088.005").already_current
+    with db.transaction() as tx:
+        assert retained_rows(tx, tables) == before
 
 
 @pytest.mark.parametrize(
