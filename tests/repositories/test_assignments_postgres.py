@@ -15,7 +15,6 @@ from threading import Barrier
 
 import pytest
 
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.database.migrations import (
     CURRENT_DATA_PLANE_REVISION,
     MIGRATION_REGISTRY,
@@ -49,7 +48,7 @@ from astralplane.repositories.assignments import (
     digest,
     plain,
 )
-from tests.fixtures.migrated_template import bound_clone
+from tests.fixtures.migrated_template import bound_clone, current_lineages
 
 
 def uid():
@@ -71,37 +70,14 @@ class Pool:
 
 
 def standalone_database():
-    dsn = os.environ.get("ASTRALPLANE_TEST_POSTGRES_DSN")
-    if not dsn:
+    if not os.environ.get("ASTRALPLANE_TEST_POSTGRES_DSN"):
         pytest.skip("isolated PostgreSQL DSN required")
-    import psycopg2
-
-    connection = psycopg2.connect(dsn)
-    schema = "assignment_test_" + uuid.uuid4().hex
-    with connection.cursor() as cursor:
-        cursor.execute(f'CREATE SCHEMA "{schema}"')
-        cursor.execute(f'SET search_path TO "{schema}",pg_catalog')
-    connection.commit()
-    pool = ConnectionPool(Pool(connection))
-    database = PlaneDatabase(pool)
-    try:
-        runner = MigrationRunner(
-            database, revision=CURRENT_DATA_PLANE_REVISION, registry=MIGRATION_REGISTRY
-        )
+    with bound_clone(current_lineages().current()) as clone:
+        pool = ConnectionPool(Pool(clone.connection))
         try:
-            BaselineMigrationRunner(database, runner).run(
-                expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-            )
-        except SchemaRevisionError as error:
-            pytest.fail(f"isolated schema qualification failed: {error.metadata}")
-        yield database
-    finally:
-        pool.close()
-        connection.rollback()
-        with connection.cursor() as cursor:
-            cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.commit()
-        connection.close()
+            yield PlaneDatabase(pool)
+        finally:
+            pool.close()
 
 
 @pytest.fixture(scope="module")
@@ -842,26 +818,9 @@ def test_profile_and_receipt_structure_repeat_verification(database):
             assert row["execution_profile"] == row["data"].get("execution_profile", "persistent")
 
 
-def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo):
-    import psycopg2
-
+def assignment_079_runner(upgrade_database):
     from astralplane.database import migrations as m
 
-    with database.transaction() as transaction:
-        transaction.execute("DELETE FROM assignment_operation_receipt")
-        transaction.execute("DELETE FROM persistent_assignment")
-        legacy = create(repo, transaction)
-        snapshot = transaction.fetch_one(
-            "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
-        )
-    connection = psycopg2.connect(os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"])
-    schema = "operation_upgrade_" + uuid.uuid4().hex
-    with connection.cursor() as cursor:
-        cursor.execute(f'CREATE SCHEMA "{schema}"')
-        cursor.execute(f'SET search_path TO "{schema}",pg_catalog')
-    connection.commit()
-    pool = ConnectionPool(Pool(connection))
-    upgrade_database = PlaneDatabase(pool)
     old_registry = m.MigrationRegistry(
         tuple(
             edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "079.001"
@@ -887,82 +846,96 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(database, repo
             if v[0] < "079.001"
         ),
     )
-    try:
-        old_runner = m.MigrationRunner(
-            upgrade_database, revision=old_revision, registry=old_registry
+    return m.MigrationRunner(upgrade_database, revision=old_revision, registry=old_registry)
+
+
+def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(
+    database, repo, lineage_templates
+):
+    from astralplane.database import migrations as m
+
+    with database.transaction() as transaction:
+        transaction.execute("DELETE FROM assignment_operation_receipt")
+        transaction.execute("DELETE FROM persistent_assignment")
+        legacy = create(repo, transaction)
+        snapshot = transaction.fetch_one(
+            "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
         )
-        BaselineMigrationRunner(upgrade_database, old_runner).run(expected_revision="079.001")
-        with upgrade_database.transaction() as transaction:
-            transaction.execute(
-                "INSERT INTO persistent_assignment(id,owner_user_id,submission_id,"
-                "submission_digest,lifecycle,next_wake_at,state_version,data) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
-                (
-                    *(
-                        snapshot[k]
-                        for k in (
-                            "id",
-                            "owner_user_id",
-                            "submission_id",
-                            "submission_digest",
-                            "lifecycle",
-                            "next_wake_at",
-                            "state_version",
-                        )
+    with bound_clone(lineage_templates.template(assignment_079_runner)) as clone:
+        pool = ConnectionPool(Pool(clone.connection))
+        upgrade_database = PlaneDatabase(pool)
+        try:
+            assert assignment_079_runner(upgrade_database).run(
+                expected_revision="079.001"
+            ).already_current
+            with upgrade_database.transaction() as transaction:
+                transaction.execute(
+                    "INSERT INTO persistent_assignment(id,owner_user_id,submission_id,"
+                    "submission_digest,lifecycle,next_wake_at,state_version,data) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+                    (
+                        *(
+                            snapshot[k]
+                            for k in (
+                                "id",
+                                "owner_user_id",
+                                "submission_id",
+                                "submission_digest",
+                                "lifecycle",
+                                "next_wake_at",
+                                "state_version",
+                            )
+                        ),
+                        canonical(snapshot["data"]),
                     ),
-                    canonical(snapshot["data"]),
-                ),
+                )
+            runner = m.MigrationRunner(
+                upgrade_database,
+                revision=m.CURRENT_DATA_PLANE_REVISION,
+                registry=m.MIGRATION_REGISTRY,
             )
-        runner = m.MigrationRunner(
-            upgrade_database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=m.MIGRATION_REGISTRY
-        )
-        assert runner.run(
-            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-        ).applied_steps == (
-            "astralplane-088-one-shot-operations",
-            "astralplane-088-session-incarnation",
-            "astralplane-088-session-issuer",
-            "astralplane-088-declarative-agents",
-            "astralplane-088-owner-guidance",
-            "astralplane-088-selected-input",
-            "astralplane-088-scheduler-policy",
-            "astralplane-088-framework-credentials",
-            "astralplane-089-typesafe-credentials",
-            "astralplane-089-mesh-enrollment-records",
-            "astralplane-owner-stop-epochs",
-            "astralplane-089-completion-wake",
-            "astralplane-089-notification-records",
-            "astralplane-089-atlas-pages",
-            "astralplane-089-atlas-revisions",
-            "astralplane-089-atlas-links",
-            "astralplane-089-capability-publications",
-            "astralplane-089-operation-harness-bindings",
-            "astralplane-089-push-deliveries",
-        "astralplane-089-observation-records",
-        )
-        assert runner.run(
-            expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
-        ).already_current
-        with upgrade_database.transaction() as transaction:
-            migrated = transaction.fetch_one(
-                "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+            assert runner.run(
+                expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+            ).applied_steps == (
+                "astralplane-088-one-shot-operations",
+                "astralplane-088-session-incarnation",
+                "astralplane-088-session-issuer",
+                "astralplane-088-declarative-agents",
+                "astralplane-088-owner-guidance",
+                "astralplane-088-selected-input",
+                "astralplane-088-scheduler-policy",
+                "astralplane-088-framework-credentials",
+                "astralplane-089-typesafe-credentials",
+                "astralplane-089-mesh-enrollment-records",
+                "astralplane-owner-stop-epochs",
+                "astralplane-089-completion-wake",
+                "astralplane-089-notification-records",
+                "astralplane-089-atlas-pages",
+                "astralplane-089-atlas-revisions",
+                "astralplane-089-atlas-links",
+                "astralplane-089-capability-publications",
+                "astralplane-089-operation-harness-bindings",
+                "astralplane-089-push-deliveries",
+                "astralplane-089-observation-records",
             )
-            assert canonical(migrated["data"]) == canonical(snapshot["data"])
-            assert migrated["submission_digest"] == snapshot["submission_digest"]
-            assert migrated["execution_profile"] == "persistent"
-            transaction.execute(
-                "ALTER TABLE assignment_operation_receipt "
-                "DROP CONSTRAINT assignment_operation_receipt_pkey"
-            )
-        with pytest.raises(SchemaRevisionError):
-            runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
-    finally:
-        pool.close()
-        connection.rollback()
-        with connection.cursor() as cursor:
-            cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.commit()
-        connection.close()
+            assert runner.run(
+                expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
+            ).already_current
+            with upgrade_database.transaction() as transaction:
+                migrated = transaction.fetch_one(
+                    "SELECT * FROM persistent_assignment WHERE id=%s", (legacy.assignment_id,)
+                )
+                assert canonical(migrated["data"]) == canonical(snapshot["data"])
+                assert migrated["submission_digest"] == snapshot["submission_digest"]
+                assert migrated["execution_profile"] == "persistent"
+                transaction.execute(
+                    "ALTER TABLE assignment_operation_receipt "
+                    "DROP CONSTRAINT assignment_operation_receipt_pkey"
+                )
+            with pytest.raises(SchemaRevisionError):
+                runner.run(expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision)
+        finally:
+            pool.close()
 
 
 def test_concurrent_one_shot_acceptance_has_one_logical_identity(database, repo):

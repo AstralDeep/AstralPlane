@@ -12,9 +12,7 @@ from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -88,8 +86,19 @@ def at_089_003(database, registry=None):
     return m.MigrationRunner(database, revision=revision, registry=capped)
 
 
+@pytest.fixture
+def stop_predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(predecessor)) as clone:
+        yield clone
+
+
+@pytest.fixture
+def stop_current(lineage_templates):
+    with bound_clone(lineage_templates.template(at_089_003)) as clone:
+        yield clone
+
+
 def populated_predecessor(db):
-    BaselineMigrationRunner(db, predecessor(db)).run(expected_revision="089.002")
     with db.transaction() as tx:
         tables = populated(tx)
         MeshEnrollmentRepository().bootstrap_mesh(
@@ -105,8 +114,8 @@ def populated_predecessor(db):
     return tables, before
 
 
-def test_stop_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_stop_populated_upgrade_preserves_rows_and_repeats(stop_predecessor):
+    db = stop_predecessor.database
     tables, before = populated_predecessor(db)
     report = at_089_003(db).run(expected_revision="089.003")
     assert report.applied_steps == ("astralplane-owner-stop-epochs",)
@@ -122,8 +131,8 @@ def test_stop_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema
         predecessor(db).run(expected_revision="089.002")
 
 
-def test_stop_partial_migration_rolls_back_and_can_retry(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_stop_partial_migration_rolls_back_and_can_retry(stop_predecessor):
+    db = stop_predecessor.database
     tables, before = populated_predecessor(db)
 
     def interrupted(tx):
@@ -159,17 +168,17 @@ def test_stop_partial_migration_rolls_back_and_can_retry(empty_postgres_schema):
     )
 
 
-def test_stop_current_catalog_damage_is_refused(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, at_089_003(db)).run(expected_revision="089.003")
+def test_stop_current_catalog_damage_is_refused(stop_current):
+    db = stop_current.database
+    assert at_089_003(db).run(expected_revision="089.003").already_current
     with db.transaction() as tx:
         tx.execute("ALTER TABLE owner_stop_epoch DROP CONSTRAINT owner_stop_epoch_state")
     with pytest.raises(SchemaRevisionError):
         at_089_003(db).run(expected_revision="089.003")
 
 
-def test_stop_namesake_is_not_adopted(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_stop_namesake_is_not_adopted(stop_predecessor):
+    db = stop_predecessor.database
     _, _ = populated_predecessor(db)
     with db.transaction() as tx:
         tx.execute("CREATE TABLE owner_stop_epoch (owner_id TEXT PRIMARY KEY)")

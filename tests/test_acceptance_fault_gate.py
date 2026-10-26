@@ -1,6 +1,6 @@
 """Checks that the bounded acceptance fault gate kills each declared guard defect
 and refuses survivors, skipped cases, and collection/import errors. The real
-PostgreSQL run emits machine-readable evidence for the CI owner gate.
+PostgreSQL run clones this session's current template in every child run and emits evidence.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from scripts import check_acceptance_faults as gate
+from tests.fixtures.migrated_template import SHARED_CURRENT_TEMPLATE_ENV
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_acceptance_faults.py"
@@ -196,8 +197,8 @@ def test_surviving_fault_fails_gate_and_control_error_is_not_a_kill(tmp_path, mo
     assert json.loads(output.read_text())["status"] == "failed"
 
 
-def test_real_postgresql_control_and_all_declared_faults(postgres_administrator_dsn, tmp_path):
-    assert postgres_administrator_dsn
+def test_real_postgresql_control_and_all_declared_faults(migrated_template, tmp_path, monkeypatch):
+    monkeypatch.setenv(SHARED_CURRENT_TEMPLATE_ENV, migrated_template.name)
     output = Path(os.environ.get("ASTRALPLANE_FAULT_REPORT", str(tmp_path / "faults.json")))
     assert gate.main(["--report", str(output)]) == 0
     report = json.loads(output.read_text())

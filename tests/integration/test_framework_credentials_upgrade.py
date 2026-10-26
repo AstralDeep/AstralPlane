@@ -12,7 +12,6 @@ from datetime import timedelta
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories import RepositoryConflictError
 from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
@@ -21,9 +20,7 @@ from astralplane.repositories.history import (
     FrameworkCredentialObservation,
 )
 from astralplane.repositories.offline_grants import OfflineGrantRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_session_issuer_upgrade import load_liabilities, retained_rows
 
 OWNER = "framework-credential-upgrade-owner"
@@ -72,9 +69,14 @@ def populated(tx):
     return tuple(dict.fromkeys((*tables, "user_offline_grant")))
 
 
-def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, prior_runner(db)).run(expected_revision="088.007")
+@pytest.fixture
+def predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(prior_runner)) as clone:
+        yield clone
+
+
+def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(predecessor):
+    db = predecessor.database
     with db.transaction() as tx:
         tables = populated(tx)
         before = retained_rows(tx, tables)

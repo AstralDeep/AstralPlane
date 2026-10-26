@@ -19,9 +19,7 @@ from astralplane.repositories.atlas_pages import (
 )
 from astralplane.repositories.notifications import NotificationRepository
 from astralplane.repositories.push_deliveries import PushDeliveryRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -73,8 +71,13 @@ def current(database):
     )
 
 
+@pytest.fixture
+def predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(at_089_010)) as clone:
+        yield clone
+
+
 def populated_predecessor(db):
-    BaselineMigrationRunner(db, at_089_010(db)).run(expected_revision="089.010")
     notifications = NotificationRepository()
     atlas = AtlasPageRepository()
     with db.transaction() as tx:
@@ -119,9 +122,9 @@ def populated_predecessor(db):
 
 
 def test_populated_push_upgrade_preserves_rows_and_supports_claim_acknowledgment(
-    empty_postgres_schema,
+    predecessor,
 ):
-    db = empty_postgres_schema.database
+    db = predecessor.database
     tables, before, entry = populated_predecessor(db)
     report = current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     assert report.applied_steps == (
@@ -190,8 +193,8 @@ def test_populated_push_upgrade_preserves_rows_and_supports_claim_acknowledgment
         at_089_010(db).run(expected_revision="089.010")
 
 
-def test_interrupted_push_edge_rolls_back_and_can_retry(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_interrupted_push_edge_rolls_back_and_can_retry(predecessor):
+    db = predecessor.database
     tables, before, _ = populated_predecessor(db)
 
     def interrupted(tx):
@@ -235,8 +238,8 @@ def test_interrupted_push_edge_rolls_back_and_can_retry(empty_postgres_schema):
     )
 
 
-def test_push_namesake_is_refused_before_adoption(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_push_namesake_is_refused_before_adoption(predecessor):
+    db = predecessor.database
     populated_predecessor(db)
     with db.transaction() as tx:
         tx.execute("CREATE TABLE notification_device_destination (owner_id TEXT PRIMARY KEY)")

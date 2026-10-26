@@ -10,15 +10,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from astralplane.database import migrations as m
-from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
 from astralplane.repositories.capability_publications import (
     CapabilityPublicationRepository,
 )
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
-from tests.integration.test_empty_database_startup import (
-    empty_postgres_schema as empty_postgres_schema,
-)
+from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_mesh_enrollment_upgrade import populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
@@ -69,8 +66,13 @@ def current(database, registry=m.MIGRATION_REGISTRY):
     )
 
 
+@pytest.fixture
+def predecessor(lineage_templates):
+    with bound_clone(lineage_templates.template(at_089_008)) as clone:
+        yield clone
+
+
 def populated_predecessor(db):
-    BaselineMigrationRunner(db, at_089_008(db)).run(expected_revision="089.008")
     with db.transaction() as tx:
         tables = populated(tx)
         MeshEnrollmentRepository().bootstrap_mesh(
@@ -86,8 +88,8 @@ def populated_predecessor(db):
     return tables, before
 
 
-def test_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_populated_upgrade_preserves_rows_and_repeats(predecessor):
+    db = predecessor.database
     tables, before = populated_predecessor(db)
     report = current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     assert report.applied_steps == (
@@ -108,8 +110,8 @@ def test_populated_upgrade_preserves_rows_and_repeats(empty_postgres_schema):
         at_089_008(db).run(expected_revision="089.008")
 
 
-def test_committed_publication_survives_repeat_and_restart(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_committed_publication_survives_repeat_and_restart(predecessor):
+    db = predecessor.database
     populated_predecessor(db)
     current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     repo = CapabilityPublicationRepository()
@@ -144,8 +146,8 @@ def test_committed_publication_survives_repeat_and_restart(empty_postgres_schema
         )
 
 
-def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_partial_migration_rolls_back_and_retries(predecessor):
+    db = predecessor.database
     tables, before = populated_predecessor(db)
 
     def interrupted(tx):
@@ -183,9 +185,8 @@ def test_partial_migration_rolls_back_and_retries(empty_postgres_schema):
     )
 
 
-def test_current_catalog_damage_is_refused(empty_postgres_schema):
-    db = empty_postgres_schema.database
-    BaselineMigrationRunner(db, at_089_008(db)).run(expected_revision="089.008")
+def test_current_catalog_damage_is_refused(predecessor):
+    db = predecessor.database
     current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
     with db.transaction() as tx:
         tx.execute(
@@ -195,8 +196,8 @@ def test_current_catalog_damage_is_refused(empty_postgres_schema):
         current(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
 
 
-def test_namesake_is_not_adopted(empty_postgres_schema):
-    db = empty_postgres_schema.database
+def test_namesake_is_not_adopted(predecessor):
+    db = predecessor.database
     populated_predecessor(db)
     with db.transaction() as tx:
         tx.execute("CREATE TABLE capability_publication (owner_id TEXT PRIMARY KEY)")

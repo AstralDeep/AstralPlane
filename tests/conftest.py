@@ -1,5 +1,5 @@
-"""Session-wide PostgreSQL fixtures: one database migrated to the current revision by the real
-migration runner, cloned per test so suites that need only a current catalog skip the full replay.
+"""Session-wide PostgreSQL fixtures: one lineage-template cache per pytest process, from which the
+current-revision template and every predecessor lineage are cloned per test or per module.
 Built on tests/fixtures/migrated_template.py; skipped when ASTRALPLANE_TEST_POSTGRES_DSN is unset.
 """
 
@@ -12,25 +12,41 @@ import pytest
 
 from tests.fixtures.migrated_template import (
     DatabaseTemplate,
+    LineageTemplates,
     MigratedDatabase,
     bound_clone,
-    migrate_to_current,
+    session_lineages,
 )
 from tests.fixtures.pre_split.loader import TEST_DATABASE_ENV
 
 
-@pytest.fixture(scope="session")
-def postgres_administrator_dsn() -> str:
+@pytest.fixture(scope="session", autouse=True)
+def _session_lineage_templates() -> Iterator[LineageTemplates | None]:
     dsn = os.environ.get(TEST_DATABASE_ENV)
     if not dsn:
-        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
-    return dsn
+        yield None
+        return
+    with session_lineages(dsn) as lineages:
+        yield lineages
 
 
 @pytest.fixture(scope="session")
-def migrated_template(postgres_administrator_dsn: str) -> Iterator[DatabaseTemplate]:
-    with DatabaseTemplate.build(postgres_administrator_dsn, migrate_to_current) as template:
-        yield template
+def lineage_templates(
+    _session_lineage_templates: LineageTemplates | None,
+) -> LineageTemplates:
+    if _session_lineage_templates is None:
+        pytest.skip(f"{TEST_DATABASE_ENV} is required for PostgreSQL integration tests")
+    return _session_lineage_templates
+
+
+@pytest.fixture(scope="session")
+def postgres_administrator_dsn(lineage_templates: LineageTemplates) -> str:
+    return lineage_templates.administrator_dsn
+
+
+@pytest.fixture(scope="session")
+def migrated_template(lineage_templates: LineageTemplates) -> DatabaseTemplate:
+    return lineage_templates.current()
 
 
 @pytest.fixture
