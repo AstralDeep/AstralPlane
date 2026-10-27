@@ -292,3 +292,46 @@ def test_locked_get_takes_owner_lock_before_row_mutation(migrated_clone):
             "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,91)) AS locked",
             (OWNER,),
         )["locked"]
+
+
+@pytest.mark.parametrize("chat_id", [" chat-a", "chat-a ", "chat\na"])
+def test_owner_inventory_reuses_legacy_chat_cursor_without_normalization(migrated_clone, chat_id):
+    repo = create_project_repository()
+    with migrated_clone.database.transaction() as tx:
+        chat(tx, chat_id)
+        chat(tx, "zz-final")
+        first = repo.list_owner_chats_before(tx, owner_id=OWNER, cutoff=100, limit=1)
+        assert first.records[0].chat_id == chat_id
+        assert first.next_cursor.chat_id == chat_id
+        following = repo.list_owner_chats_before(
+            tx,
+            owner_id=OWNER,
+            cutoff=100,
+            cursor=first.next_cursor,
+            limit=1,
+        )
+        assert [row.chat_id for row in following.records] == ["zz-final"]
+        assert following.next_cursor is None
+
+
+@pytest.mark.parametrize("chat_id", [" chat-a", "chat-a ", "chat\na"])
+def test_project_membership_preserves_legacy_chat_identity(migrated_clone, chat_id):
+    repo = create_project_repository()
+    with migrated_clone.database.transaction() as tx:
+        create(tx)
+        for identifier in (chat_id, "zz-final"):
+            chat(tx, identifier)
+            assert repo.attach_chat(tx, owner_id=OWNER, project_id=P1, chat_id=identifier) == P1
+        assert repo.project_for_chat(tx, owner_id=OWNER, chat_id=chat_id).project_id == P1
+        first = repo.list_chats(tx, owner_id=OWNER, project_id=P1, limit=1)
+        assert first.records[0].chat_id == chat_id
+        assert first.next_cursor.chat_id == chat_id
+        following = repo.list_chats(
+            tx,
+            owner_id=OWNER,
+            project_id=P1,
+            cursor=first.next_cursor,
+            limit=1,
+        )
+        assert [row.chat_id for row in following.records] == ["zz-final"]
+        assert following.next_cursor is None

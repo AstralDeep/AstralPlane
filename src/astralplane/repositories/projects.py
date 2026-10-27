@@ -14,6 +14,7 @@ from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryNotFoundError,
     RepositoryValidationError,
+    _required_id,
 )
 
 _MAX = 2**53 - 1
@@ -231,7 +232,7 @@ class ProjectRepository:
 
     def attach_chat(self, transaction: Any, *, owner_id: str, project_id: str, chat_id: str) -> str:
         _identity(owner_id, project_id)
-        _text(chat_id, "chat_id")
+        _required_id(chat_id, "chat_id")
         self._lock(transaction, owner_id)
         if self.get(transaction, owner_id=owner_id, project_id=project_id, for_update=True) is None:
             raise RepositoryNotFoundError("project not found")
@@ -258,7 +259,7 @@ class ProjectRepository:
 
     def project_for_chat(self, query: Any, *, owner_id: str, chat_id: str) -> ProjectRecord | None:
         _text(owner_id, "owner_id")
-        _text(chat_id, "chat_id")
+        _required_id(chat_id, "chat_id")
         row = query.fetch_one(
             "SELECT p.* FROM chat_project AS p JOIN chat_project_membership AS m"
             " ON m.owner_id=p.owner_id AND m.project_id=p.project_id"
@@ -322,7 +323,7 @@ class ProjectRepository:
                 cursor.cutoff,
             ) != (owner_id, project_id, cutoff):
                 raise RepositoryValidationError("chat cursor is invalid for this scope")
-            _text(cursor.chat_id, "cursor chat_id")
+            _required_id(cursor.chat_id, "cursor chat_id")
             clauses.append("c.id>%s")
             parameters.append(cursor.chat_id)
         rows = query.fetch_all(
