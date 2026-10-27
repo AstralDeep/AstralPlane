@@ -82,6 +82,10 @@ class RepositoryContract:
     failure_evidence: tuple[str, ...]
 
 
+def _projects(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.projects.get(transaction, owner_id=_OWNER, project_id=_UUID4)
+
+
 def _observations(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.observations.get_observation(
         transaction,
@@ -748,6 +752,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ),
     ),
     RepositoryContract(
+        "projects",
+        api.create_project_repository,
+        "src/astralplane/repositories/projects.py",
+        _projects,
+        _OWNER,
+        "owner_id=%s AND project_id=%s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "revision=%s"),
+        ("create_digest", "identity was reused"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "observations",
         api.create_observation_repository,
         "src/astralplane/repositories/observations.py",
@@ -1246,6 +1262,13 @@ BEHAVIORAL_EVIDENCE = (
         "test_public_push_delivery_contract_behaviors",
         "tests.repositories.test_push_deliveries_postgres:"
         "test_public_push_delivery_contract_behaviors",
+    ),
+    BehavioralEvidence(
+        "projects",
+        "tests.test_projects:test_public_project_contract_behaviors",
+        "tests.test_projects:test_public_project_contract_behaviors",
+        "tests.test_projects:test_public_project_contract_behaviors",
+        "tests.test_projects:test_public_project_contract_behaviors",
     ),
     BehavioralEvidence(
         "observations",

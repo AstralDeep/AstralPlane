@@ -207,6 +207,15 @@ from astralplane.repositories.observations import (
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
+from astralplane.repositories.projects import (
+    ProjectChatCursor,
+    ProjectChatPage,
+    ProjectChatRecord,
+    ProjectCursor,
+    ProjectPage,
+    ProjectRecord,
+    ProjectRepository,
+)
 from astralplane.repositories.push_deliveries import (
     ClaimedPushDelivery,
     PushDeliveryRecord,
@@ -315,6 +324,10 @@ def create_notification_repository() -> NotificationRepository:
 
 def create_push_delivery_repository() -> PushDeliveryRepository:
     return PushDeliveryRepository()
+
+
+def create_project_repository() -> ProjectRepository:
+    return ProjectRepository()
 
 
 def create_observation_repository() -> ObservationRepository:
@@ -522,6 +535,7 @@ class RepositoryCatalog:
     mesh_enrollment: MeshEnrollmentRepository
     notifications: NotificationRepository
     push_deliveries: PushDeliveryRepository
+    projects: ProjectRepository
     observations: ObservationRepository
     stop_epochs: StopEpochRepository
     tracked_jobs: TrackedJobRepository
@@ -568,6 +582,7 @@ class RepositoryCatalog:
                 "mesh_enrollment": self.mesh_enrollment,
                 "notifications": self.notifications,
                 "push_deliveries": self.push_deliveries,
+                "projects": self.projects,
                 "observations": self.observations,
                 "offline_grants": self.offline_grants,
                 "outbox": self.outbox,
@@ -637,6 +652,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         mesh_enrollment=create_mesh_enrollment_repository(),
         notifications=create_notification_repository(),
         push_deliveries=create_push_delivery_repository(),
+        projects=create_project_repository(),
         observations=create_observation_repository(),
         stop_epochs=create_stop_epoch_repository(),
         tracked_jobs=create_tracked_job_repository(),
@@ -957,6 +973,13 @@ __all__ = (
     "PeerStopAcknowledgment",
     "PlaneHealth",
     "PlaneRuntime",
+    "ProjectChatCursor",
+    "ProjectChatPage",
+    "ProjectChatRecord",
+    "ProjectCursor",
+    "ProjectPage",
+    "ProjectRecord",
+    "ProjectRepository",
     "PublishedBundle",
     "PushDeliveryRecord",
     "PushDeliveryRepository",
@@ -1006,6 +1029,7 @@ __all__ = (
     "create_plane_runtime",
     "create_postgres_runtime",
     "create_preferences_repository",
+    "create_project_repository",
     "create_purge_store",
     "create_push_delivery_repository",
     "create_quality_audit_repository",

@@ -99,6 +99,7 @@ def test_populated_089_001_upgrade_keeps_rows_and_adds_only_mesh_tables(predeces
         "astralplane-089-operation-harness-bindings",
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
+        "astralplane-089-projects",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

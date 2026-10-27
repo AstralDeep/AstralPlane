@@ -1,7 +1,7 @@
 {
   "candidate": {
-    "branch": "",
-    "head": "d051dfcb85e0784a41ff809fec274509b348e308",
+    "branch": "codex/macos-projects-autonomy",
+    "head": "86b50d593630d40dd387829ed1a5029a2576e34a",
     "workingTree": "dirty"
   },
   "checks": [
@@ -14,11 +14,11 @@
         "-rA",
         "tests/integration/test_empty_database_startup.py::test_template0_default_public_schema_is_exactly_qualified_then_hardened"
       ],
-      "completedAt": "2026-10-17T03:52:56.113398Z",
-      "durationMilliseconds": 3124,
+      "completedAt": "2026-10-27T19:25:41.177162Z",
+      "durationMilliseconds": 3889,
       "exitCode": 0,
       "id": "plane.migration.template0_default_public",
-      "outputSha256": "0d0d20ffa075a64ec6af35932cb26507758abf801bc606d0ba6af68be0082571",
+      "outputSha256": "e720e1fe1a2d87a4bcbb2a59fe841bd183e5d27508e2004110cb478cfd571e5c",
       "status": "passed",
       "timedOut": false
     },
@@ -31,11 +31,11 @@
         "-rA",
         "tests/integration/test_empty_database_startup.py::test_template0_public_schema_with_arbitrary_owner_is_not_normalized"
       ],
-      "completedAt": "2026-10-17T03:52:56.909570Z",
-      "durationMilliseconds": 796,
+      "completedAt": "2026-10-27T19:25:41.851643Z",
+      "durationMilliseconds": 674,
       "exitCode": 0,
       "id": "plane.migration.template0_hostile_owner_rejected",
-      "outputSha256": "c65f1d0c8e717abad3b1675387abc269207450db0ac4b01daa5b37b89f3d7f16",
+      "outputSha256": "717f9bf75bc88c2c8240251c8243655993849d204d53946b745abf4ae142315a",
       "status": "passed",
       "timedOut": false
     },
@@ -48,11 +48,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_post_load_predecessor_damage_is_rejected_before_any_migration_repair"
       ],
-      "completedAt": "2026-10-17T03:52:57.865180Z",
-      "durationMilliseconds": 956,
+      "completedAt": "2026-10-27T19:25:42.802270Z",
+      "durationMilliseconds": 951,
       "exitCode": 0,
       "id": "plane.migration.predecessor_damage_rejected",
-      "outputSha256": "524f42ba574f642201db6587fc7e56d6fc5018378dc71fd456b2fe7391eee58d",
+      "outputSha256": "477f2059e6d6c050afbedbd5e7ab5e1767e56d873b5f59a0eb962c120bd92cce",
       "status": "passed",
       "timedOut": false
     },
@@ -65,11 +65,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_pre_split_upgrade_preserves_representative_database_and_blobs"
       ],
-      "completedAt": "2026-10-17T03:53:00.989790Z",
-      "durationMilliseconds": 3125,
+      "completedAt": "2026-10-27T19:25:46.943804Z",
+      "durationMilliseconds": 4141,
       "exitCode": 0,
       "id": "plane.migration.pre_split_upgrade",
-      "outputSha256": "d2b29fbd510f725019ef3fbef6df19b82f25319664dc51aac071cab55a330212",
+      "outputSha256": "7a157807225dc0b383a39b379761e571a424ca298769984bbe5dc1252e19d3f3",
       "status": "passed",
       "timedOut": false
     },
@@ -82,11 +82,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_repeat_upgrade_is_a_noop_with_identical_evidence"
       ],
-      "completedAt": "2026-10-17T03:53:04.278862Z",
-      "durationMilliseconds": 3289,
+      "completedAt": "2026-10-27T19:25:51.442377Z",
+      "durationMilliseconds": 4499,
       "exitCode": 0,
       "id": "plane.migration.repeat_upgrade",
-      "outputSha256": "884d1926a3cbf3740c059f337ab648a155001ee7e6b618df77a290197a6dcd7f",
+      "outputSha256": "b73c8460e4ad8a61423db4ca7661b9d35de52b7b3e16cf3259a1821faf6648c8",
       "status": "passed",
       "timedOut": false
     },
@@ -99,11 +99,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_transactional_failure_rolls_back_both_edges_and_retry_recovers"
       ],
-      "completedAt": "2026-10-17T03:53:07.399529Z",
-      "durationMilliseconds": 3121,
+      "completedAt": "2026-10-27T19:25:52.342875Z",
+      "durationMilliseconds": 900,
       "exitCode": 0,
       "id": "plane.migration.transactional_failure_recovery",
-      "outputSha256": "04a8a214e1f9b818320c678c78ef1bf285d5ff1849010065cc6477371f4867e9",
+      "outputSha256": "cc860131732af82ed43ef207e09cbd7d3cef5a4407b98d1a8d7f8502bb460039",
       "status": "passed",
       "timedOut": false
     },
@@ -116,11 +116,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_blob_stage_failure_creates_neither_schema_nor_published_root"
       ],
-      "completedAt": "2026-10-17T03:53:08.267797Z",
-      "durationMilliseconds": 868,
+      "completedAt": "2026-10-27T19:25:53.030339Z",
+      "durationMilliseconds": 687,
       "exitCode": 0,
       "id": "plane.migration.blob_failure",
-      "outputSha256": "13e1e2ab8027b797fbd5076b873877de775e0dfa203a03599901d6a5fe528a75",
+      "outputSha256": "bcb8ade0cdc7f1654d38514cfa83b4bdc980556a67ef3b9bc445c3175a58e735",
       "status": "passed",
       "timedOut": false
     },
@@ -133,11 +133,11 @@
         "-rA",
         "tests/integration/test_pre_split_upgrade.py::test_documented_joint_restore_returns_to_066_then_reapplies_upgrade"
       ],
-      "completedAt": "2026-10-17T03:53:14.090965Z",
-      "durationMilliseconds": 5823,
+      "completedAt": "2026-10-27T19:26:01.624615Z",
+      "durationMilliseconds": 8594,
       "exitCode": 0,
       "id": "plane.migration.documented_joint_restore",
-      "outputSha256": "6bfdbb19af3f9e2c61f9e4a3f18a20434130ccdcec092d8c944b583a5fa8bdeb",
+      "outputSha256": "1a1a1411641e1da10225b8f6dc499ff953e7045e4b25783da200c04e4a175feb",
       "status": "passed",
       "timedOut": false
     }
@@ -151,8 +151,8 @@
   "inputs": [
     {
       "path": "src/astralplane/database/migrations.py",
-      "sha256": "63076d6fc392a1f1e9bd3fe2d00a74cea09764d5ab5ba865c0ac96107bbbb1f6",
-      "sizeBytes": 220498
+      "sha256": "055f9eb6206dd510fd4e2bf38c3221091ab98aef0cf024ebb19f6b860bed4a7b",
+      "sizeBytes": 239452
     },
     {
       "path": "src/astralplane/database/legacy_baseline_066.py",
@@ -161,7 +161,7 @@
     },
     {
       "path": "src/astralplane/database/revision.py",
-      "sha256": "f15c4d0cb024adcc23d83b4624e92c279b1588e76e8327fd09ac1faf599759a0",
+      "sha256": "d27f07acdbe6b6b140a401bfd19affe5d3c1837ecaa6a92f74732210e6610ec7",
       "sizeBytes": 4728
     },
     {
@@ -196,18 +196,18 @@
     },
     {
       "path": "tests/integration/test_pre_split_upgrade.py",
-      "sha256": "e0529a3fe613a81af6ba1839e8ae21e552f62fdc1441d9a1541f8ee48bb33ee8",
-      "sizeBytes": 31405
+      "sha256": "0111bd0cfbfff929a8f248ed90fdc2d9f2d9bd7a974a3c7f9e43bbcb8efae065",
+      "sizeBytes": 36659
     },
     {
       "path": "tests/integration/test_empty_database_startup.py",
-      "sha256": "636cc3e1920f261349bcfaff9aff5c03c48e196e2f564392a38df624be95280c",
-      "sizeBytes": 111137
+      "sha256": "1ecfd0ef53c72d128e18397c10bfee635779d410dd6a43caf8ee50990f0c24bd",
+      "sizeBytes": 114277
     },
     {
       "path": "docs/migration-and-recovery.md",
-      "sha256": "84fa2c5caef21b6b44483d9c21c845098f407e60a38c91dc5f73dbd4e5d5a6c4",
-      "sizeBytes": 47925
+      "sha256": "c474574ceb6c68df35d76f46b8943833944dcea020e7e0278891ebdde778d079",
+      "sizeBytes": 76503
     },
     {
       "path": "scripts/record_migration_evidence.py",
@@ -220,12 +220,12 @@
     "loaderSha256": "804939c4979c777a49e644883e7a77530481b785bebf3acded1f9be7863ee612",
     "sourceBlob": "39cdc1d328f17840305b88158a892f5fd09c96dd"
   },
-  "migrationRegistryDigest": "08b7d824a62284351d1ce178708bb185d7c81f77c96ab14e890f7e5675a008fc",
+  "migrationRegistryDigest": "4a346c04dfb71e87afcf0444e196f9771977005e0f925c1336d43b1ed1bd3869",
   "preMigrationCatalog": {
     "rowCount": 1593,
     "sha256": "84cc9f0af555517013af26ada3920aebb8cc10e0d05fed75d424f960c810aa5f"
   },
-  "recordedAt": "2026-10-17T03:53:14.332444Z",
+  "recordedAt": "2026-10-27T19:26:01.653694Z",
   "schemaVersion": "astralplane.migration-checks/v1",
   "status": "passed"
 }

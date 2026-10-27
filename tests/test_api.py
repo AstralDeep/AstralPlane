@@ -60,6 +60,7 @@ from astralplane.api import (
     create_personalization_graph_repository,
     create_plane_runtime,
     create_preferences_repository,
+    create_project_repository,
     create_purge_store,
     create_quality_audit_repository,
     create_remote_operation_proposal_repository,
@@ -129,6 +130,7 @@ from astralplane.repositories.observations import ObservationRepository
 from astralplane.repositories.offline_grants import OfflineGrantRepository
 from astralplane.repositories.personalization_graph import PersonalizationGraphRepository
 from astralplane.repositories.preferences import PreferencesRepository
+from astralplane.repositories.projects import ProjectRepository
 from astralplane.repositories.quality_audit import QualityAuditRepository
 from astralplane.repositories.remote import RemoteRepository
 from astralplane.repositories.remote_proposals import RemoteOperationProposalRepository
@@ -267,6 +269,7 @@ def test_explicit_repository_factories_return_the_declared_types() -> None:
         (create_maintenance_repository, MaintenanceRepository),
         (create_mesh_enrollment_repository, MeshEnrollmentRepository),
         (create_notification_repository, NotificationRepository),
+        (create_project_repository, ProjectRepository),
         (create_observation_repository, ObservationRepository),
         (create_tracked_job_repository, TrackedJobRepository),
         (create_quality_audit_repository, QualityAuditRepository),
@@ -326,6 +329,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "mesh_enrollment",
         "notifications",
         "push_deliveries",
+        "projects",
         "observations",
         "offline_grants",
         "outbox",
