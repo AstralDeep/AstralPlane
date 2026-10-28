@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`4a346c04dfb71e87afcf0444e196f9771977005e0f925c1336d43b1ed1bd3869`. Existing notification, Atlas, mesh, stop,
+`5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.013` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.014` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.013` state must carry the exact current registry
+   predecessor catalogs. A restored `089.014` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1061,8 +1061,8 @@ and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1
 It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
-The current catalog digest is `8b8717e86457edcff6c17661f3e74c61f227022ecfb399bb8d3b3484ad411233`;
-the current registry digest is `4a346c04dfb71e87afcf0444e196f9771977005e0f925c1336d43b1ed1bd3869`.
+The current catalog digest is `5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1`;
+the current registry digest is `5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`.
 Package version is `0.1.6`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
@@ -1096,3 +1096,42 @@ sessions, and reconcile post-backup creates, attachments, and deletions before r
 A restored pre-deletion row must not reactivate stale host folder grants: reconcile host access
 state before admission. Never erase project tombstones, rewrite markers, infer down-SQL, or
 run an older binary against the new revision. A database restore cannot restore local Mac grants.
+
+### `089.014` Harness admission capture and recovery
+
+The guarded `astralplane-089-harness-captures` edge accepts only the exact `089.013`
+predecessor catalog and registry digest. It adds `operation_harness_capture`, with a
+bounded private capture, immutable update/delete guard and operation-parent retention
+cascade. A second trigger preserves the initial optional assignment capture across every
+assignment update. Existing operations and assignments remain unselected; migration never
+infers selection from a provider URL, backfills a capture, or changes an existing binding.
+
+Owner selection uses the existing preferences document through `preferences.harness` and
+its separate strict CAS revision. Admission locks the owner state before preferences and
+copies the selected identity only for genuinely new work. Operation submission and assignment
+receipt replay return the original capture before current selection assertions. Persistent
+episodes can inherit only their exact owned assignment capture. A post-claim harness binding
+must match the captured identity and the existing owner/execution fence. Host configuration
+and qualification checks remain mandatory; Plane does not declare deployments qualified.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot run
+against `089.014`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. Do not downgrade a composition
+that could ignore captured work; quiesce admission and use a verified joint restore of the
+matching database and blob state, or forward repair while preserving captures. Never drop
+capture rows or rewrite assignment capture to recover availability. Normal parent operation
+retention purges captures by cascade; assignment retention deletes the owning record normally.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows, repeat the
+migration, interrupt and recover the edge transaction, reject foreign namesakes and damaged
+triggers, and prove old-reader denial. Capture tests cover owner isolation, CAS concurrency,
+original replay after rollback/restart, immutable storage and parent retention.
+
+A generic `parent_operation_id` grants no harness inheritance. The distinct public
+`submit_retry` facade creates a transaction-bound private proof only for the host's
+server retry path. It compares the full detached expected parent and exact capture,
+requires current same-owner RETRYABLE state and retention, preserves kind/admission class/
+normalized identity and exact retry child identity, then locks that parent through child
+admission. Existing child replay returns its original capture before new parent assertions.
+The host retains its existing finite retry limits and every independent authority/config gate;
+no JSON field or guessed namespace/key can supply the private proof to ordinary submit.

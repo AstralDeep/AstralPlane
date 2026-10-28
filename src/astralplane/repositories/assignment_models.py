@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from astralplane.repositories import _freeze
+from astralplane.repositories.harness_capture import HarnessCapture
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,7 @@ class AssignmentRecord(_Record):
     last_completed_generation: int = 0
     execution_profile: str = "persistent"
     operation: Mapping[str, Any] | None = field(default=None, repr=False)
+    harness_capture: HarnessCapture | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

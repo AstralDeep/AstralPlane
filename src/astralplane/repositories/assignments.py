@@ -57,6 +57,8 @@ from astralplane.repositories.assignment_models import (  # noqa: F401
     AssignmentWakePreparation,
 )
 from astralplane.repositories.framework_credentials import FrameworkCredentialRepository
+from astralplane.repositories.harness_capture import harness_capture_from_value
+from astralplane.repositories.harness_preferences import assert_harness_admission
 from astralplane.repositories.history import (
     FrameworkCredentialObservation,
     SessionExecutionObservation,
@@ -261,11 +263,17 @@ def _record(data):
         "last_completed_generation",
         "execution_profile",
         "operation",
+        "harness_capture",
     }
     values = {key: data[key] for key in names}
     values["last_completed_generation"] = data.get("last_completion", {}).get("claim_generation", 0)
     values["execution_profile"] = data.get("execution_profile", "persistent")
     values["operation"] = data.get("operation")
+    captured = data.get("harness_capture")
+    values["harness_capture"] = None if captured is None else harness_capture_from_value(captured)
+    if (values["harness_capture"] is not None
+            and values["harness_capture"].owner_id != values["owner_id"]):
+        raise RepositoryDataError("assignment harness capture owner is invalid")
     values["definition"] = _definition(values["definition"])
     for key in ("created_at", "updated_at", "next_wake_at"):
         values[key] = _time(values[key])
@@ -1174,6 +1182,8 @@ class AssignmentRepository:
         definition,
         max_owned_assignments=25,
         max_retained_assignments=256,
+        harness_selection=None,
+        harness_capture=None,
     ):
         self.validate_definition(definition)
         _text(owner_id)
@@ -1202,6 +1212,8 @@ class AssignmentRepository:
             return self.get_assignment(
                 transaction, owner_id=owner_id, assignment_id=str(replay["id"])
             )
+        assert_harness_admission(transaction, owner_id=owner_id,
+            selection=harness_selection, capture=harness_capture)
         counts = transaction.fetch_one(
             "SELECT count(*) AS total,count(*) FILTER(WHERE lifecycle IN ('active','paused')) "
             "AS active FROM persistent_assignment WHERE owner_user_id=%s "
@@ -1218,6 +1230,7 @@ class AssignmentRepository:
             submission_id=submission_id,
             submission_digest=submission_digest,
             definition=definition,
+            harness_capture=harness_capture,
         )
 
     def _initialize_assignment(
@@ -1230,6 +1243,7 @@ class AssignmentRepository:
         submission_digest,
         definition,
         operation=None,
+        harness_capture=None,
     ):
         now = plain(_now(transaction))
         data = dict(
@@ -1274,6 +1288,8 @@ class AssignmentRepository:
             consecutive_failures=0,
             activity_sequence=0,
         )
+        if harness_capture is not None:
+            data["harness_capture"] = harness_capture.to_dict()
         if operation is not None:
             data.update(execution_profile="one_shot", operation=plain(operation))
         row = transaction.fetch_one(
@@ -1434,6 +1450,8 @@ class AssignmentRepository:
         max_owned_operations=25,
         max_retained_operations=256,
         max_retained_receipts=4096,
+        harness_selection=None,
+        harness_capture=None,
     ):
         with transaction.savepoint("operation_create_" + uuid.uuid4().hex):
             _text(owner_id)
@@ -1460,6 +1478,8 @@ class AssignmentRepository:
             )
             if replay is not None:
                 return replay
+            assert_harness_admission(transaction, owner_id=owner_id,
+                selection=harness_selection, capture=harness_capture)
             self.validate_operation_definition(definition)
             if isinstance(operation, Mapping) and set(operation) & _OPERATION_STATE_KEYS:
                 raise RepositoryValidationError("operation control is repository-owned")
@@ -1511,6 +1531,7 @@ class AssignmentRepository:
                 submission_digest=command_digest,
                 definition=definition,
                 operation=operation,
+                harness_capture=harness_capture,
             )
             transaction.execute(
                 "INSERT INTO assignment_operation_receipt(owner_id,origin_namespace,caller_key,"

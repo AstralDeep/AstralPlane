@@ -6,6 +6,7 @@ Used by orchestrator/work_admission.py and astralplane.api.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import threading
 import uuid
@@ -26,6 +27,15 @@ from astralplane.repositories.harness_bindings import (
     HarnessProfileIdentity,
     OperationHarnessBinding,
     operation_harness_binding_from_row,
+)
+from astralplane.repositories.harness_capture import (
+    HarnessCapture,
+    HarnessSelectionRecord,
+    harness_capture_from_value,
+)
+from astralplane.repositories.harness_preferences import (
+    assert_harness_admission,
+    lock_harness_owner,
 )
 
 _OPERATION_KIND_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -71,6 +81,19 @@ _TERMINAL_STATES = frozenset(
 )
 VOICE_INTERACTIVE_PER_USER_ACTIVE_LIMIT = 2
 _VOICE_CAPACITY_RETRY_AFTER_MS = 1_000
+
+
+_RETRY_AUTHORITY = object()
+
+
+class _HarnessRetryProof:
+    __slots__ = ("authority", "capture", "parent", "request", "transaction")
+
+    def __init__(self, authority, transaction, request, parent, capture):
+        if authority is not _RETRY_AUTHORITY:
+            raise RepositoryValidationError("server retry proof is unavailable")
+        self.authority, self.transaction = authority, transaction
+        self.request, self.parent, self.capture = request, parent, capture
 
 
 class WorkAdmissionNotFoundError(RepositoryNotFoundError):
@@ -167,6 +190,9 @@ class OperationRequest:
     parent_operation_id: uuid.UUID | None
     connection_generation: uuid.UUID | None
     request_generation: uuid.UUID | None
+    harness_selection: HarnessSelectionRecord | None = None
+    harness_capture: HarnessCapture | None = None
+    harness_assignment_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not _OPERATION_KIND_RE.fullmatch(self.operation_kind):
@@ -184,6 +210,19 @@ class OperationRequest:
             raise RepositoryValidationError(
                 "voice_interactive requires authenticated user ownership"
             )
+        if self.harness_assignment_id is not None:
+            _require_uuid(self.harness_assignment_id, "harness_assignment_id")
+        if self.harness_capture is not None:
+            if type(self.harness_capture) is not HarnessCapture:
+                raise RepositoryValidationError("harness capture must be typed")
+            if self.owner.owner_scope not in {OwnerScope.USER, OwnerScope.CONNECTION}:
+                raise RepositoryValidationError("harness capture requires an owner")
+            if (self.owner.owner_scope is OwnerScope.USER
+                    and self.harness_capture.owner_id != self.owner.owner_user_id):
+                raise RepositoryValidationError("harness capture owner mismatch")
+        if (self.harness_selection is not None
+                and type(self.harness_selection) is not HarnessSelectionRecord):
+            raise RepositoryValidationError("harness selection must be typed")
         _require_uuid(self.submission_id, "submission_id")
         for name, value in (
             ("parent_operation_id", self.parent_operation_id),
@@ -1058,6 +1097,53 @@ class WorkAdmissionRepository:
                 )
 
     def submit(
+        self, transaction: Transaction, request: OperationRequest, *, now: datetime | None,
+        retention: timedelta, slot_lease: timedelta,
+    ) -> AdmissionResult:
+        return self._submit(transaction, request, now=now, retention=retention,
+                            slot_lease=slot_lease)
+
+    def submit_retry(
+        self, transaction: Transaction, request: OperationRequest, *,
+        expected_parent: OperationRecord, expected_capture: HarnessCapture | None,
+        now: datetime | None, retention: timedelta, slot_lease: timedelta,
+    ) -> AdmissionResult:
+        if type(expected_parent) is not OperationRecord:
+            raise RepositoryValidationError("retry parent must be a detached operation record")
+        if expected_capture is not None and type(expected_capture) is not HarnessCapture:
+            raise RepositoryValidationError("retry capture must be typed")
+        proof = _HarnessRetryProof(_RETRY_AUTHORITY, transaction, request,
+                                   expected_parent, expected_capture)
+        return self._submit(transaction, request, now=now, retention=retention,
+                            slot_lease=slot_lease, _retry=proof)
+
+    def _retry_capture(self, transaction, request, proof, current_time):
+        if (type(proof) is not _HarnessRetryProof or proof.authority is not _RETRY_AUTHORITY
+                or proof.transaction is not transaction or proof.request is not request
+                or request.owner.owner_scope is not OwnerScope.USER
+                or request.harness_selection is not None or request.harness_capture is not None
+                or request.harness_assignment_id is not None):
+            raise RepositoryConflictError("server retry identity changed")
+        expected = proof.parent
+        current = self.get_operation_record(transaction, request.owner,
+                                            expected.operation_id, for_update=True)
+        if (current is None or current != expected or current.state is not OperationState.RETRYABLE
+                or current.purge_after is None or current.purge_after <= current_time
+                or current.operation_id != request.parent_operation_id
+                or current.operation_kind != request.operation_kind
+                or current.admission_class is not request.admission_class
+                or current.idempotency_namespace is None
+                or current.idempotency_namespace != request.idempotency_namespace
+                or current.normalized_input_digest is None
+                or current.normalized_input_digest != request.normalized_input_digest
+                or request.idempotency_key != "retry:" + str(current.operation_id)):
+            raise RepositoryConflictError("server retry parent changed")
+        captured = self.get_harness_capture(transaction, request.owner, current.operation_id)
+        if captured != proof.capture:
+            raise RepositoryConflictError("server retry capture changed")
+        return captured
+
+    def _submit(
         self,
         transaction: Transaction,
         request: OperationRequest,
@@ -1065,12 +1151,22 @@ class WorkAdmissionRepository:
         now: datetime | None,
         retention: timedelta,
         slot_lease: timedelta,
+        _retry=None,
     ) -> AdmissionResult:
         request = _validated_request(request)
         retention = _validated_duration(retention, "retention")
         slot_lease = _validated_duration(slot_lease, "slot_lease")
         cursor = _StatementSession(transaction)
         current_time = self._current_time(cursor, now)
+        harness_owner = None
+        if request.harness_selection is not None:
+            harness_owner = request.harness_selection.owner_id
+        elif request.harness_capture is not None:
+            harness_owner = request.harness_capture.owner_id
+        elif _retry is not None:
+            harness_owner = request.owner.owner_user_id
+        if harness_owner is not None:
+            lock_harness_owner(transaction, harness_owner)
         self._lock_request_identities(cursor, request)
         existing_submission = self._submission_row(
             cursor, request.owner, request.submission_id, lock=True
@@ -1110,6 +1206,20 @@ class WorkAdmissionRepository:
                 operation_id=operation.operation_id,
             )
             return self._accepted(cursor, operation)
+
+        capture = request.harness_capture
+        if _retry is not None:
+            capture = self._retry_capture(transaction, request, _retry, current_time)
+        elif harness_owner is not None:
+            if (request.owner.owner_scope is OwnerScope.USER
+                    and request.owner.owner_user_id != harness_owner):
+                raise RepositoryValidationError("harness admission owner mismatch")
+            assert_harness_admission(transaction, owner_id=harness_owner,
+                selection=request.harness_selection, capture=request.harness_capture,
+                assignment_id=(None if request.harness_assignment_id is None
+                               else str(request.harness_assignment_id)))
+        elif request.harness_assignment_id is not None:
+            raise RepositoryValidationError("inherited harness capture is missing")
 
         with self._configuration_lock:
             config = self._configs.get(request.admission_class)
@@ -1258,6 +1368,14 @@ class WorkAdmissionRepository:
             raise WorkAdmissionIntegrityError(
                 "accepted operation insert returned no record"
             )
+        if capture is not None:
+            transaction.execute(
+                "INSERT INTO operation_harness_capture(operation_id,owner_id,capture,created_at) "
+                "VALUES(%s,%s,%s::jsonb,%s)",
+                (str(operation_id), harness_owner,
+                 json.dumps(capture.to_dict(), ensure_ascii=True,
+                            separators=(",", ":")),
+                 current_time))
         if selected_slots is not None:
             if execution_token is None:  # pragma: no cover
                 raise WorkAdmissionIntegrityError(
@@ -1662,6 +1780,18 @@ class WorkAdmissionRepository:
         if row is None:
             raise WorkAdmissionNotFoundError("operation not found")
         return _safe_projection(self._operation_from_row(row))
+
+    def get_operation_record(self, transaction, owner, operation_id, *, for_update=False):
+        owner = _validated_owner(owner)
+        operation_id = _require_uuid(operation_id, "operation_id")
+        if type(for_update) is not bool:
+            raise RepositoryValidationError("for_update must be boolean")
+        clause, parameters = self._owner_clause(owner)
+        cursor = _StatementSession(transaction)
+        cursor.execute("SELECT * FROM operation_record WHERE operation_id=%s AND " + clause
+            + (" FOR UPDATE" if for_update else ""), (str(operation_id), *parameters))
+        row = cursor.fetchone()
+        return None if row is None else self._operation_from_row(row)
 
     def get_operation_for_administration(
         self,
@@ -2325,6 +2455,24 @@ class WorkAdmissionRepository:
             raise StaleWorkExecutionFenceError("execution fence is stale")
         return self._operation_from_row(row)
 
+    def get_harness_capture(self, transaction, owner, operation_id):
+        owner = _validated_owner(owner)
+        operation_id = _require_uuid(operation_id, "operation_id")
+        owner_sql, parameters = self._owner_clause(owner, alias="operation")
+        cursor = _StatementSession(transaction)
+        cursor.execute(
+            "SELECT capture.capture,capture.owner_id FROM operation_harness_capture AS capture "
+            "JOIN operation_record AS operation ON operation.operation_id=capture.operation_id "
+            f"WHERE operation.operation_id=%s AND {owner_sql}", (str(operation_id), *parameters))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        captured = harness_capture_from_value(row["capture"])
+        if (captured.owner_id != row["owner_id"] or (
+                owner.owner_scope is OwnerScope.USER and captured.owner_id != owner.owner_user_id)):
+            raise RepositoryDataError("operation harness capture owner is invalid")
+        return captured
+
     def bind_harness_profile(
         self,
         transaction: Transaction,
@@ -2357,6 +2505,10 @@ class WorkAdmissionRepository:
         operation = self._operation_from_row(row)
         if not self._fence_matches(operation, fence):
             raise StaleWorkExecutionFenceError("execution fence is stale")
+        capture = self.get_harness_capture(transaction, owner, fence.operation_id)
+        if capture is not None and capture.identity != identity:
+            raise RepositoryConflictError(
+                "operation capture has a different harness profile identity")
         cursor.execute(
             f"""
             SELECT binding.* FROM operation_harness_binding AS binding
