@@ -207,11 +207,11 @@ def test_framework_credential_scopes_is_a_small_closed_set() -> None:
 
 
 def test_revoke_is_owner_scoped_and_idempotent() -> None:
-    transaction = ScriptedTransaction(
-        one=[{"acquired": True}, None, _row(revoked_epoch=2_000)]
-    )
+    transaction = ScriptedTransaction(one=[{"acquired": True}, None, _row(revoked_epoch=2_000)])
     record = FrameworkCredentialRepository().revoke(
-        transaction, owner_id="owner-1", credential_id=CREDENTIAL_ID  # type: ignore[arg-type]
+        transaction,
+        owner_id="owner-1",
+        credential_id=CREDENTIAL_ID,  # type: ignore[arg-type]
     )
     assert record.revoked_at == 2_000
     assert "UPDATE framework_credential" in transaction.fetch_sql()
@@ -224,23 +224,28 @@ def test_revoke_raises_not_found_for_a_foreign_or_missing_credential() -> None:
     transaction = ScriptedTransaction(one=[{"acquired": True}, None, None, None])
     with pytest.raises(RepositoryNotFoundError):
         FrameworkCredentialRepository().revoke(
-            transaction, owner_id="owner-1", credential_id=CREDENTIAL_ID  # type: ignore[arg-type]
+            transaction,
+            owner_id="owner-1",
+            credential_id=CREDENTIAL_ID,  # type: ignore[arg-type]
         )
 
 
 def test_list_for_owner_returns_detached_records_without_the_token_hash() -> None:
     transaction = ScriptedTransaction(all_rows=[(_row(), _row(id=str(uuid.uuid4())))])
     records = FrameworkCredentialRepository().list_for_owner(
-        transaction, owner_id="owner-1"  # type: ignore[arg-type]
+        transaction,
+        owner_id="owner-1",  # type: ignore[arg-type]
     )
     assert len(records) == 2
     assert all("a" * 64 not in repr(record) for record in records)
 
 
 def test_consume_admission_returns_the_charged_row() -> None:
-    transaction = ScriptedTransaction(one=[_row(consumed_admissions=1)])
+    transaction = ScriptedTransaction(one=[{}, None, _row(consumed_admissions=1)])
     record = FrameworkCredentialRepository().consume_admission(
-        transaction, owner_id="owner-1", credential_id=CREDENTIAL_ID  # type: ignore[arg-type]
+        transaction,
+        owner_id="owner-1",
+        credential_id=CREDENTIAL_ID,  # type: ignore[arg-type]
     )
     assert record.consumed_admissions == 1
     assert "consumed_admissions + 1" in transaction.fetch_sql()
@@ -248,72 +253,83 @@ def test_consume_admission_returns_the_charged_row() -> None:
 
 
 def test_consume_admission_refuses_when_the_cas_predicate_misses() -> None:
-    transaction = ScriptedTransaction(one=[None])
+    transaction = ScriptedTransaction(one=[{}, None, None])
     with pytest.raises(RepositoryConflictError, match="credential_allowance_exhausted"):
         FrameworkCredentialRepository().consume_admission(
-            transaction, owner_id="owner-1", credential_id=CREDENTIAL_ID  # type: ignore[arg-type]
+            transaction,
+            owner_id="owner-1",
+            credential_id=CREDENTIAL_ID,  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_succeeds_for_a_matching_fresh_observation() -> None:
     transaction = ScriptedTransaction(
-        one=[_row(), {"now": datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)}]
+        one=[{}, None, _row(), {"now": datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)}]
     )
     observation = _observation(
         started_at=datetime(2026, 1, 1, tzinfo=UTC),
         valid_until=datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC),
     )
     state = FrameworkCredentialRepository().assert_current_execution(
-        transaction, observation=observation  # type: ignore[arg-type]
+        transaction,
+        observation=observation,  # type: ignore[arg-type]
     )
     assert state.credential.credential_id == CREDENTIAL_ID
     assert "FOR UPDATE" in transaction.fetch_sql()
 
 
 def test_assert_current_execution_refuses_a_missing_row() -> None:
-    transaction = ScriptedTransaction(one=[None, {"now": datetime(2026, 1, 1, tzinfo=UTC)}])
+    transaction = ScriptedTransaction(
+        one=[{}, None, None, {"now": datetime(2026, 1, 1, tzinfo=UTC)}]
+    )
     with pytest.raises(RepositoryConflictError, match="credential authority unavailable"):
         FrameworkCredentialRepository().assert_current_execution(
-            transaction, observation=_observation()  # type: ignore[arg-type]
+            transaction,
+            observation=_observation(),  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_refuses_a_token_hash_mismatch() -> None:
     transaction = ScriptedTransaction(
-        one=[_row(token_hash="c" * 64), {"now": datetime(2026, 1, 1, tzinfo=UTC)}]
+        one=[{}, None, _row(token_hash="c" * 64), {"now": datetime(2026, 1, 1, tzinfo=UTC)}]
     )
     with pytest.raises(RepositoryConflictError, match="credential authority unavailable"):
         FrameworkCredentialRepository().assert_current_execution(
-            transaction, observation=_observation()  # type: ignore[arg-type]
+            transaction,
+            observation=_observation(),  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_refuses_a_revoked_credential() -> None:
     transaction = ScriptedTransaction(
-        one=[_row(revoked_epoch=500), {"now": datetime(2026, 1, 1, tzinfo=UTC)}]
+        one=[{}, None, _row(revoked_epoch=500), {"now": datetime(2026, 1, 1, tzinfo=UTC)}]
     )
     with pytest.raises(RepositoryConflictError, match="credential authority unavailable"):
         FrameworkCredentialRepository().assert_current_execution(
-            transaction, observation=_observation()  # type: ignore[arg-type]
+            transaction,
+            observation=_observation(),  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_refuses_an_expired_credential() -> None:
     transaction = ScriptedTransaction(
         one=[
+            {},
+            None,
             _row(expires_epoch=100),
             {"now": datetime(2026, 1, 1, tzinfo=UTC)},
         ]
     )
     with pytest.raises(RepositoryConflictError, match="credential authority unavailable"):
         FrameworkCredentialRepository().assert_current_execution(
-            transaction, observation=_observation()  # type: ignore[arg-type]
+            transaction,
+            observation=_observation(),  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_refuses_an_observation_outside_its_own_freshness_window() -> None:
     transaction = ScriptedTransaction(
-        one=[_row(), {"now": datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)}]
+        one=[{}, None, _row(), {"now": datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)}]
     )
     observation = _observation(
         started_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -321,12 +337,14 @@ def test_assert_current_execution_refuses_an_observation_outside_its_own_freshne
     )
     with pytest.raises(RepositoryConflictError, match="credential authority unavailable"):
         FrameworkCredentialRepository().assert_current_execution(
-            transaction, observation=observation  # type: ignore[arg-type]
+            transaction,
+            observation=observation,  # type: ignore[arg-type]
         )
 
 
 def test_assert_current_execution_rejects_an_untyped_observation() -> None:
     with pytest.raises(RepositoryValidationError):
         FrameworkCredentialRepository().assert_current_execution(
-            ScriptedTransaction(), observation="not-an-observation"  # type: ignore[arg-type]
+            ScriptedTransaction(),
+            observation="not-an-observation",  # type: ignore[arg-type]
         )
