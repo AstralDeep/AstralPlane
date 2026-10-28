@@ -1096,6 +1096,28 @@ class WorkAdmissionRepository:
                     "admission slot claim lost atomicity"
                 )
 
+    def _lock_admission_request(self, transaction, cursor, request, retry=None):
+        harness_owner = None
+        if request.harness_selection is not None:
+            harness_owner = request.harness_selection.owner_id
+        elif request.harness_capture is not None:
+            harness_owner = request.harness_capture.owner_id
+        elif retry is not None:
+            harness_owner = request.owner.owner_user_id
+        if harness_owner is not None:
+            lock_harness_owner(transaction, harness_owner)
+        self._lock_request_identities(cursor, request)
+        return harness_owner
+
+    def has_admission_replay(self, transaction, request):
+        request = _validated_request(request)
+        cursor = _StatementSession(transaction)
+        self._lock_admission_request(transaction, cursor, request)
+        existing = self._submission_row(cursor, request.owner, request.submission_id, lock=True)
+        if existing is not None:
+            return True
+        return self._existing_idempotent_operation(cursor, request) is not None
+
     def submit(
         self, transaction: Transaction, request: OperationRequest, *, now: datetime | None,
         retention: timedelta, slot_lease: timedelta,
@@ -1158,16 +1180,7 @@ class WorkAdmissionRepository:
         slot_lease = _validated_duration(slot_lease, "slot_lease")
         cursor = _StatementSession(transaction)
         current_time = self._current_time(cursor, now)
-        harness_owner = None
-        if request.harness_selection is not None:
-            harness_owner = request.harness_selection.owner_id
-        elif request.harness_capture is not None:
-            harness_owner = request.harness_capture.owner_id
-        elif _retry is not None:
-            harness_owner = request.owner.owner_user_id
-        if harness_owner is not None:
-            lock_harness_owner(transaction, harness_owner)
-        self._lock_request_identities(cursor, request)
+        harness_owner = self._lock_admission_request(transaction, cursor, request, _retry)
         existing_submission = self._submission_row(
             cursor, request.owner, request.submission_id, lock=True
         )

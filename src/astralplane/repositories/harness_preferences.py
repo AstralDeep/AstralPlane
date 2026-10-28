@@ -78,6 +78,9 @@ def _record(document, owner_id):
 class HarnessPreferenceRepository:
     _SELECT = "SELECT preferences FROM user_preferences WHERE user_id=%s"
 
+    def lock_owner(self, transaction, *, owner_id):
+        lock_harness_owner(transaction, owner_id)
+
     def get(self, query, *, owner_id):
         _text(owner_id, 512)
         return _record(_document(query.fetch_one(self._SELECT, (owner_id,))), owner_id)

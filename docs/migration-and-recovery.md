@@ -1135,3 +1135,13 @@ normalized identity and exact retry child identity, then locks that parent throu
 admission. Existing child replay returns its original capture before new parent assertions.
 The host retains its existing finite retry limits and every independent authority/config gate;
 no JSON field or guessed namespace/key can supply the private proof to ordinary submit.
+
+The host may call `preferences.harness.lock_owner` followed by
+`work_admission.has_admission_replay` inside the same caller-owned transaction. Inspection
+uses normal request validation and the identical submission/idempotency locks retained through
+ordinary submit. It returns only a replay predicate, including original refusals or input
+collisions; it confers no owner, policy or execution authority. On a genuine new admission the
+host checks the exact current selection/config before normal class/slot admission locks. On
+replay ordinary submit alone decides the original accepted/refused/conflicting outcome; current
+rollout or configuration must not reinterpret it. Authentication and current-caller checks remain
+mandatory in either path.
