@@ -54,8 +54,8 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
     plane_schema_075_migration = migrations_module.PLANE_SCHEMA_075_MIGRATION
     plane_schema_075_statements = migrations_module.PLANE_SCHEMA_075_STATEMENTS
     plane_schema_074_004_registry_digest = migrations_module.PLANE_SCHEMA_074_004_REGISTRY_DIGEST
-    assert SCHEMA_PREDECESSOR_REVISION == "089.012"
-    assert SCHEMA_REVISION == "089.013"
+    assert SCHEMA_PREDECESSOR_REVISION == "089.013"
+    assert SCHEMA_REVISION == "089.014"
     assert READ_COMPATIBLE_FROM == "066.001"
     assert ADVISORY_LOCK_IDS == ((1095980114, 60001), (1095980114, 60002))
     assert not hasattr(revision_module, "MIGRATION_DIGEST")
@@ -90,6 +90,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         "089.010",
         "089.011",
         "089.012",
+        "089.013",
     )
     assert CURRENT_DATA_PLANE_REVISION.migration_digest == MIGRATION_DIGEST
     assert CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests == (
@@ -120,6 +121,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         ("089.010", migrations_module.PLANE_SCHEMA_089_010_REGISTRY_DIGEST),
         ("089.011", migrations_module.PLANE_SCHEMA_089_011_REGISTRY_DIGEST),
         ("089.012", migrations_module.PLANE_SCHEMA_089_012_REGISTRY_DIGEST),
+        ("089.013", migrations_module.PLANE_SCHEMA_089_013_REGISTRY_DIGEST),
     )
     assert (
         CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.008")
@@ -254,6 +256,7 @@ def test_schema_lineage_and_lock_identities_bind_the_canonical_registry() -> Non
         migrations_module.PLANE_SCHEMA_089_011_MIGRATION,
         migrations_module.PLANE_SCHEMA_089_012_MIGRATION,
         migrations_module.PLANE_SCHEMA_089_013_MIGRATION,
+        migrations_module.PLANE_SCHEMA_089_014_MIGRATION,
     )
     assert len(PLANE_SCHEMA_067_STATEMENTS) == 18
     assert {

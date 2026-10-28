@@ -467,6 +467,7 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     assert not report.already_current
     assert _metadata(fixture.connection) == {

@@ -38,7 +38,7 @@ acknowledgment fencing. Assignments additionally exercise real concurrent claim,
 ordering, remote-proposal creation/link rollback, and account retirement. Its behavioral matrix entry
 executes the same isolated PostgreSQL owner/replay/claim cases used by the dedicated assignment suite.
 
-This evidence uses repositories against the current `089.013` schema. A future catalog addition
+This evidence uses repositories against the current `089.014` schema. A future catalog addition
 must add both a failure/attribution probe and executable behavioral evidence before the
 exact-catalog assertion can pass.
 

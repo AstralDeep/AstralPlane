@@ -124,6 +124,7 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -358,6 +359,7 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(prede
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     for _ in range(2):
         with db.transaction() as tx:

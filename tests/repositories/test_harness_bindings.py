@@ -136,6 +136,7 @@ def test_bind_uses_the_owner_and_execution_fence_in_the_write_statement() -> Non
             _Result(returned_records=({"current_time": _NOW},)),
             _Result(returned_records=(operation,)),
             _Result(),
+            _Result(),
             _Result(returned_records=(_binding_row(operation_id=operation_id),)),
         ]
     )
@@ -151,7 +152,7 @@ def test_bind_uses_the_owner_and_execution_fence_in_the_write_statement() -> Non
     assert "owner_scope = %s" in lock_sql and "owner_user_id = %s" in lock_sql
     assert "FOR UPDATE" in lock_sql
     assert lock_parameters == (str(operation_id), "user", "owner-a")
-    insert_sql, insert_parameters = transaction.calls[3]
+    insert_sql, insert_parameters = transaction.calls[4]
     assert "INSERT INTO operation_harness_binding" in insert_sql
     assert "operation.owner_scope = %s" in insert_sql
     assert "operation.owner_user_id = %s" in insert_sql
@@ -249,6 +250,7 @@ def test_bind_returns_a_concurrently_committed_same_identity() -> None:
             _Result(returned_records=(operation,)),
             _Result(),
             _Result(),
+            _Result(),
             _Result(returned_records=(_binding_row(operation_id=operation_id),)),
         ]
     )
@@ -261,7 +263,7 @@ def test_bind_returns_a_concurrently_committed_same_identity() -> None:
     )
 
     assert binding.identity == _identity()
-    assert "operation.owner_scope = %s" in transaction.calls[4][0]
+    assert "operation.owner_scope = %s" in transaction.calls[5][0]
 
 
 def test_bind_refuses_a_concurrently_committed_different_identity() -> None:
@@ -272,6 +274,7 @@ def test_bind_refuses_a_concurrently_committed_different_identity() -> None:
         [
             _Result(returned_records=({"current_time": _NOW},)),
             _Result(returned_records=(operation,)),
+            _Result(),
             _Result(),
             _Result(),
             _Result(returned_records=(_binding_row(operation_id=operation_id),)),
@@ -295,6 +298,7 @@ def test_bind_reports_a_lost_insert_as_an_integrity_error() -> None:
         [
             _Result(returned_records=({"current_time": _NOW},)),
             _Result(returned_records=(operation,)),
+            _Result(),
             _Result(),
             _Result(),
             _Result(),

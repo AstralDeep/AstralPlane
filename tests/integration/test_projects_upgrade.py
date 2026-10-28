@@ -63,14 +63,15 @@ def test_populated_upgrade_repeat_and_old_binary_refusal(predecessor):
     with db.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
-    assert current_runner(db).run(expected_revision="089.013").applied_steps == (
+    assert current_runner(db).run(expected_revision="089.014").applied_steps == (
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM chat_project_membership") == ()
         create(tx)
-    assert current_runner(db).run(expected_revision="089.013").already_current
+    assert current_runner(db).run(expected_revision="089.014").already_current
     with pytest.raises(SchemaRevisionError):
         prior_runner(db).run(expected_revision="089.012")
 
@@ -89,8 +90,9 @@ def test_interrupted_upgrade_rolls_back_and_retries(predecessor):
         assert (
             tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == "089.012"
         )
-    assert current_runner(db).run(expected_revision="089.013").applied_steps == (
+    assert current_runner(db).run(expected_revision="089.014").applied_steps == (
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
 
 
@@ -105,7 +107,7 @@ def test_namesake_or_damaged_predecessor_refused(predecessor, corruption):
     with predecessor.database.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(predecessor.database).run(expected_revision="089.013")
+        current_runner(predecessor.database).run(expected_revision="089.014")
 
 
 @pytest.mark.parametrize(
@@ -123,4 +125,4 @@ def test_current_catalog_damage_refused(migrated_clone, corruption):
     with migrated_clone.database.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        current_runner(migrated_clone.database).run(expected_revision="089.013")
+        current_runner(migrated_clone.database).run(expected_revision="089.014")

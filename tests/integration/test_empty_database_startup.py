@@ -436,6 +436,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -518,6 +519,9 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
     ]
     assert function_configurations.pop("reject_atlas_page_link_command_mutation") == [
         "search_path=pg_catalog"
+    ]
+    assert function_configurations.pop("reject_assignment_harness_capture_mutation") == [
+        "search_path=pg_catalog, pg_temp"
     ]
     assert function_configurations.pop("reject_operation_harness_binding_mutation") == [
         "search_path=pg_catalog, pg_temp"
@@ -1090,6 +1094,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
 
     cursor = fixture.connection.cursor()

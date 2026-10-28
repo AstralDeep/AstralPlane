@@ -27,6 +27,7 @@ from astralplane.repositories import (
     _structured_json,
 )
 from astralplane.repositories.guidance import ExplicitNotesRepository, SkillsRepository
+from astralplane.repositories.harness_preferences import HarnessPreferenceRepository
 
 _SENTIMENTS = frozenset({"negative", "positive"})
 _FEEDBACK_CATEGORIES = frozenset(
@@ -1654,6 +1655,7 @@ def _preferences_document(row: Mapping[str, Any] | None) -> dict[str, Any]:
 
 class PreferencesRepository:
     def __init__(self) -> None:
+        self.harness = HarnessPreferenceRepository()
         self.skills = SkillsRepository()
         self.feedback = FeedbackRepository()
         self.onboarding = OnboardingRepository()

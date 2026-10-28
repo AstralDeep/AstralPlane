@@ -135,6 +135,7 @@ def test_populated_089_010_upgrade_preserves_rows_and_binds_only_on_request(pred
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -182,6 +183,7 @@ def test_interrupted_harness_binding_edge_rolls_back_and_retries(predecessor):
         "astralplane-089-push-deliveries",
         "astralplane-089-observation-records",
         "astralplane-089-projects",
+        "astralplane-089-harness-captures",
     )
 
 
