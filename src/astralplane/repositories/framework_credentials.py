@@ -187,6 +187,7 @@ class FrameworkCredentialRepository:
     ) -> FrameworkCredentialRecord:
         owner = _required_id(owner_id, "owner_id")
         credential = _required_id(credential_id, "credential_id")
+        self._lock_issuer_owner(transaction, owner)
         row = transaction.fetch_one(
             f"""
             UPDATE framework_credential
@@ -213,9 +214,11 @@ class FrameworkCredentialRepository:
     ) -> FrameworkCredentialExecutionState:
         observation = _framework_credential_observation(observation)
         credential = observation.credential
+        self._lock_issuer_owner(transaction, credential.owner_id)
         row = transaction.fetch_one(
             f"SELECT {self._FIELDS} FROM framework_credential "
-            "WHERE id=%s AND owner_id=%s FOR UPDATE",
+            "WHERE id=%s AND owner_id=%s AND revoked_at IS NULL "
+            "AND expires_at>clock_timestamp() FOR UPDATE",
             (credential.credential_id, credential.owner_id),
         )
         now = transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
@@ -224,6 +227,7 @@ class FrameworkCredentialRepository:
         current = _record(row)
         if (
             current.revoked_at is not None
+            or not set(credential.scopes).issubset(current.scopes)
             or now.timestamp() >= current.expires_at
             or not observation.started_at <= now < observation.valid_until
         ):
@@ -256,6 +260,7 @@ class FrameworkCredentialRepository:
         credential = _required_id(credential_id, "credential_id")
         _validate_token_hash(token_hash)
         requested = None if scopes is None else _validate_scopes(scopes)
+        self._lock_issuer_owner(transaction, owner)
         started = transaction.fetch_one("SELECT clock_timestamp() AS now")["now"]
         row = transaction.fetch_one(
             f"SELECT {self._FIELDS} FROM framework_credential "
@@ -270,16 +275,49 @@ class FrameworkCredentialRepository:
             _framework_credential_unavailable()
         observation = FrameworkCredentialObservation(
             FrameworkCredentialFence(
-                owner_id=owner, credential_id=credential, token_hash=token_hash, scopes=granted,
+                owner_id=owner,
+                credential_id=credential,
+                token_hash=token_hash,
+                scopes=granted,
                 max_admissions=record.max_admissions,
                 consumed_admissions=record.consumed_admissions,
-                created_at=record.created_at, expires_at=record.expires_at,
+                created_at=record.created_at,
+                expires_at=record.expires_at,
                 revoked_at=record.revoked_at,
             ),
-            started, started + timedelta(seconds=15),
+            started,
+            started + timedelta(seconds=15),
         )
         self.assert_current_execution(transaction, observation=observation)
         return observation
+
+    def _capture_operation_execution_observation(
+        self, transaction, *, owner_id, credential_id, expires_at
+    ):
+        row = transaction.fetch_one(
+            f"SELECT {self._FIELDS}, expires_at AS execution_expires_at FROM framework_credential "
+            "WHERE id=%s AND owner_id=%s FOR UPDATE",
+            (credential_id, owner_id),
+        )
+        if row is None:
+            _framework_credential_unavailable()
+        record = _record(row)
+        if "operations.submit" not in record.scopes:
+            _framework_credential_unavailable()
+        observation = self.capture_execution_observation(
+            transaction,
+            owner_id=owner_id,
+            credential_id=credential_id,
+            token_hash=_row_value(row, "token_hash"),
+            scopes=("operations.submit",),
+        )
+        bounded = FrameworkCredentialObservation(
+            observation.credential,
+            observation.started_at,
+            min(observation.valid_until, expires_at, _row_value(row, "execution_expires_at")),
+        )
+        self.assert_current_execution(transaction, observation=bounded)
+        return bounded
 
     @staticmethod
     def _lock_issuer_owner(transaction: Transaction, owner_id: str) -> None:

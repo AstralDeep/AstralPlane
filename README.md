@@ -427,3 +427,20 @@ Projects are exposed through `create_project_repository()` and `catalog.projects
 Schema `089.013` adds owner-scoped project rows, retained deletion identities, and normalized
 same-owner chat membership. See [project migration and recovery](docs/migration-and-recovery.md#089013-projects-and-recovery)
 for replay, pagination, and recovery contracts.
+
+### Framework operation execution observations
+
+`assignments.capture_framework_operation_execution_observation` captures the private
+credential observation for an existing, source-less framework chat operation. Callers
+pass the exact detached `AssignmentRecord` as `expected_record`, together with its
+owner and assignment IDs. The repository locks owner, credential, and assignment in
+that order, rejects changed state/control/instruction/operation/definition identity,
+and bounds freshness by 15 seconds, credential expiry, authority expiry, and operation
+deadline. Capture never consumes another admission. Claims, reservations, sends,
+renewals and result retention still require their existing execution fences.
+
+Administrative operation discovery now includes due framework chat operations with
+a current submit credential. Discovery itself grants no execution authority. No schema
+change is required; the existing qualified project and harness contracts are preserved.
+Raw bearer values remain outside Plane, and credential hashes remain private typed
+execution state rather than operation payload or public metadata.

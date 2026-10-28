@@ -93,6 +93,8 @@ def _validate_usage_basis(basis):
         if value not in _USAGE_BASIS_VALUES:
             raise RepositoryValidationError("invalid usage basis value")
     canonical(basis, 1024)
+
+
 _PHASES = {
     "awaiting_event",
     "waiting",
@@ -1671,8 +1673,15 @@ class AssignmentRepository:
         return None
 
     def list_owner_event_waits(
-        self, query, *, owner_id, event_keys=None, event_key_prefix=None, limit=50, after_id=None,
-        include_terminal=True
+        self,
+        query,
+        *,
+        owner_id,
+        event_keys=None,
+        event_key_prefix=None,
+        limit=50,
+        after_id=None,
+        include_terminal=True,
     ):
         _text(owner_id)
         _integer(limit, 1, 100)
@@ -1698,8 +1707,9 @@ class AssignmentRepository:
             predicate += " AND lifecycle IN ('active','paused')"
         rows = query.fetch_all(
             "SELECT * FROM persistent_assignment WHERE owner_user_id=%s "
-            "AND execution_profile='one_shot' AND " + predicate +
-            " AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
+            "AND execution_profile='one_shot' AND "
+            + predicate
+            + " AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
             (owner_id, *parameters, after_id, after_id, limit),
         )
         return tuple(
@@ -2385,8 +2395,16 @@ class AssignmentRepository:
             "AND data->'operation'->'version'='2'::jsonb "
             "AND COALESCE(data->'operation'->'control'->'version','1'::jsonb)='1'::jsonb "
             "AND COALESCE(data->'checkpoint'->'schema_version','1'::jsonb)='1'::jsonb "
-            "AND data->'operation'->'authority'->>'origin'='interactive' "
-            "AND data->'operation'->'authority'->>'reference_kind'='session_incarnation' "
+            "AND ((data->'operation'->'authority'->>'origin'='interactive' "
+            "AND data->'operation'->'authority'->>'reference_kind'='session_incarnation') "
+            "OR (data->'operation'->'authority'->>'origin'='framework' "
+            "AND data->'operation'->'authority'->>'reference_kind'='credential' "
+            "AND data->'operation'->>'kind'='chat' "
+            "AND EXISTS (SELECT 1 FROM framework_credential fc "
+            "WHERE fc.owner_id=persistent_assignment.owner_user_id "
+            "AND fc.id::text=data->'operation'->'authority'->>'reference_id' "
+            "AND fc.revoked_at IS NULL AND fc.expires_at>clock_timestamp() "
+            "AND fc.scopes ? 'operations.submit'))) "
             "AND (%s::timestamptz IS NULL OR (next_wake_at,id)>(%s,%s::uuid)) "
             "ORDER BY next_wake_at,id LIMIT %s",
             (after_due_at, after_due_at, after_id, limit),
@@ -2395,6 +2413,59 @@ class AssignmentRepository:
             _record(self._validated_assignment_row(row, row["owner_user_id"], str(row["id"])))
             for row in rows
         )
+
+    def capture_framework_operation_execution_observation(
+        self, transaction, *, owner_id, assignment_id, expected_record
+    ):
+        _uuid(assignment_id)
+        if (
+            type(expected_record) is not AssignmentRecord
+            or expected_record.owner_id != owner_id
+            or expected_record.assignment_id != assignment_id
+        ):
+            _conflict("assignment_authorization_unavailable")
+        if not self._lock_operation_owner(transaction, owner_id):
+            _conflict("assignment_owner_retired")
+        selected = self._load(transaction, owner_id, assignment_id)
+        _require_executable(selected)
+        operation = selected.get("operation", {})
+        authority = operation.get("authority", {})
+        definition = selected["definition"]
+        if (
+            selected.get("execution_profile") != "one_shot"
+            or selected.get("lifecycle") != "active"
+            or operation.get("version") != 2
+            or operation.get("kind") != "chat"
+            or authority.get("origin") != "framework"
+            or authority.get("reference_kind") != "credential"
+            or authority.get("owner_id") != owner_id
+            or definition.get("source")
+            or definition.get("allowed_tools")
+            or definition.get("consented_scopes")
+            or definition.get("offline_grant_id")
+            or operation.get("selection") is not None
+        ):
+            _conflict("assignment_authorization_unavailable")
+        _uuid(authority["reference_id"])
+        observation = FrameworkCredentialRepository()._capture_operation_execution_observation(
+            transaction,
+            owner_id=owner_id,
+            credential_id=authority["reference_id"],
+            expires_at=min(_time(authority["expires_at"]), _time(operation["deadline_at"])),
+        )
+        current = self._load(transaction, owner_id, assignment_id, lock=True)
+        if _record(current) != expected_record:
+            _conflict("assignment_state_changed")
+        self._validate_operation_continuation(transaction, current)
+        if (
+            self.get_selected_input(transaction, owner_id=owner_id, assignment_id=assignment_id)
+            is not None
+        ):
+            _conflict("assignment_authorization_unavailable")
+        self._assert_guidance_current(transaction, current, observation.valid_until)
+        if not self._lock_execution_authority(transaction, current, observation):
+            _conflict("assignment_authorization_unavailable")
+        return observation
 
     def claim_operation_for_administration(
         self,
@@ -2540,9 +2611,14 @@ class AssignmentRepository:
                         or state.credential_id != selected["reference_id"]
                     ):
                         return False
-                    FrameworkCredentialRepository().assert_current_execution(
+                    current = FrameworkCredentialRepository().assert_current_execution(
                         transaction, observation=authority
                     )
+                    if (
+                        "operations.submit" not in state.scopes
+                        or "operations.submit" not in current.credential.scopes
+                    ):
+                        return False
                 except (
                     AttributeError,
                     RepositoryConflictError,
