@@ -133,7 +133,10 @@ def test_populated_089_012_upgrade_preserves_rows_adds_only_observation_tables(p
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
     report = current_runner(db).run(expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision)
-    assert report.applied_steps == ("astralplane-089-observation-records",)
+    assert report.applied_steps == (
+        "astralplane-089-observation-records",
+        "astralplane-089-projects",
+    )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_all("SELECT * FROM tool_observation") == ()
@@ -174,7 +177,7 @@ def test_interrupted_observation_edge_rolls_back_and_retries(predecessor):
         )
     assert current_runner(db).run(
         expected_revision=m.CURRENT_DATA_PLANE_REVISION.schema_revision
-    ).applied_steps == ("astralplane-089-observation-records",)
+    ).applied_steps == ("astralplane-089-observation-records", "astralplane-089-projects")
 
 
 def test_observation_namesake_or_damaged_predecessor_is_refused(predecessor):

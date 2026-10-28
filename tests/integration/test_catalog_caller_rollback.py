@@ -108,6 +108,28 @@ class _CatalogDatabase:
     catalog: api.RepositoryCatalog
 
 
+def _write_projects(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    project_id = "11111111-1111-4111-8111-111111110082"
+    catalog.projects.create(
+        transaction,
+        owner_id=_OWNER,
+        project_id=project_id,
+        name="Rollback project",
+        position=0,
+        created_at=10,
+    )
+    catalog.projects.attach_chat(
+        transaction, owner_id=_OWNER, project_id=project_id, chat_id=_SUPPORT_CHAT
+    )
+
+
+def _observe_projects(transaction: Transaction) -> tuple[int, int]:
+    return (
+        _count("chat_project", "owner_id", _OWNER)(transaction),
+        _count("chat_project_membership", "owner_id", _OWNER)(transaction),
+    )
+
+
 def _observe_observations(transaction: Transaction) -> tuple[int, int]:
     observation = _count(
         "tool_observation", "observation_id", "11111111-1111-4111-8111-111111110081"
@@ -1437,6 +1459,7 @@ ROLLBACK_CASES = (
         (1, 1),
         (0, 0),
     ),
+    RollbackCase("projects", _write_projects, _observe_projects, (1, 1), (0, 0)),
     RollbackCase(
         "observations",
         _write_observations,
@@ -1623,7 +1646,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 48
+    assert len(applicable_keys) == len(set(applicable_keys)) == 49
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

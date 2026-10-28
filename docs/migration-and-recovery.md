@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e`. Existing notification, Atlas, mesh, stop,
+`4a346c04dfb71e87afcf0444e196f9771977005e0f925c1336d43b1ed1bd3869`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -517,7 +517,7 @@ link set that was not present when the backup was taken.
 
 This additive edge requires the exact `089.009` registry digest
 `c3e2b3d2d2a2f88a7b995eb6525f6f01df463bad5129a989f7ed70be5e95ed4b` and its
-catalog. Current catalog digest is
+catalog. The catalog digest immediately after this edge is
 `1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68`.
 It adds `operation_harness_binding`, a profile/version/artifact index, and an
 immutability function/trigger without altering operation, assignment, notification,
@@ -600,7 +600,7 @@ downgrade SQL.
 
 This additive edge requires the exact `089.011` registry digest
 `8677b4e37ea98a7471ca97a82bc0182aed0f68002cace976ecfaacf8487d04fc` and its
-catalog. Current catalog digest is
+catalog. The catalog digest immediately after this edge is
 `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d`.
 It adds `tool_observation` and `tool_observation_page` and alters nothing
 that exists. The parent table stores the owner/conversation/observation
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.012` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.013` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.012` state must carry the exact current registry
+   predecessor catalogs. A restored `089.013` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1052,3 +1052,47 @@ conditional issuer/client structural constraint. Existing queue records retain
 their ciphertext, client (including null), timestamps, attempt count, and IDs;
 issuer remains unknown. This migration does not dispatch, resolve, or relabel
 queued revocations.
+
+### `089.013` Projects and recovery
+
+The guarded `astralplane-089-projects` edge requires the exact `089.012` predecessor
+registry digest `58ba65b80bf3c1019c6c110d59cc618813668f7916f1621d851e58199738dc9e`
+and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d`.
+It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
+`chats_owner_identity` unique constraint on existing `(user_id,id)` values.
+Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
+The current catalog digest is `8b8717e86457edcff6c17661f3e74c61f227022ecfb399bb8d3b3484ad411233`;
+the current registry digest is `4a346c04dfb71e87afcf0444e196f9771977005e0f925c1336d43b1ed1bd3869`.
+Package version is `0.1.6`; read-compatible floor remains `066.001`.
+
+Projects use composite owner/project identities and integer millisecond timestamps supplied
+by the host. Create replay compares original name and position, even after rename, and does
+not compare a newly sampled timestamp. Rename and delete require the current revision.
+Deletion refuses a nonempty project and retains a private tombstone, hidden from public
+reads, which permanently refuses create replay for that owner/project identity. Chat deletion
+cascades membership cleanup. Attachment validates owned live project and owned chat under
+locks, replays the same attachment, and refuses reassignment to another project.
+Composite foreign keys enforce same-owner endpoints. Plane stores no folder paths, bookmarks,
+file access permissions, or product authorization in these tables.
+
+Project listing uses immutable `(position,project_id)` keysets. Chat listings use chat-ID
+keysets and include empty and archived chats. Owner cleanup listing binds its cursor to an
+exclusive creation cutoff; legacy null creation times count as zero. Returned chat rows are
+neutral inventory metadata, not a substitute for host publication authorization or message
+history. Cursors are typed and scope-validated; the host must authenticate any serialized cursor.
+
+`tests/integration/test_projects_upgrade.py` covers populated predecessor preservation,
+repeat/no-op, old-binary refusal, interruption rollback/retry, namesake collisions, and damaged
+constraints/indexes. `tests/test_projects.py` covers caller rollback, owner denials, replay,
+revision and clock fences, complete pagination, FK cleanup, and independent-connection races.
+The established pre-split restore suite also traverses this edge.
+
+Keep admission closed after a failed migration; its transaction rolls back new tables and the
+chat constraint together, leaving the predecessor revision/digest intact. Correct the cause
+and retry the guarded runner. For post-upgrade defects, prefer reviewed forward repair. If
+rollback is unavoidable, restore PostgreSQL and configured blob roots from the same qualified
+checkpoint with admission closed, verify the restored catalog and registry, retire restored
+sessions, and reconcile post-backup creates, attachments, and deletions before reopening.
+A restored pre-deletion row must not reactivate stale host folder grants: reconcile host access
+state before admission. Never erase project tombstones, rewrite markers, infer down-SQL, or
+run an older binary against the new revision. A database restore cannot restore local Mac grants.
