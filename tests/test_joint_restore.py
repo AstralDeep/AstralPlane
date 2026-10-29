@@ -131,13 +131,14 @@ def test_restore_blob_entry_rejects_unsafe_or_incomplete_metadata(changes) -> No
 
 
 def test_restore_blob_entry_accepts_only_empty_nested_stage_marker() -> None:
-    entry = RestoreBlobEntry(
-        root="attachments",
-        storage_key=f"owner/.astralplane-stage-{'a' * 64}.lock",
-        size_bytes=0,
-        sha256=hashlib.sha256(b"").hexdigest(),
-    )
-    assert entry.size_bytes == 0
+    for owner in ("owner", "__verif__owner"):
+        entry = RestoreBlobEntry(
+            root="attachments",
+            storage_key=f"{owner}/.astralplane-stage-{'a' * 64}.lock",
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+        assert entry.size_bytes == 0
     with pytest.raises(ValueError):
         RestoreBlobEntry(
             root="attachments",
@@ -161,6 +162,7 @@ def test_restore_blob_entry_accepts_only_empty_nested_stage_marker() -> None:
         )
     for storage_key in (
         f"owner/.astralplane-stage-{'A' * 64}.lock",
+        f"owner with spaces/.astralplane-stage-{'a' * 64}.lock",
         f".astralplane-other/.astralplane-stage-{'a' * 64}.lock",
         f"owner//.astralplane-stage-{'a' * 64}.lock",
         f"owner/.astralplane-stage-{'a' * 63}.lock",
@@ -188,7 +190,9 @@ def test_restore_blob_entry_accepts_only_empty_nested_stage_marker() -> None:
             size_bytes=0,
             sha256=hashlib.sha256(b"").hexdigest(),
         )
-    overlong = "/".join(["o" * 255] * 17 + [f".astralplane-stage-{'a' * 64}.lock"])
+    overlong = "/".join(
+        ["owner", *(["o" * 255] * 17), f".astralplane-stage-{'a' * 64}.lock"]
+    )
     with pytest.raises(ValueError):
         RestoreBlobEntry(
             root="attachments",

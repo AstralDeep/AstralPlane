@@ -41,8 +41,8 @@ special objects, and malformed internal control entries fail closed. The root-le
 `.astralplane-owner-locks` registry is validated as Plane control state and is not counted as a
 durable blob. Persistent staging replay fences named
 `.astralplane-stage-<64 lowercase hexadecimal characters>.lock` are included in the manifest as
-zero-byte entries. They are accepted only beneath an ordinary valid parent key that includes the
-owner component used by blob staging; a root-level marker cannot be produced by that API. Links,
+zero-byte entries. They are accepted only beneath a valid owner and parent key used by blob
+staging; a root-level marker cannot be produced by that API. Links,
 hard-linked markers, non-empty markers, and temporary staging files are refused. Normal blob
 storage-key validation continues to reject all `.astralplane-*` components.
 

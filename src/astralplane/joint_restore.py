@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from astralplane.blob_store import ExplicitRootStreamingBlobStore, validate_blob_storage_key
+from astralplane.blob_store import (
+    ExplicitRootStreamingBlobStore,
+    validate_blob_owner_id,
+    validate_blob_storage_key,
+)
 from astralplane.compatibility import BLOB_LAYOUT_VERSION
 from astralplane.database.migrations import CURRENT_DATA_PLANE_REVISION, MIGRATION_REGISTRY
 from astralplane.endpoint_readiness import EndpointFence, inspect_endpoint_readiness
@@ -217,8 +221,15 @@ def _is_stage_marker(storage_key: str) -> bool:
     components = storage_key.split("/")
     if len(components) <= 1 or _STAGE_MARKER_NAME.fullmatch(components[-1]) is None:
         return False
+    try:
+        validate_blob_owner_id(components[0])
+    except ValueError:
+        return False
     candidate = f"{'/'.join(components[:-1])}/{'x' * len(components[-1])}"
-    return validate_blob_storage_key(candidate) == candidate
+    try:
+        return validate_blob_storage_key(candidate) == candidate
+    except ValueError:
+        return False
 
 
 def _validate_restore_storage_key(storage_key: str) -> str:
