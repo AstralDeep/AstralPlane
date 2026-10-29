@@ -26,6 +26,8 @@ JOINT_RESTORE_CONTRACT_VERSION: Final = "astralplane.joint-restore/v1"
 _SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
 _ROOT_NAME: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _LOCK_NAME: Final = re.compile(r"^[0-9a-f]{64}\.lock$")
+_STAGE_MARKER_NAME: Final = re.compile(r"^\.astralplane-stage-[0-9a-f]{64}\.lock$")
+_EMPTY_SHA256: Final = hashlib.sha256(b"").hexdigest()
 _CONTROL_DIRECTORY: Final = ".astralplane-owner-locks"
 _MAX_KEY_COMPONENTS: Final = 32
 _FILE_ATTRIBUTE_REPARSE_POINT: Final = 0x400
@@ -46,7 +48,7 @@ class RestoreBlobEntry:
     def __post_init__(self) -> None:
         if not isinstance(self.root, str) or _ROOT_NAME.fullmatch(self.root) is None:
             raise ValueError("restore blob root must be a bounded identifier")
-        validate_blob_storage_key(self.storage_key)
+        _validate_restore_storage_key(self.storage_key)
         if (
             isinstance(self.size_bytes, bool)
             or not isinstance(self.size_bytes, int)
@@ -55,6 +57,10 @@ class RestoreBlobEntry:
             raise ValueError("restore blob size must be a non-negative integer")
         if not isinstance(self.sha256, str) or _SHA256.fullmatch(self.sha256) is None:
             raise ValueError("restore blob digest must be a lowercase SHA-256")
+        if _is_stage_marker(self.storage_key) and (
+            self.size_bytes != 0 or self.sha256 != _EMPTY_SHA256
+        ):
+            raise ValueError("restore stage markers must be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +211,25 @@ def _is_reparse(metadata: os.stat_result) -> bool:
     )
 
 
+def _is_stage_marker(storage_key: str) -> bool:
+    if not isinstance(storage_key, str):
+        return False
+    components = storage_key.split("/")
+    if len(components) <= 1 or _STAGE_MARKER_NAME.fullmatch(components[-1]) is None:
+        return False
+    candidate = f"{'/'.join(components[:-1])}/{'x' * len(components[-1])}"
+    return validate_blob_storage_key(candidate) == candidate
+
+
+def _validate_restore_storage_key(storage_key: str) -> str:
+    try:
+        return validate_blob_storage_key(storage_key)
+    except ValueError:
+        if _is_stage_marker(storage_key):
+            return storage_key
+        raise
+
+
 def _verify_control_directory(path: Path) -> None:
     try:
         metadata = os.lstat(path)
@@ -226,13 +251,17 @@ def _verify_control_directory(path: Path) -> None:
         _refuse("joint_restore_inventory_mismatch", "blob_control_unavailable")
 
 
-def _file_evidence(path: Path) -> tuple[int, str]:
+def _file_evidence(path: Path, *, require_single_link: bool = False) -> tuple[int, str]:
     descriptor = -1
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
         metadata = os.fstat(descriptor)
-        if _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+        if (
+            _is_reparse(metadata)
+            or not stat.S_ISREG(metadata.st_mode)
+            or (require_single_link and metadata.st_nlink != 1)
+        ):
             _refuse("joint_restore_inventory_mismatch", "blob_object_unsafe")
         hasher = hashlib.sha256()
         size = 0
@@ -284,10 +313,17 @@ def _walk_root(
                 elif stat.S_ISREG(metadata.st_mode):
                     storage_key = "/".join((*components, entry.name))
                     try:
-                        validate_blob_storage_key(storage_key)
+                        _validate_restore_storage_key(storage_key)
                     except ValueError:
                         _refuse("joint_restore_inventory_mismatch", "blob_key_unsafe")
-                    size, digest = _file_evidence(Path(entry.path))
+                    stage_marker = _is_stage_marker(storage_key)
+                    if stage_marker and metadata.st_nlink != 1:
+                        _refuse("joint_restore_inventory_mismatch", "blob_object_unsafe")
+                    size, digest = _file_evidence(
+                        Path(entry.path), require_single_link=stage_marker
+                    )
+                    if stage_marker and (size != 0 or digest != _EMPTY_SHA256):
+                        _refuse("joint_restore_inventory_mismatch", "blob_content_changed")
                     observed.append(
                         RestoreBlobEntry(
                             root=root_name,
