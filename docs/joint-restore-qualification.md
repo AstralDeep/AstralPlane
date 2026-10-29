@@ -39,7 +39,12 @@ exactly once in the manifest, and every manifest entry must exist with the exact
 SHA-256. Unexpected files, missing files, truncated content, digest changes, unsafe keys, links,
 special objects, and malformed internal control entries fail closed. The root-level
 `.astralplane-owner-locks` registry is validated as Plane control state and is not counted as a
-durable blob.
+durable blob. Persistent staging replay fences named
+`.astralplane-stage-<64 lowercase hexadecimal characters>.lock` are included in the manifest as
+zero-byte entries. They are accepted only beneath a valid owner and parent key used by blob
+staging; a root-level marker cannot be produced by that API. Links,
+hard-linked markers, non-empty markers, and temporary staging files are refused. Normal blob
+storage-key validation continues to reject all `.astralplane-*` components.
 
 `expected_blob_roots` binds the configured root-name set to the backup evidence, including an
 empty root. `expected_blob_inventory_digest` binds the manifest's contract version, root names,
@@ -64,7 +69,7 @@ session identity. Its stable fields are:
 | `blob_roots` | Sorted configured root names, not paths. |
 | `blob_identity` | Aggregate opaque filesystem identity of the scanned root set. |
 | `blob_inventory_digest` | Canonical digest of the verified manifest and root-name set. |
-| `blob_count`, `blob_size_bytes` | Exact verified durable file count and total bytes. |
+| `blob_count`, `blob_size_bytes` | Exact verified inventory file count and total bytes, including persistent staging replay fences. |
 | `fence_digest` | Digest of the endpoint fence binding database, schema, roots, inventory, and composition. |
 | `digest` | Digest binding the restore contract, fence, inventory, counts, and byte total. |
 

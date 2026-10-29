@@ -41,6 +41,19 @@ def _write(root, key: str, content: bytes) -> RestoreBlobEntry:
     )
 
 
+def _stage_marker(root, parent: str = "owner/nested") -> RestoreBlobEntry:
+    key = f"{parent}/.astralplane-stage-{'a' * 64}.lock"
+    path = root.joinpath(*key.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return RestoreBlobEntry(
+        root="attachments",
+        storage_key=key,
+        size_bytes=0,
+        sha256=hashlib.sha256(b"").hexdigest(),
+    )
+
+
 def _request(root, entries):
     return {
         "database_url": "PRIVATE-DSN",
@@ -115,6 +128,187 @@ def test_restore_blob_entry_rejects_unsafe_or_incomplete_metadata(changes) -> No
     values.update(changes)
     with pytest.raises(ValueError):
         RestoreBlobEntry(**values)
+
+
+def test_restore_blob_entry_accepts_only_empty_nested_stage_marker() -> None:
+    for owner in ("owner", "__verif__owner"):
+        entry = RestoreBlobEntry(
+            root="attachments",
+            storage_key=f"{owner}/.astralplane-stage-{'a' * 64}.lock",
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+        assert entry.size_bytes == 0
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=f".astralplane-stage-{'a' * 64}.lock",
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=None,
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=f"owner/.astralplane-stage-{'a' * 64}.lock",
+            size_bytes=1,
+            sha256=hashlib.sha256(b"x").hexdigest(),
+        )
+    for storage_key in (
+        f"owner/.astralplane-stage-{'A' * 64}.lock",
+        f"owner with spaces/.astralplane-stage-{'a' * 64}.lock",
+        f".astralplane-other/.astralplane-stage-{'a' * 64}.lock",
+        f"owner//.astralplane-stage-{'a' * 64}.lock",
+        f"owner/.astralplane-stage-{'a' * 63}.lock",
+        f"owner/.astralplane-stage-{'a' * 64}.lock/child",
+    ):
+        with pytest.raises(ValueError):
+            RestoreBlobEntry(
+                root="attachments",
+                storage_key=storage_key,
+                size_bytes=0,
+                sha256=hashlib.sha256(b"").hexdigest(),
+            )
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=f"owner/.astralplane-stage-{'a' * 64}.lock",
+            size_bytes=0,
+            sha256="b" * 64,
+        )
+    overdeep = "/".join(["o"] * 32 + [f".astralplane-stage-{'a' * 64}.lock"])
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=overdeep,
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+    overlong = "/".join(
+        ["owner", *(["o" * 255] * 17), f".astralplane-stage-{'a' * 64}.lock"]
+    )
+    with pytest.raises(ValueError):
+        RestoreBlobEntry(
+            root="attachments",
+            storage_key=overlong,
+            size_bytes=0,
+            sha256=hashlib.sha256(b"").hexdigest(),
+        )
+
+
+def test_restore_inventory_accepts_exact_persistent_stage_marker(tmp_path) -> None:
+    root = tmp_path / "attachments"
+    root.mkdir()
+    blob = _write(root, "owner/nested/file.bin", b"content")
+    marker = _stage_marker(root)
+    assert module._blob_evidence({"attachments": root}, (blob, marker))[1:] == (2, 7)
+    with pytest.raises(ValueError):
+        module.validate_blob_storage_key(marker.storage_key)
+
+
+def test_public_qualification_accepts_product_created_stage_marker(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "attachments"
+    root.mkdir()
+    content = b"published by blob staging"
+    blob_key = "owner/recovery/file.bin"
+    storage = module.ExplicitRootStreamingBlobStore(root, create_root=False)
+    from astralplane.blob_store import _create_blob_publish_authority
+
+    authority = _create_blob_publish_authority(
+        owner_id="owner",
+        storage_key="recovery/file.bin",
+        max_bytes=len(content),
+        lease_id="restore-marker-test",
+    )
+    reservation = storage.reserve_materialization_staging(owner_id="owner")
+    staged = storage._begin_staged_materialization(
+        authority=authority,
+        reservation=reservation,
+    ).write_chunks((content,))
+    storage._publish_staged_materialization(staged, authority=authority)
+    storage.close()
+    blob = RestoreBlobEntry(
+        root="attachments",
+        storage_key=blob_key,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    staging_digest = hashlib.sha256(b"owner\0recovery/file.bin").hexdigest()
+    marker_key = (
+        "owner/recovery/.astralplane-stage-"
+        f"{staging_digest}.lock"
+    )
+    marker = RestoreBlobEntry(
+        root="attachments",
+        storage_key=marker_key,
+        size_bytes=0,
+        sha256=hashlib.sha256(b"").hexdigest(),
+    )
+    _install_qualified(monkeypatch, root)
+    evidence = module.qualify_joint_restore(**_request(root, (blob, marker)))
+    assert evidence.blob_count == 2
+    assert evidence.blob_size_bytes == len(content)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "extra",
+        "changed",
+        "nonzero",
+        "symlink",
+        "hardlink",
+        "temporary",
+        "malformed",
+    ],
+)
+def test_restore_inventory_rejects_damaged_or_malformed_stage_markers(
+    tmp_path, damage: str
+) -> None:
+    root = tmp_path / "attachments"
+    root.mkdir()
+    blob = _write(root, "owner/file.bin", b"content")
+    marker = _stage_marker(root)
+    marker_path = root.joinpath(*marker.storage_key.split("/"))
+    inventory = (blob, marker)
+    if damage == "missing":
+        marker_path.unlink()
+    elif damage == "extra":
+        inventory = (blob,)
+    elif damage == "changed":
+        marker_path.write_bytes(b"changed")
+    elif damage == "nonzero":
+        with pytest.raises(ValueError):
+            replace(marker, size_bytes=7, sha256=hashlib.sha256(b"changed").hexdigest())
+        marker_path.write_bytes(b"changed")
+    elif damage == "symlink":
+        marker_path.unlink()
+        target = tmp_path / "outside.lock"
+        target.write_bytes(b"")
+        try:
+            os.symlink(target, marker_path)
+        except OSError:
+            pytest.skip("file symlinks are unavailable on this host")
+    elif damage == "hardlink":
+        target = tmp_path / "outside.lock"
+        try:
+            os.link(marker_path, target)
+        except OSError:
+            pytest.skip("hard links are unavailable on this host")
+    elif damage == "temporary":
+        (marker_path.parent / (marker_path.name.removesuffix(".lock") + ".tmp")).write_bytes(b"")
+    else:
+        malformed = marker_path.parent / ".astralplane-stage-invalid.lock"
+        malformed.write_bytes(b"")
+    with pytest.raises(JointRestoreError):
+        module._blob_evidence({"attachments": root}, inventory)
 
 
 @pytest.mark.parametrize(

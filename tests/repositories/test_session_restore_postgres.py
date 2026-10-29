@@ -67,21 +67,50 @@ def sessions(database):
 
 
 def joint_restore_arguments(target, tmp_path):
+    from astralplane.blob_store import (
+        ExplicitRootStreamingBlobStore,
+        _create_blob_publish_authority,
+    )
+
     root = tmp_path / "restored-durable-root"
     root.mkdir()
     content = b"synthetic preserved bytes"
-    blob = root / "preserved.bin"
-    blob.write_bytes(content)
-    entry = RestoreBlobEntry(
+    storage = ExplicitRootStreamingBlobStore(root, create_root=False)
+    authority = _create_blob_publish_authority(
+        owner_id="owner",
+        storage_key="recovery/preserved.bin",
+        max_bytes=len(content),
+        lease_id="restore-test-stage",
+    )
+    reservation = storage.reserve_materialization_staging(owner_id="owner")
+    staged = storage._begin_staged_materialization(
+        authority=authority,
+        reservation=reservation,
+    ).write_chunks((content,))
+    storage._publish_staged_materialization(staged, authority=authority)
+    storage.close()
+    blob = root / "owner" / "recovery" / "preserved.bin"
+    blob_entry = RestoreBlobEntry(
         root="attachments",
-        storage_key="preserved.bin",
+        storage_key="owner/recovery/preserved.bin",
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
+    )
+    staging_digest = hashlib.sha256(b"owner\0recovery/preserved.bin").hexdigest()
+    marker_key = (
+        "owner/recovery/.astralplane-stage-"
+        f"{staging_digest}.lock"
+    )
+    marker_entry = RestoreBlobEntry(
+        root="attachments",
+        storage_key=marker_key,
+        size_bytes=0,
+        sha256=hashlib.sha256(b"").hexdigest(),
     )
     return blob, {
         **target,
         "blob_roots": {"attachments": root},
-        "blob_inventory": (entry,),
+        "blob_inventory": (blob_entry, marker_entry),
         "expected_blob_roots": ("attachments",),
     }
 
