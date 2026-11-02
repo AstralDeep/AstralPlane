@@ -109,25 +109,30 @@ def test_owner_is_required(operation):
 )
 def test_phi_protection_defaults_off_until_explicitly_enabled(value, expected):
     row = None if value is None else {"preferences": json.dumps(value)}
-    assert PreferencesRepository().get_phi_protection_enabled(Transaction(row), owner_id="u") is expected
+    repository = PreferencesRepository()
+    assert repository.get_phi_protection_enabled(Transaction(row), owner_id="u") is expected
 
 
 def test_phi_protection_rejects_a_non_boolean_stored_value():
     row = {"preferences": json.dumps({"phi_protection_enabled": "yes"})}
     with pytest.raises(RepositoryDataError):
-        PreferencesRepository().get_phi_protection_enabled(Transaction(row), owner_id="u")
+        PreferencesRepository().get_phi_protection_enabled(
+            Transaction(row), owner_id="u"
+        )
 
 
 def test_phi_protection_write_merges_into_the_document_and_requires_a_bool():
-    row = {"preferences": json.dumps({"theme": {"preset": "graphite"}, "chat_phi_notice_enabled": False})}
+    stored = {"theme": {"preset": "graphite"}, "chat_phi_notice_enabled": False}
+    row = {"preferences": json.dumps(stored)}
     transaction = Transaction(row)
-    PreferencesRepository().set_phi_protection_enabled(transaction, owner_id="u", enabled=True)
+    repository = PreferencesRepository()
+    repository.set_phi_protection_enabled(transaction, owner_id="u", enabled=True)
     update_sql, update_params = transaction.calls[-1]
     assert update_sql.startswith("UPDATE user_preferences SET preferences")
-    assert json.loads(update_params[0]) == {
-        "theme": {"preset": "graphite"}, "chat_phi_notice_enabled": False, "phi_protection_enabled": True,
-    }
+    assert json.loads(update_params[0]) == {**stored, "phi_protection_enabled": True}
     with pytest.raises(RepositoryValidationError):
-        PreferencesRepository().set_phi_protection_enabled(Transaction(row), owner_id="u", enabled="on")
+        repository.set_phi_protection_enabled(Transaction(row), owner_id="u", enabled="on")
     with pytest.raises(RepositoryConflictError):
-        PreferencesRepository().set_phi_protection_enabled(Transaction(row, rowcount=0), owner_id="u", enabled=True)
+        repository.set_phi_protection_enabled(
+            Transaction(row, rowcount=0), owner_id="u", enabled=True
+        )
