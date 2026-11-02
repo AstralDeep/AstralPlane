@@ -1708,6 +1708,51 @@ class PreferencesRepository:
         if result.rowcount != 1:
             raise RepositoryConflictError("chat notice preference update was not applied")
 
+    def get_phi_protection_enabled(self, query: QueryExecutor, *, owner_id: str) -> bool:
+        owner_id = _required_id(owner_id, "owner_id")
+        row = query.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s", (owner_id,)
+        )
+        if row is None:
+            return False
+        preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+        if not isinstance(preferences, Mapping):
+            raise RepositoryDataError("persisted preferences document must be an object")
+        enabled = preferences.get("phi_protection_enabled", False)
+        if type(enabled) is not bool:
+            raise RepositoryDataError("persisted PHI protection preference must be boolean")
+        return enabled
+
+    def set_phi_protection_enabled(
+        self, transaction: Transaction, *, owner_id: str, enabled: bool
+    ) -> None:
+        owner_id = _required_id(owner_id, "owner_id")
+        if type(enabled) is not bool:
+            raise RepositoryValidationError("PHI protection preference must be boolean")
+        transaction.execute(
+            "INSERT INTO user_preferences (user_id, preferences, updated_at) "
+            "VALUES (%s, '{}', 0) ON CONFLICT (user_id) DO NOTHING", (owner_id,)
+        )
+        row = transaction.fetch_one(
+            "SELECT preferences FROM user_preferences WHERE user_id = %s FOR UPDATE",
+            (owner_id,),
+        )
+        if row is None:
+            raise RepositoryConflictError("PHI protection preference row disappeared")
+        preferences = _structured_json(_row_value(row, "preferences"), "preferences")
+        if not isinstance(preferences, Mapping):
+            raise RepositoryDataError("persisted preferences document must be an object")
+        merged = dict(preferences)
+        merged["phi_protection_enabled"] = enabled
+        result = transaction.execute(
+            "UPDATE user_preferences SET preferences = %s, "
+            "updated_at = GREATEST(COALESCE(updated_at, 0) + 1, "
+            "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT) "
+            "WHERE user_id = %s", (_canonical_json(merged, "preferences"), owner_id),
+        )
+        if result.rowcount != 1:
+            raise RepositoryConflictError("PHI protection preference update was not applied")
+
     def get_chat_organization(
         self, query: QueryExecutor, *, owner_id: str
     ) -> ChatOrganizationRecord:
