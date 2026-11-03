@@ -10,7 +10,7 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.014`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.015`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
   `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
@@ -25,11 +25,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
 Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.014` database must carry the exact current
+before the first migration write. A current `089.015` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -454,3 +454,13 @@ stores capture inside new admission and checks its identity before the existing 
 binding; exact replay retains the original capture. The host owns authentication, deployment
 qualification, configuration identity and selection policy. No provider URL or caller-supplied
 qualification flag grants harness authority. See the guarded migration and recovery section.
+
+### Conversation branches and forks
+
+Schema `089.015` stores a conversation as a tree. Every message records its parent,
+each conversation has one compare-and-set branch head with an optional workspace-snapshot
+pointer, and a forked conversation records its source chat and source message on the chat
+row. The guarded migration backfills each existing linear chat as one branch in the exact
+`list_visible` order, so visible output never changes. Branch-path, sibling-count, and
+branch-head reads stay owner-scoped; fork creation copies references and never task grants,
+approvals, bypass state, or pending cards. See the guarded migration and recovery section.
