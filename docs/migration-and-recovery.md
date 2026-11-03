@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`. Existing notification, Atlas, mesh, stop,
+`7ab2908729ed097160b0b0a78cfa1b152d9a07cdc8920929e6f7a03a0ce1962e`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.014` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.015` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.014` state must carry the exact current registry
+   predecessor catalogs. A restored `089.015` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1061,8 +1061,8 @@ and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1
 It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
-The current catalog digest is `5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1`;
-the current registry digest is `5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`.
+The current catalog digest is `2876933df53b5f916b73747d97935b941f08426bc1327577ebca1582b309dea3`;
+the current registry digest is `7ab2908729ed097160b0b0a78cfa1b152d9a07cdc8920929e6f7a03a0ce1962e`.
 Package version is `0.1.6`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
@@ -1145,3 +1145,52 @@ host checks the exact current selection/config before normal class/slot admissio
 replay ordinary submit alone decides the original accepted/refused/conflicting outcome; current
 rollout or configuration must not reinterpret it. Authentication and current-caller checks remain
 mandatory in either path.
+
+
+### `089.015` Mac computer-use bookkeeping and recovery
+
+The guarded `astralplane-089-computer-use` edge accepts only the exact `089.014`
+predecessor catalog and registry digest. It adds `computer_session`,
+`computer_task_grant`, `computer_host_effect_intent`, and `computer_approval_fence`
+with their owner-scoped ordering indexes and lifecycle constraints. Existing
+operations, assignments, captures, and every earlier record remain unchanged; the
+edge installs empty bookkeeping tables and never backfills sessions, grants,
+intents, or fences from any other store.
+
+Sessions carry host id, host incarnation, bounded state (`active`, `paused`,
+`ended`), and a bounded pause reason; transitions are revision-fenced
+compare-and-set writes scoped to the calling owner in the same statement. Task
+grants carry a SHA-256 binding digest, expiry, hard cap, use count, and revocation;
+consumption is a fenced increment that refuses exhausted, expired, or revoked
+grants with a typed error so the caller can fail closed. Host effect intents bind
+the remote operation id, a bounded verb, and an argument digest; states move one
+way only from `pending` to `committed` or `unknown`, then to `acknowledged`, and an
+`unknown` intent never returns to `pending`. Bulk startup recovery marks an owner's
+pending intents unknown in one bounded statement and returns the records. Approval
+fences are single-use: `open` becomes `consumed` or `released` exactly once.
+
+Records hold only digests and bounded identifiers; screenshots, file contents,
+command output, and clipboard text have no column and no path into Plane. Another
+owner cannot read, acknowledge, revoke, consume, or delete a record because every
+statement filters on the owner. Retention is explicit: ended sessions and expired
+or revoked grants are deleted in bounded batches ordered by their end timestamps,
+and no purge tombstone is required because these rows never gate admission.
+
+The current binary can migrate declared predecessor revisions. An older binary
+cannot run against `089.015`: its guarded registry rejects the unknown revision and
+catalog. Exact Deep composition pin checks must also pass before admission opens.
+Do not downgrade a composition that could lose effect bookkeeping; quiesce
+admission and use a verified joint restore of the matching database and blob state,
+or forward repair while preserving the bookkeeping tables. Never drop intent rows
+or rewrite revision markers to recover availability: after a crash, list open
+intents per owner, mark them unknown in bulk, and let Deep decide the recovery
+policy for the uncertain host effects. A database restore cannot restore live Mac
+sessions; the host must re-establish them.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows,
+repeat the migration, interrupt and recover the edge transaction, reject foreign
+namesakes and damaged indexes, and prove old-reader denial. Repository tests cover
+owner isolation, monotonic intent transitions under concurrency, revision fences,
+expiry and hard-cap refusal, single-use fences, retention bounds, and rollback
+safety. The live check restarts a sandbox server mid-task only after the Deep work
+lands; until then this remains host-side acceptance, not Plane qualification.
