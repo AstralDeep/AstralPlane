@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`. Existing notification, Atlas, mesh, stop,
+`6a4faf0c0e5ae1d5b35e61548dc63b5acdf81236fdc382c2e3b6832b2525a070`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.014` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.015` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.014` state must carry the exact current registry
+   predecessor catalogs. A restored `089.015` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1062,7 +1062,7 @@ It adds `chat_project`, `chat_project_membership`, their ordering indexes, and t
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
 The current catalog digest is `5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1`;
-the current registry digest is `5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06`.
+the current registry digest is `6a4faf0c0e5ae1d5b35e61548dc63b5acdf81236fdc382c2e3b6832b2525a070`.
 Package version is `0.1.6`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
@@ -1145,3 +1145,40 @@ host checks the exact current selection/config before normal class/slot admissio
 replay ordinary submit alone decides the original accepted/refused/conflicting outcome; current
 rollout or configuration must not reinterpret it. Authentication and current-caller checks remain
 mandatory in either path.
+
+### `089.015` Conversation branches and recovery
+
+The guarded `astralplane-089-conversation-branches` edge accepts only the exact `089.014`
+predecessor catalog and registry digest. It adds `messages.parent_message_id`, the
+per-conversation `chat_branch_head` with a compare-and-set version and optional
+workspace-snapshot pointer, and fork lineage columns on `chats`. The backfill chains each
+chat's visible messages in the exact `list_visible` order, so migrated chats become one
+linear branch whose head is the last visible message; staged, aborted, and deleted chat
+rows are never made visible and visible order never changes. Rows are never rewritten
+except for the new parent pointer, and the original exchange stays reconstructible from
+commit positions alone.
+
+Branch and fork rows carry stable parent identifiers; fork creation copies references,
+never task grants, approvals, bypass state, or pending cards, and every read stays
+owner-scoped in the SQL predicate. Moving a branch head is one compare-and-set statement:
+a stale version is refused with a typed conflict and the caller reloads the head record
+and retries. Messages are appended with an explicit visible parent from the same
+conversation; a parent from another owner or conversation is refused as not found.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot run
+against `089.015`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. Do not downgrade a composition
+that already serves branch reads; quiesce admission and use a verified joint restore of the
+matching database and blob state, or forward repair while preserving parent links and branch
+heads. Never delete parent links, zero branch-head versions, or infer lineage from message
+order at read time to recover availability. Normal chat deletion cascades messages, branch
+heads, and fork lineage references; deleting a source chat or message nulls the surviving
+fork's lineage columns without touching its own rows.
+
+Representative PostgreSQL tests populate long chats, chats with committed, staged, and
+aborted publications, deleted chats, and multiple owners, then prove identical visible
+output, visible-order parent backfill, one branch head per chat, repeat safety, whole-edge
+rollback after an injected interruption with full recovery, foreign namesake and damaged
+catalog refusal, and old-reader denial. Repository tests cover owner-scoped branch reads,
+sibling counts, compare-and-set head moves including a concurrent single-winner race,
+fork lineage replay, and typed cross-owner refusals.
