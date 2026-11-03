@@ -99,6 +99,7 @@ def test_populated_upgrade_preserves_rows_and_repeats(predecessor):
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
+        "astralplane-089-chat-queue",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -186,6 +187,7 @@ def test_partial_migration_rolls_back_and_retries(predecessor):
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
+        "astralplane-089-chat-queue",
     )
 
 
