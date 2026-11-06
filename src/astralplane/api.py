@@ -151,6 +151,11 @@ from astralplane.repositories.capability_publications import (
     CapabilityPublicationRepository,
     CapabilityPublicationState,
 )
+from astralplane.repositories.chat_read_receipts import (
+    ChatReadReceiptRecord,
+    ChatReadReceiptRepository,
+    ChatReadStateRecord,
+)
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.conversation_files import ConversationFileRepository
@@ -346,6 +351,10 @@ def create_share_grant_repository() -> ShareGrantRepository:
     return ShareGrantRepository()
 
 
+def create_chat_read_receipt_repository() -> ChatReadReceiptRepository:
+    return ChatReadReceiptRepository()
+
+
 def create_chat_step_repository() -> ChatStepRepository:
     return ChatStepRepository()
 
@@ -514,6 +523,7 @@ class RepositoryCatalog:
     offline_grants: OfflineGrantRepository
     framework_credentials: FrameworkCredentialRepository
     share_grants: ShareGrantRepository
+    chat_read_receipts: ChatReadReceiptRepository
     chat_steps: ChatStepRepository
     conversation_files: ConversationFileRepository
     saved_components: SavedComponentRepository
@@ -566,6 +576,7 @@ class RepositoryCatalog:
                 "audit_retention": self.audit_retention,
                 "authority": self.authority,
                 "background_tasks": self.background_tasks,
+                "chat_read_receipts": self.chat_read_receipts,
                 "chat_steps": self.chat_steps,
                 "conversation_files": self.conversation_files,
                 "credentials": self.credentials,
@@ -631,6 +642,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         offline_grants=create_offline_grant_repository(),
         framework_credentials=create_framework_credential_repository(),
         share_grants=create_share_grant_repository(),
+        chat_read_receipts=create_chat_read_receipt_repository(),
         chat_steps=create_chat_step_repository(),
         conversation_files=create_conversation_file_repository(),
         saved_components=create_saved_component_repository(),
@@ -927,6 +939,9 @@ __all__ = (
     "CapabilityPublicationRecord",
     "CapabilityPublicationRepository",
     "CapabilityPublicationState",
+    "ChatReadReceiptRecord",
+    "ChatReadReceiptRepository",
+    "ChatReadStateRecord",
     "ClaimedPushDelivery",
     "DraftAgentRecord",
     "DraftPublicationRecord",
@@ -1008,6 +1023,7 @@ __all__ = (
     "create_authority_repository",
     "create_background_task_repository",
     "create_capability_publication_repository",
+    "create_chat_read_receipt_repository",
     "create_chat_step_repository",
     "create_conversation_file_repository",
     "create_credential_repository",
