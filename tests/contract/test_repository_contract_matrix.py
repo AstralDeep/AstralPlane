@@ -179,6 +179,14 @@ def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _verification_credentials(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.verification_credentials.get_credential(
+        transaction,
+        owner_id=_OWNER,
+        credential_id=_UUID4,
+    )
+
+
 def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
@@ -714,6 +722,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "verification_credentials",
+        api.create_verification_credential_repository,
+        "src/astralplane/repositories/verification_credentials.py",
+        _verification_credentials,
+        _OWNER,
+        "owner_id = %s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "record_version = %s"),
+        ("ON CONFLICT", "replay changed immutable semantics"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
         "notifications",
         api.create_notification_repository,
         "src/astralplane/repositories/notifications.py",
@@ -1244,6 +1264,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_mesh_enrollment_postgres:test_invitation_lifecycle_is_atomic_and_single_use",
         "tests.repositories.test_mesh_enrollment_postgres:test_concurrent_invitation_consumption_admits_exactly_one",
         "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
+    ),
+    BehavioralEvidence(
+        "verification_credentials",
+        "tests.repositories.test_verification_credentials_postgres:test_owner_isolation_replay_and_limit_are_atomic",
+        "tests.repositories.test_verification_credentials_postgres:test_revocation_cas_replay_and_challenge_single_use",
+        "tests.repositories.test_verification_credentials_postgres:test_concurrent_revocation_never_returns_active",
+        "tests.repositories.test_verification_credentials_postgres:test_invalid_inputs_and_foreign_rows_fail_closed",
     ),
     BehavioralEvidence(
         "notifications",
