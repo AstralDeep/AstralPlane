@@ -68,7 +68,7 @@
         },
         {
           "path": "tests/test_revision.py",
-          "sha256": "391df3c57c6809558d51405d024356e7a35b04729f9a8a6c67f494c3007f7c6a"
+          "sha256": "8686f3eae6fbc519ff8ecf7ef738a9d39f114e37c7ca03ca1b7c4de0e1c081f1"
         }
       ],
       "task": "T075/T085",
@@ -140,7 +140,7 @@
         },
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "70a666f1113cc7c60e2e14cb6740bb34fbc6828f0e390bf5b79c9d5e81e6b2d5"
+          "sha256": "9157d449047c7ae713d2090d884cb74a4f2d72e7f80e2d89189c9bf74e371850"
         },
         {
           "path": "tests/repositories/test_knowledge.py",
@@ -201,7 +201,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "70a666f1113cc7c60e2e14cb6740bb34fbc6828f0e390bf5b79c9d5e81e6b2d5"
+          "sha256": "9157d449047c7ae713d2090d884cb74a4f2d72e7f80e2d89189c9bf74e371850"
         }
       ],
       "task": "T081",
@@ -529,7 +529,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/preferences.py",
-          "sha256": "70a666f1113cc7c60e2e14cb6740bb34fbc6828f0e390bf5b79c9d5e81e6b2d5"
+          "sha256": "9157d449047c7ae713d2090d884cb74a4f2d72e7f80e2d89189c9bf74e371850"
         },
         {
           "path": "tests/repositories/test_memory_envelope_page.py",
@@ -643,7 +643,7 @@
         },
         {
           "path": "src/astralplane/database/migrations.py",
-          "sha256": "f8dcd513ef7b45083a10b05d3ee8d59adc736327fcb0238bdb2d43e8ca08b15a"
+          "sha256": "f06a5c3f4026a31c1ee87bd321502be61a6c13387370a8419b2711a38f7bd94e"
         },
         {
           "path": "src/astralplane/database/pool.py",
@@ -787,7 +787,7 @@
         },
         {
           "path": "tests/test_schema_migrations.py",
-          "sha256": "06f94e2c6a69ee77df6aa4b4eba010c331ddf27452637680ec51acf237addaab"
+          "sha256": "869709d622613a6bb072cdc2e9a74406d3076f5ca73b69d29ea58bff374690a8"
         },
         {
           "path": "tests/test_sql_parameters.py",

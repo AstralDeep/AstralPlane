@@ -408,6 +408,16 @@ def _write_background_tasks(catalog: api.RepositoryCatalog, transaction: Transac
     )
 
 
+def _write_chat_read_receipts(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.chat_read_receipts.mark_seen(
+        transaction,
+        owner_id=_OWNER,
+        chat_id=_SUPPORT_CHAT,
+        last_seen_position=3,
+        expected_revision=0,
+    )
+
+
 def _write_chat_steps(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.chat_steps.create_step(
         transaction,
@@ -1370,6 +1380,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "chat_read_receipts",
+        _write_chat_read_receipts,
+        _count("chat_read_receipt", "owner_id", _OWNER),
+        1,
+        0,
+    ),
+    RollbackCase(
         "chat_steps", _write_chat_steps, _count("chat_steps", "id", "rollback-chat-step"), 1, 0
     ),
     RollbackCase(
@@ -1646,7 +1663,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 49
+    assert len(applicable_keys) == len(set(applicable_keys)) == 50
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

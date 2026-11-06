@@ -252,6 +252,10 @@ def _attachment_parsers(catalog: api.RepositoryCatalog, transaction: FailingExec
     )
 
 
+def _chat_read_receipts(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.chat_read_receipts.get(transaction, owner_id=_OWNER, chat_id="contract-chat")
+
+
 def _chat_steps(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.chat_steps.get_step(transaction, owner_id=_OWNER, step_id="step-1")
 
@@ -544,6 +548,22 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("ON CONFLICT (task_id)", "replay changed immutable state"),
         None,
         ("RepositoryConflictError", "RepositoryNotFoundError"),
+    ),
+    RepositoryContract(
+        "chat_read_receipts",
+        api.create_chat_read_receipt_repository,
+        "src/astralplane/repositories/chat_read_receipts.py",
+        _chat_read_receipts,
+        _OWNER,
+        "owner_id = %s AND chat_id = %s",
+        ("last_seen_position < EXCLUDED.last_seen_position", "revision = %s"),
+        ("ON CONFLICT (owner_id, chat_id)", "read receipt revision is stale"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+        ),
     ),
     RepositoryContract(
         "chat_steps",
@@ -1134,6 +1154,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_background_tasks:test_create_replay_is_idempotent_but_conflicting_or_foreign_is_rejected",
         "tests.repositories.test_background_tasks:test_mark_notified_is_an_unambiguous_owner_cas",
         "tests.repositories.test_background_tasks:test_foreign_driver_row_fails_closed",
+    ),
+    BehavioralEvidence(
+        "chat_read_receipts",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
     ),
     BehavioralEvidence(
         "chat_steps",
