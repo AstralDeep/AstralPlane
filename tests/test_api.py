@@ -327,6 +327,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "knowledge",
         "maintenance",
         "mesh_enrollment",
+        "verification_credentials",
         "notifications",
         "push_deliveries",
         "projects",
