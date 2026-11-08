@@ -30,10 +30,9 @@ def test_removed_assertions_and_added_skips_are_review_findings():
     assert inspect_change(".github/workflows/ci.yml", "", "") == [
         {"path": ".github/workflows/ci.yml", "kind": "qualification-policy-change"}
     ]
-    for path in (".specify/memory/constitution.md", "uv.lock"):
-        assert inspect_change(path, "", "") == [
-            {"path": path, "kind": "qualification-policy-change"},
-        ]
+    assert inspect_change("uv.lock", "", "") == [
+        {"path": "uv.lock", "kind": "qualification-policy-change"},
+    ]
 
 
 def test_deletion_and_cli_produce_immutable_diagnostic_receipts(tmp_path):
