@@ -223,6 +223,7 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

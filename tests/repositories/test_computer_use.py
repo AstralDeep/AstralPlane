@@ -172,7 +172,7 @@ def test_facade_exposes_computer_use_repository() -> None:
 def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> None:
     edge = canonical.PLANE_SCHEMA_089_018_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
     assert edge.name == "astralplane-089-computer-use"
     assert edge.source_revisions == ("089.017",)
     assert edge.target_revision == "089.018"
@@ -193,7 +193,7 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
     assert canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST == (
         "99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.018"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.019"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.017") == (
         canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST
     )
@@ -201,16 +201,16 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
         "86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "ea9ef03c7818484211071ae4182b12ba9b4eb0f6e3b0863aa6792e9dcc1ec625"
+        "78774d997f0f9403dd19b1649ef48e230de62bc6c4954416a647e259d11a0203"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "d49c20e41432617a68a969ce89dc5a66bcaf8c48734b6318a6271afe52b55efc"
+        "908c445c4722c9dc9c1bc9e30a5beb855701d25e5accbbe78ada05cb11447ea8"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "7219a65ae24832f0bbf1a29fce458a46c65990eb78cce837b43ba5c17154f581"
+        "5ca27137697062b307834d4c41ee970dad04ef5058f8c971acf021c99548e7e6"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "30a2982f3e2ffa8bd96e917b432e8f63ba77587d32d06c362457bb8cf9195492"
+        "5c81191286b6cad6ef12d3e1005af7577b908f0a1b5ecbe63606c7e34a553746"
     )
 
 

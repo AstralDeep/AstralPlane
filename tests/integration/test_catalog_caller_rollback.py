@@ -753,6 +753,41 @@ def _write_mesh_enrollment(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_verification_credentials(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.verification_credentials.enroll_credential(
+        transaction,
+        owner_id=_OWNER,
+        credential_id="11111111-1111-4111-8111-111111110076",
+        device_id="rollback-mac-device",
+        algorithm="es256",
+        key_format="spki",
+        public_key="0" * 64,
+    )
+    catalog.verification_credentials.consume_challenge(
+        transaction,
+        owner_id=_OWNER,
+        challenge_digest="b" * 64,
+        consumption_id="22222222-2222-4222-8222-222222220076",
+    )
+
+
+def _observe_verification_credentials(transaction: Transaction) -> object:
+    return (
+        transaction.fetch_one(
+            "SELECT COUNT(*) AS value FROM verification_credential "
+            "WHERE credential_id = %s",
+            ("11111111-1111-4111-8111-111111110076",),
+        )["value"],
+        transaction.fetch_one(
+            "SELECT COUNT(*) AS value FROM verification_challenge_consumption "
+            "WHERE consumption_id = %s",
+            ("22222222-2222-4222-8222-222222220076",),
+        )["value"],
+    )
+
+
 def _write_knowledge(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
     catalog.knowledge.interactions.record_for_owner(
         transaction,
@@ -1482,6 +1517,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "verification_credentials",
+        _write_verification_credentials,
+        _observe_verification_credentials,
+        (1, 1),
+        (0, 0),
+    ),
+    RollbackCase(
         "notifications",
         _write_notifications,
         _observe_notifications,
@@ -1695,7 +1737,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 51
+    assert len(applicable_keys) == len(set(applicable_keys)) == 52
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

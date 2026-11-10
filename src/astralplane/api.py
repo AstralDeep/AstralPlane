@@ -255,6 +255,9 @@ from astralplane.repositories.stop_epochs import (
 from astralplane.repositories.tool_policy import ToolPolicyStateRepository
 from astralplane.repositories.tracked_jobs import TrackedJobRepository
 from astralplane.repositories.tutorials import TutorialRepository
+from astralplane.repositories.verification_credentials import (
+    VerificationCredentialRepository,
+)
 from astralplane.repositories.voice import VoiceRepository
 from astralplane.repositories.work_admission import (
     AdmissionClass,
@@ -328,6 +331,10 @@ def create_offline_grant_repository() -> OfflineGrantRepository:
 
 def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
     return MeshEnrollmentRepository()
+
+
+def create_verification_credential_repository() -> VerificationCredentialRepository:
+    return VerificationCredentialRepository()
 
 
 def create_notification_repository() -> NotificationRepository:
@@ -555,6 +562,7 @@ class RepositoryCatalog:
     work_admission: WorkAdmissionRepository
     maintenance: MaintenanceRepository
     mesh_enrollment: MeshEnrollmentRepository
+    verification_credentials: VerificationCredentialRepository
     notifications: NotificationRepository
     push_deliveries: PushDeliveryRepository
     projects: ProjectRepository
@@ -603,6 +611,7 @@ class RepositoryCatalog:
                 "knowledge": self.knowledge,
                 "maintenance": self.maintenance,
                 "mesh_enrollment": self.mesh_enrollment,
+                "verification_credentials": self.verification_credentials,
                 "notifications": self.notifications,
                 "push_deliveries": self.push_deliveries,
                 "projects": self.projects,
@@ -676,6 +685,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         work_admission=work_admission,
         maintenance=create_maintenance_repository(),
         mesh_enrollment=create_mesh_enrollment_repository(),
+        verification_credentials=create_verification_credential_repository(),
         notifications=create_notification_repository(),
         push_deliveries=create_push_delivery_repository(),
         projects=create_project_repository(),

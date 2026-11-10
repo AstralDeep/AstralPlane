@@ -472,6 +472,7 @@ def test_pre_split_upgrade_preserves_representative_database_and_blobs(
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
     )
     assert not report.already_current
     assert _metadata(fixture.connection) == {

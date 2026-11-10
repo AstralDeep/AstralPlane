@@ -923,6 +923,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(
                 "astralplane-089-chat-queue",
                 "astralplane-089-conversation-branches",
                 "astralplane-089-computer-use",
+                "astralplane-089-verification-credentials",
             )
             assert runner.run(
                 expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
