@@ -106,6 +106,7 @@ def test_populated_089_001_upgrade_keeps_rows_and_adds_only_mesh_tables(predeces
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

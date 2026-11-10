@@ -73,8 +73,11 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
     with database.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.019")
-    assert report.applied_steps == ("astralplane-089-verification-credentials",)
+    report = runner(database).run(expected_revision="089.020")
+    assert report.applied_steps == (
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
+    )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT count(*) AS n FROM verification_credential")["n"] == 0
@@ -96,7 +99,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             tx, owner_id=OWNER, challenge_digest="a" * 64, consumption_id="upgrade-consumption"
         )
         assert consumed.challenge_digest == "a" * 64
-    assert runner(database).run(expected_revision="089.019").applied_steps == ()
+    assert runner(database).run(expected_revision="089.020").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.018")
 
@@ -119,7 +122,7 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.019")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.020")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('verification_credential') AS relation")["relation"]
@@ -131,6 +134,7 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
             )["relation"]
             is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.019").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.020").applied_steps == (
         "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )

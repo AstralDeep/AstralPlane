@@ -314,6 +314,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "authority",
         "background_tasks",
         "chat_queue",
+        "chat_read_receipts",
         "chat_steps",
         "conversation_files",
         "credentials",

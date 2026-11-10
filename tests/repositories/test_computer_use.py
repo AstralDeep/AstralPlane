@@ -172,7 +172,7 @@ def test_facade_exposes_computer_use_repository() -> None:
 def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> None:
     edge = canonical.PLANE_SCHEMA_089_018_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-2] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-3] is edge
     assert edge.name == "astralplane-089-computer-use"
     assert edge.source_revisions == ("089.017",)
     assert edge.target_revision == "089.018"
@@ -193,7 +193,7 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
     assert canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST == (
         "99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.019"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.020"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.017") == (
         canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST
     )
@@ -201,16 +201,16 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
         "86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "78774d997f0f9403dd19b1649ef48e230de62bc6c4954416a647e259d11a0203"
+        "07bc6c360942f7890b2c77fbf6a36a4e26f4bf74ee45005f1bee003371d220ef"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "908c445c4722c9dc9c1bc9e30a5beb855701d25e5accbbe78ada05cb11447ea8"
+        "d75843ce5c5dbb94710db9686ea044ff187d2db2182ec474c203fceeed08e58f"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "5ca27137697062b307834d4c41ee970dad04ef5058f8c971acf021c99548e7e6"
+        "3af8aea2946271a51338c96c6db3dc944332d9044168e02665b2fc6d1bcffb60"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "5c81191286b6cad6ef12d3e1005af7577b908f0a1b5ecbe63606c7e34a553746"
+        "82e6c45424227803221853d05c7fed7496de11b1c7025124f1c745a7736a793f"
     )
 
 

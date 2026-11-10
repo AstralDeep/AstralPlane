@@ -142,6 +142,7 @@ def test_populated_089_012_upgrade_preserves_rows_adds_only_observation_tables(p
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -189,7 +190,8 @@ def test_interrupted_observation_edge_rolls_back_and_retries(predecessor):
                             "astralplane-089-chat-queue",
                             "astralplane-089-conversation-branches",
                             "astralplane-089-computer-use",
-                            "astralplane-089-verification-credentials")
+                            "astralplane-089-verification-credentials",
+                            "astralplane-089-chat-read-receipts")
 
 
 def test_observation_namesake_or_damaged_predecessor_is_refused(predecessor):

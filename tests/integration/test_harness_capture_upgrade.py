@@ -67,7 +67,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         tables = seed_populated(tx)
         _seed_running_operation(tx)
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.019")
+    report = runner(database).run(expected_revision="089.020")
     assert report.applied_steps == (
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
@@ -75,11 +75,12 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT count(*) AS n FROM operation_harness_capture")["n"] == 0
-    assert runner(database).run(expected_revision="089.019").applied_steps == ()
+    assert runner(database).run(expected_revision="089.020").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.013")
 
@@ -100,19 +101,20 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.019")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.020")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('operation_harness_capture') AS relation")["relation"]
             is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.019").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.020").applied_steps == (
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
 
 
@@ -120,8 +122,8 @@ def test_foreign_namesake_and_current_trigger_damage_fail_closed(predecessor, mi
     with predecessor.database.transaction() as tx:
         tx.execute("CREATE TABLE operation_harness_capture(wrong TEXT)")
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.019")
+        runner(predecessor.database).run(expected_revision="089.020")
     with migrated_clone.database.transaction() as tx:
         tx.execute("DROP TRIGGER assignment_harness_capture_immutable ON persistent_assignment")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.019")
+        runner(migrated_clone.database).run(expected_revision="089.020")
