@@ -1231,6 +1231,10 @@ owner-scoped in the SQL predicate. Moving a branch head is one compare-and-set s
 a stale version is refused with a typed conflict and the caller reloads the head record
 and retries. Messages are appended with an explicit visible parent from the same
 conversation; a parent from another owner or conversation is refused as not found.
+A branch-head move accepts a head message and a workspace-snapshot pointer only from the
+same conversation and owner and refuses any other, or a missing snapshot, as not found
+before the head changes. The repository enforces that snapshot scope; the `089.017` catalog
+constrains the pointer only to an existing snapshot.
 
 The current binary can migrate declared predecessor revisions. An older binary cannot run
 against `089.017`: its guarded registry rejects the unknown revision and catalog. Exact Deep

@@ -687,3 +687,79 @@ def test_branch_survives_deletion_and_stays_owner_scoped(tx, repo, conversation)
     assert forked is not None
     assert forked.fork_source_conversation_id is None
     assert forked.fork_source_message_id is None
+
+
+def _snapshot(tx, *, conversation_id, owner_id):
+    tx.execute(
+        """
+        INSERT INTO workspace_snapshot (
+            chat_id, user_id, turn_message_id, cause, components, created_at
+        ) VALUES (%s, %s, NULL, 'branch-test', '[]', 10)
+        """,
+        (conversation_id, owner_id),
+    )
+    return int(
+        tx.fetch_one(
+            "SELECT MAX(id) AS id FROM workspace_snapshot WHERE chat_id = %s AND user_id = %s",
+            (conversation_id, owner_id),
+        )["id"]
+    )
+
+
+def _assert_head_unchanged(tx, repo, conversation):
+    head = repo.conversations.branch_head(tx, owner_id=OWNER, conversation_id=conversation)
+    assert head is not None
+    assert (head.head_message_id, head.branch_snapshot_id, head.version) == (None, None, 0)
+
+
+def _refused_snapshot(tx, repo, conversation, snapshot_id):
+    with pytest.raises(RepositoryNotFoundError) as refused:
+        repo.conversations.move_branch_head(
+            tx,
+            owner_id=OWNER,
+            conversation_id=conversation,
+            head_message_id=None,
+            expected_version=0,
+            branch_snapshot_id=snapshot_id,
+        )
+    assert dict(refused.value.metadata)["operation"] == "conversation.move_branch_head"
+    _assert_head_unchanged(tx, repo, conversation)
+
+
+def test_branch_head_refuses_another_owners_snapshot(tx, repo, conversation):
+    foreign_chat = _conversation_id()
+    repo.conversations.create(
+        tx,
+        conversation_id=foreign_chat,
+        owner_id=FOREIGN,
+        title="Foreign conversation",
+        agent_id=None,
+        created_at=10,
+    )
+    _refused_snapshot(
+        tx, repo, conversation, _snapshot(tx, conversation_id=foreign_chat, owner_id=FOREIGN)
+    )
+    _refused_snapshot(
+        tx, repo, conversation, _snapshot(tx, conversation_id=conversation, owner_id=FOREIGN)
+    )
+
+
+def test_branch_head_refuses_another_conversations_snapshot(tx, repo, conversation):
+    other_chat = _conversation_id()
+    repo.conversations.create(
+        tx,
+        conversation_id=other_chat,
+        owner_id=OWNER,
+        title="Sibling conversation",
+        agent_id=None,
+        created_at=10,
+    )
+    _refused_snapshot(
+        tx, repo, conversation, _snapshot(tx, conversation_id=other_chat, owner_id=OWNER)
+    )
+
+
+def test_branch_head_refuses_a_missing_snapshot(tx, repo, conversation):
+    missing = _snapshot(tx, conversation_id=conversation, owner_id=OWNER)
+    tx.execute("DELETE FROM workspace_snapshot WHERE id = %s", (missing,))
+    _refused_snapshot(tx, repo, conversation, missing)
