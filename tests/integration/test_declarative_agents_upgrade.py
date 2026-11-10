@@ -219,6 +219,9 @@ def test_populated_upgrade_preserves_executable_lineage_and_authentic_liabilitie
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
     )
     with db.transaction() as tx:

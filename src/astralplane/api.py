@@ -151,6 +151,10 @@ from astralplane.repositories.capability_publications import (
     CapabilityPublicationRepository,
     CapabilityPublicationState,
 )
+from astralplane.repositories.chat_queue import (
+    ChatQueueRepository,
+    QueuedFollowUpRecord,
+)
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.completion_wake import CompletionWakeRepository
 from astralplane.repositories.computer_use import (
@@ -328,6 +332,10 @@ def create_mesh_enrollment_repository() -> MeshEnrollmentRepository:
 
 def create_notification_repository() -> NotificationRepository:
     return NotificationRepository()
+
+
+def create_chat_queue_repository() -> ChatQueueRepository:
+    return ChatQueueRepository()
 
 
 def create_push_delivery_repository() -> PushDeliveryRepository:
@@ -526,6 +534,7 @@ class RepositoryCatalog:
     offline_grants: OfflineGrantRepository
     framework_credentials: FrameworkCredentialRepository
     share_grants: ShareGrantRepository
+    chat_queue: ChatQueueRepository
     chat_steps: ChatStepRepository
     conversation_files: ConversationFileRepository
     saved_components: SavedComponentRepository
@@ -579,6 +588,7 @@ class RepositoryCatalog:
                 "audit_retention": self.audit_retention,
                 "authority": self.authority,
                 "background_tasks": self.background_tasks,
+                "chat_queue": self.chat_queue,
                 "chat_steps": self.chat_steps,
                 "conversation_files": self.conversation_files,
                 "credentials": self.credentials,
@@ -645,6 +655,7 @@ def create_repository_catalog() -> RepositoryCatalog:
         offline_grants=create_offline_grant_repository(),
         framework_credentials=create_framework_credential_repository(),
         share_grants=create_share_grant_repository(),
+        chat_queue=create_chat_queue_repository(),
         chat_steps=create_chat_step_repository(),
         conversation_files=create_conversation_file_repository(),
         saved_components=create_saved_component_repository(),
@@ -943,6 +954,7 @@ __all__ = (
     "CapabilityPublicationRecord",
     "CapabilityPublicationRepository",
     "CapabilityPublicationState",
+    "ChatQueueRepository",
     "ClaimedPushDelivery",
     "ComputerSession",
     "ComputerTaskGrant",
@@ -1005,6 +1017,7 @@ __all__ = (
     "PushDeliveryRecord",
     "PushDeliveryRepository",
     "PushDestinationRecord",
+    "QueuedFollowUpRecord",
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
@@ -1029,6 +1042,7 @@ __all__ = (
     "create_authority_repository",
     "create_background_task_repository",
     "create_capability_publication_repository",
+    "create_chat_queue_repository",
     "create_chat_step_repository",
     "create_computer_use_repository",
     "create_conversation_file_repository",

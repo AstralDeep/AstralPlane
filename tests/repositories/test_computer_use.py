@@ -169,13 +169,13 @@ def test_facade_exposes_computer_use_repository() -> None:
     assert astralplane.HostEffectIntentState.PENDING is HostEffectIntentState.PENDING
 
 
-def test_089_015_computer_use_edge_is_pinned_to_the_exact_089_014_registry() -> None:
-    edge = canonical.PLANE_SCHEMA_089_015_MIGRATION
+def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> None:
+    edge = canonical.PLANE_SCHEMA_089_018_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
     assert canonical.MIGRATION_REGISTRY.migrations[-1] is edge
     assert edge.name == "astralplane-089-computer-use"
-    assert edge.source_revisions == ("089.014",)
-    assert edge.target_revision == "089.015"
+    assert edge.source_revisions == ("089.017",)
+    assert edge.target_revision == "089.018"
     assert edge.checksum == canonical._statements_checksum(COMPUTER_USE_SCHEMA_STATEMENTS)
 
     ddl = "\n".join(COMPUTER_USE_SCHEMA_STATEMENTS)
@@ -190,27 +190,27 @@ def test_089_015_computer_use_edge_is_pinned_to_the_exact_089_014_registry() -> 
     assert "IF NOT EXISTS" not in ddl
     assert "ALTER TABLE" not in ddl
 
-    assert canonical.PLANE_SCHEMA_089_014_REGISTRY_DIGEST == (
-        "5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06"
+    assert canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST == (
+        "99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.015"
-    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.014") == (
-        canonical.PLANE_SCHEMA_089_014_REGISTRY_DIGEST
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.018"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.017") == (
+        canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST
     )
-    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.014"] == (
-        "5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1",
+    assert dict(canonical.PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS)["089.017"] == (
+        "86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "2876933df53b5f916b73747d97935b941f08426bc1327577ebca1582b309dea3"
+        "ea9ef03c7818484211071ae4182b12ba9b4eb0f6e3b0863aa6792e9dcc1ec625"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "1ef0b7d15cc94ab07be7e4da3d76498a8644027775a483edd62450e63423077e"
+        "d49c20e41432617a68a969ce89dc5a66bcaf8c48734b6318a6271afe52b55efc"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "58d780b8e7ab144a15c32ed7bf92dc7f693c1487bc36cf325517e63b89afb84a"
+        "7219a65ae24832f0bbf1a29fce458a46c65990eb78cce837b43ba5c17154f581"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "7ab2908729ed097160b0b0a78cfa1b152d9a07cdc8920929e6f7a03a0ce1962e"
+        "30a2982f3e2ffa8bd96e917b432e8f63ba77587d32d06c362457bb8cf9195492"
     )
 
 
