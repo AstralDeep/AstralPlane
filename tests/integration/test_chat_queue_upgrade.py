@@ -22,25 +22,25 @@ ITEM_2 = "10000000-0000-4000-8000-0000000000a2"
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.014"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.015"
         ),
-        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.014"),
-        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM,
+        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.015"),
+        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_015_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
-        predecessor_schema_verifier_checksum=m.PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+        predecessor_schema_verifier_checksum=m.PLANE_SCHEMA_089_015_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
-    assert registry.digest == m.PLANE_SCHEMA_089_014_REGISTRY_DIGEST
+    assert registry.digest == m.PLANE_SCHEMA_089_015_REGISTRY_DIGEST
     revision = replace(
         m.CURRENT_DATA_PLANE_REVISION,
-        schema_revision="089.014",
+        schema_revision="089.015",
         migration_digest=registry.digest,
         read_compatible_from=tuple(
-            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "089.014"
+            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "089.015"
         ),
         accepted_predecessor_digests=tuple(
             p
             for p in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
-            if p[0] < "089.014"
+            if p[0] < "089.015"
         ),
     )
     return m.MigrationRunner(database, revision=revision, registry=registry)
@@ -78,7 +78,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             created_at=10,
         )
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.015")
+    report = runner(database).run(expected_revision="089.016")
     assert report.applied_steps == ("astralplane-089-chat-queue",)
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -103,19 +103,19 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         assert repo.claim_next(
             tx, owner_id="queue-upgrade-owner", chat_id="queue-upgrade-chat"
         ) == first
-    assert runner(database).run(expected_revision="089.015").applied_steps == ()
+    assert runner(database).run(expected_revision="089.016").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
-        prior_runner(database).run(expected_revision="089.014")
+        prior_runner(database).run(expected_revision="089.015")
 
 
 def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
     def interrupt(tx):
-        m.PLANE_SCHEMA_089_015_MIGRATION.operation(tx)
+        m.PLANE_SCHEMA_089_016_MIGRATION.operation(tx)
         raise RuntimeError("synthetic interruption")
 
     registry = m.MigrationRegistry(
         tuple(
-            replace(edge, operation=interrupt) if edge.target_revision == "089.015" else edge
+            replace(edge, operation=interrupt) if edge.target_revision == "089.016" else edge
             for edge in m.MIGRATION_REGISTRY.migrations
         ),
         current_schema_verifier=m._verify_current_plane_schema,
@@ -124,12 +124,12 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.015")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.016")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('chat_queue_item') AS relation")["relation"] is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.015").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.016").applied_steps == (
         "astralplane-089-chat-queue",
     )
 
@@ -138,8 +138,8 @@ def test_foreign_namesake_and_current_structure_damage_fail_closed(predecessor, 
     with predecessor.database.transaction() as tx:
         tx.execute("CREATE TABLE chat_queue_item(wrong TEXT)")
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.015")
+        runner(predecessor.database).run(expected_revision="089.016")
     with migrated_clone.database.transaction() as tx:
         tx.execute("ALTER TABLE chat_queue_item DROP CONSTRAINT chat_queue_item_chat_order")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.015")
+        runner(migrated_clone.database).run(expected_revision="089.016")

@@ -919,6 +919,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(
                 "astralplane-089-observation-records",
                 "astralplane-089-projects",
                 "astralplane-089-harness-captures",
+                "astralplane-089-audit-conversation-index",
                 "astralplane-089-chat-queue",
             )
             assert runner.run(
