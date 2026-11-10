@@ -1,6 +1,7 @@
 """Append-only, hash-chained audit-event persistence with a per-owner descending page
-cursor and chain verification. Used by AstralDeep's audit/repository.py and
-audit_retention.py for tamper-evident event history.
+cursor and chain verification, plus owner-scoped conversation range reads and
+verifiable chain-segment proofs. Used by AstralDeep's audit/repository.py and
+audit_retention.py for tamper-evident event history and chat exports.
 """
 
 from __future__ import annotations
@@ -10,13 +11,16 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from astralplane.contracts import QueryExecutor, Record, Transaction
 from astralplane.errors import PlaneError
 
 GENESIS_DIGEST = bytes(32)
 AuditAuthenticator = Callable[[str, bytes], bytes]
+AUDIT_TURN_METADATA_KEY: Final = "turn_id"
+AUDIT_CONVERSATION_ID_MAX_LENGTH: Final = 256
+AUDIT_CONVERSATION_READ_MAX_EVENTS: Final = 2000
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +112,52 @@ class AuditCursor:
 class AuditPage:
     records: tuple[AuditRecord, ...]
     next_cursor: AuditCursor | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSegmentRun:
+    anchor_digest: bytes
+    records: tuple[AuditRecord, ...]
+
+    def __post_init__(self) -> None:
+        _digest_bytes("anchor_digest", self.anchor_digest)
+        if not isinstance(self.records, tuple) or not self.records:
+            raise ValueError("audit segment run must contain at least one record")
+        for record in self.records:
+            if not isinstance(record, AuditRecord):
+                raise ValueError("audit segment run records must be AuditRecord values")
+        if self.records[0].previous_digest != self.anchor_digest:
+            raise ValueError("audit segment run anchor must match its first record")
+        expected_sequence = self.records[0].sequence
+        for record in self.records:
+            if record.sequence != expected_sequence:
+                raise ValueError("audit segment run records must be chain-contiguous")
+            expected_sequence += 1
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSegmentProof:
+    chain_id: str
+    runs: tuple[AuditSegmentRun, ...]
+    key_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _required("chain_id", self.chain_id, 512)
+        if not isinstance(self.runs, tuple):
+            raise ValueError("audit segment proof runs must be a tuple")
+        previous_last_sequence = 0
+        key_ids: list[str] = []
+        for run in self.runs:
+            if not isinstance(run, AuditSegmentRun):
+                raise ValueError("audit segment proof runs must be AuditSegmentRun values")
+            if run.records[0].sequence <= previous_last_sequence:
+                raise ValueError("audit segment proof runs must ascend without overlap")
+            previous_last_sequence = run.records[-1].sequence
+            for record in run.records:
+                if record.event.chain_id != self.chain_id:
+                    raise ValueError("audit segment proof records must share the chain id")
+                key_ids.append(record.event.key_id)
+        object.__setattr__(self, "key_ids", tuple(dict.fromkeys(key_ids)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +389,76 @@ class AuditRepository:
             )
         return AuditPage(records=records, next_cursor=next_cursor)
 
+    def list_conversation_range(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        turn_id: str | None = None,
+        from_ts: datetime | None = None,
+        to_ts: datetime | None = None,
+        cursor: AuditCursor | None = None,
+        limit: int = 200,
+        max_events: int = AUDIT_CONVERSATION_READ_MAX_EVENTS,
+    ) -> AuditPage:
+        _required("owner_id", owner_id, 512)
+        _bounded_identifier("conversation_id", conversation_id)
+        if turn_id is not None:
+            _bounded_identifier("turn_id", turn_id)
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if not 1 <= max_events <= AUDIT_CONVERSATION_READ_MAX_EVENTS:
+            raise ValueError(
+                f"max_events must be between 1 and {AUDIT_CONVERSATION_READ_MAX_EVENTS}"
+            )
+        if from_ts is not None:
+            _aware("from_ts", from_ts)
+        if to_ts is not None:
+            _aware("to_ts", to_ts)
+        if from_ts is not None and to_ts is not None and from_ts >= to_ts:
+            raise ValueError("from_ts must precede to_ts")
+        if cursor is not None and not isinstance(cursor, AuditCursor):
+            raise ValueError("cursor must be an AuditCursor")
+
+        clauses, parameters = _conversation_clauses(
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            cursor=cursor,
+        )
+        matched = query.fetch_one(
+            f"SELECT count(*) AS matched FROM audit_events WHERE {' AND '.join(clauses)}",
+            tuple(parameters),
+        )
+        count = 0 if matched is None else int(matched["matched"])
+        if count > max_events:
+            raise PlaneError(
+                "audit conversation range exceeds its bounded read size",
+                code="audit_range_exceeds_bound",
+                metadata={"bound": max_events, "matched": count},
+            )
+        rows = query.fetch_all(
+            f"""
+            SELECT * FROM audit_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY recorded_at DESC, event_id DESC
+            LIMIT %s
+            """,
+            (*parameters, limit + 1),
+        )
+        records = tuple(_record(row) for row in rows[:limit])
+        next_cursor = None
+        if len(rows) > limit:
+            last = records[-1]
+            next_cursor = AuditCursor(
+                recorded_at=last.recorded_at,
+                event_id=last.event.event_id,
+            )
+        return AuditPage(records=records, next_cursor=next_cursor)
+
     def load_chain(
         self,
         transaction: Transaction,
@@ -357,6 +477,63 @@ class AuditRepository:
             (chain_id, start_sequence),
         )
         return tuple(_record(row) for row in rows)
+
+    def load_conversation_segment(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        turn_id: str | None = None,
+        max_events: int = AUDIT_CONVERSATION_READ_MAX_EVENTS,
+    ) -> AuditSegmentProof:
+        _required("owner_id", owner_id, 512)
+        _bounded_identifier("conversation_id", conversation_id)
+        if turn_id is not None:
+            _bounded_identifier("turn_id", turn_id)
+        if not 1 <= max_events <= AUDIT_CONVERSATION_READ_MAX_EVENTS:
+            raise ValueError(
+                f"max_events must be between 1 and {AUDIT_CONVERSATION_READ_MAX_EVENTS}"
+            )
+
+        clauses, parameters = _conversation_clauses(
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+        )
+        rows = transaction.fetch_all(
+            f"""
+            SELECT * FROM audit_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY chain_sequence, event_id
+            LIMIT %s
+            """,
+            (*parameters, max_events + 1),
+        )
+        if len(rows) > max_events:
+            raise PlaneError(
+                "audit conversation segment exceeds its bounded read size",
+                code="audit_segment_exceeds_bound",
+                metadata={"bound": max_events},
+            )
+        records = tuple(_record(row) for row in rows)
+        runs: list[AuditSegmentRun] = []
+        current: list[AuditRecord] = []
+        for record in records:
+            if current and record.sequence != current[-1].sequence + 1:
+                runs.append(
+                    AuditSegmentRun(
+                        anchor_digest=current[0].previous_digest,
+                        records=tuple(current),
+                    )
+                )
+                current = []
+            current.append(record)
+        if current:
+            runs.append(
+                AuditSegmentRun(anchor_digest=current[0].previous_digest, records=tuple(current))
+            )
+        return AuditSegmentProof(chain_id=owner_id, runs=tuple(runs))
 
     def list_tool_trajectory_events_for_administration(
         self,
@@ -473,6 +650,42 @@ def verify_records(
     )
 
 
+def verify_segment_proof(
+    proof: AuditSegmentProof,
+    *,
+    authenticate: AuditAuthenticator,
+) -> ChainVerification:
+    if not isinstance(proof, AuditSegmentProof):
+        raise ValueError("proof must be an AuditSegmentProof")
+    if not proof.runs:
+        return ChainVerification(
+            valid=True,
+            first_invalid_event_id=None,
+            reason=None,
+            last_sequence=0,
+            last_digest=GENESIS_DIGEST,
+        )
+    for run in proof.runs:
+        result = verify_records(
+            run.records,
+            chain_id=proof.chain_id,
+            authenticate=authenticate,
+            start_sequence=run.records[0].sequence,
+            expected_previous_digest=run.anchor_digest,
+        )
+        if not result.valid:
+            return result
+    last_run = proof.runs[-1]
+    last_record = last_run.records[-1]
+    return ChainVerification(
+        valid=True,
+        first_invalid_event_id=None,
+        reason=None,
+        last_sequence=last_record.sequence,
+        last_digest=last_record.entry_digest,
+    )
+
+
 def canonical_event_bytes(event: AuditEvent, sequence: int) -> bytes:
     if sequence <= 0:
         raise ValueError("audit sequence must be positive")
@@ -580,6 +793,34 @@ def _normalize_json_value(value: object) -> object:
     raise TypeError("value is not JSON-compatible")
 
 
+def _conversation_clauses(
+    *,
+    owner_id: str,
+    conversation_id: str,
+    turn_id: str | None = None,
+    from_ts: datetime | None = None,
+    to_ts: datetime | None = None,
+    cursor: AuditCursor | None = None,
+) -> tuple[list[str], list[object]]:
+    clauses = ["actor_user_id = %s", "conversation_id = %s"]
+    parameters: list[object] = [owner_id, conversation_id]
+    if turn_id is not None:
+        clauses.append("(inputs_meta->>%s = %s OR outputs_meta->>%s = %s)")
+        parameters.extend(
+            (AUDIT_TURN_METADATA_KEY, turn_id, AUDIT_TURN_METADATA_KEY, turn_id)
+        )
+    if from_ts is not None:
+        clauses.append("recorded_at >= %s")
+        parameters.append(from_ts)
+    if to_ts is not None:
+        clauses.append("recorded_at < %s")
+        parameters.append(to_ts)
+    if cursor is not None:
+        clauses.append("(recorded_at, event_id) < (%s, %s)")
+        parameters.extend((cursor.recorded_at, cursor.event_id))
+    return clauses, parameters
+
+
 def _record(row: Record) -> AuditRecord:
     event = AuditEvent(
         event_id=str(row["event_id"]),
@@ -653,6 +894,13 @@ def _required_keyword(value: str) -> str:
     return value.strip()
 
 
+def _bounded_identifier(name: str, value: str) -> str:
+    _required(name, value, AUDIT_CONVERSATION_ID_MAX_LENGTH)
+    if "\x00" in value:
+        raise ValueError(f"{name} must not contain null characters")
+    return value
+
+
 def _aware(name: str, value: datetime) -> None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
@@ -663,6 +911,9 @@ def _utc_iso(value: datetime) -> str:
 
 
 __all__ = (
+    "AUDIT_CONVERSATION_ID_MAX_LENGTH",
+    "AUDIT_CONVERSATION_READ_MAX_EVENTS",
+    "AUDIT_TURN_METADATA_KEY",
     "GENESIS_DIGEST",
     "AuditAuthenticator",
     "AuditCursor",
@@ -670,9 +921,12 @@ __all__ = (
     "AuditPage",
     "AuditRecord",
     "AuditRepository",
+    "AuditSegmentProof",
+    "AuditSegmentRun",
     "ChainVerification",
     "ToolTrajectoryEvent",
     "canonical_event_bytes",
     "canonical_json",
     "verify_records",
+    "verify_segment_proof",
 )

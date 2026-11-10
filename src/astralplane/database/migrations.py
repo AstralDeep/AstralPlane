@@ -17,6 +17,7 @@ from astralplane.database.assignment_schema import ASSIGNMENT_SCHEMA_STATEMENTS
 from astralplane.database.atlas_link_schema import ATLAS_LINK_SCHEMA_STATEMENTS
 from astralplane.database.atlas_page_schema import ATLAS_PAGE_SCHEMA_STATEMENTS
 from astralplane.database.atlas_revision_schema import ATLAS_REVISION_SCHEMA_STATEMENTS
+from astralplane.database.audit_conversation_schema import AUDIT_CONVERSATION_SCHEMA_STATEMENTS
 from astralplane.database.capability_publication_schema import (
     CAPABILITY_PUBLICATION_SCHEMA_STATEMENTS,
 )
@@ -3596,6 +3597,12 @@ def _apply_plane_schema_089_014(transaction: Transaction) -> None:
         transaction.execute(statement)
 
 
+def _apply_plane_schema_089_015(transaction: Transaction) -> None:
+    _verify_predecessor_plane_schema(transaction, "089.014")
+    for statement in AUDIT_CONVERSATION_SCHEMA_STATEMENTS:
+        transaction.execute(statement)
+
+
 CURRENT_SCHEMA_STRUCTURE_QUERY: Final = """
 WITH owned_tables(table_name) AS (
     VALUES
@@ -4609,7 +4616,7 @@ ORDER BY object_kind, object_identity
 """.strip()
 
 CURRENT_SCHEMA_STRUCTURE_DIGEST: Final = (
-    "5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1"
+    "5a2943f2bc607fa8a9e88d4123abc866348cfe95164f22b87a44fca82c1986af"
 )
 CURRENT_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (CURRENT_SCHEMA_STRUCTURE_DIGEST,)
 
@@ -4730,6 +4737,7 @@ PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS: Final = (
     ("089.011", ("f986f26b756d0611d52007f73888672b191b5426a8404ec5bd7da3152639599d",)),
     ("089.012", ("e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1e38d",)),
     ("089.013", ("8b8717e86457edcff6c17661f3e74c61f227022ecfb399bb8d3b3484ad411233",)),
+    ("089.014", ("5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1",)),
 )
 
 
@@ -5422,6 +5430,22 @@ PLANE_SCHEMA_089_014_MIGRATION: Final = Migration(
     checksum=_statements_checksum(HARNESS_CAPTURE_SCHEMA_STATEMENTS),
     operation=_apply_plane_schema_089_014,
 )
+PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "0292ecd07549047e50ed79896a632e10b241b23a5ca0e688dc1daaeda9a9004d"
+)
+PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM: Final = (
+    "132a98eda33d5b9166f74d388c61b750cce4b1069cb15f756ff85f2b2335e9e1"
+)
+PLANE_SCHEMA_089_014_REGISTRY_DIGEST: Final = (
+    "5a03a9f11a22530ae80a11036d0ddaf72d084797546285a71ebdbc3fd741bb06"
+)
+PLANE_SCHEMA_089_015_MIGRATION: Final = Migration(
+    name="astralplane-089-audit-conversation-reads",
+    source_revisions=("089.014",),
+    target_revision="089.015",
+    checksum=_statements_checksum(AUDIT_CONVERSATION_SCHEMA_STATEMENTS),
+    operation=_apply_plane_schema_089_015,
+)
 MIGRATION_REGISTRY: Final = MigrationRegistry(
     (
         PLANE_SCHEMA_067_MIGRATION,
@@ -5453,6 +5477,7 @@ MIGRATION_REGISTRY: Final = MigrationRegistry(
         PLANE_SCHEMA_089_012_MIGRATION,
         PLANE_SCHEMA_089_013_MIGRATION,
         PLANE_SCHEMA_089_014_MIGRATION,
+        PLANE_SCHEMA_089_015_MIGRATION,
     ),
     current_schema_verifier=_verify_current_plane_schema,
     current_schema_verifier_checksum=CURRENT_SCHEMA_VERIFIER_CHECKSUM,
@@ -5598,9 +5623,19 @@ if (
     ).digest != PLANE_SCHEMA_089_013_REGISTRY_DIGEST
 ):
     raise MigrationDefinitionError("historical migration registry no longer matches its digest")
+if (
+    MigrationRegistry(
+        tuple(edge for edge in MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.014"),
+        current_schema_verifier=_verify_current_plane_schema,
+        current_schema_verifier_checksum=PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM,
+        predecessor_schema_verifier=_verify_predecessor_plane_schema,
+        predecessor_schema_verifier_checksum=PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
+    ).digest != PLANE_SCHEMA_089_014_REGISTRY_DIGEST
+):
+    raise MigrationDefinitionError("historical migration registry no longer matches its digest")
 MIGRATION_DIGEST: Final = MIGRATION_REGISTRY.digest
 CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
-    schema_revision="089.014",
+    schema_revision="089.015",
     read_compatible_from=(
         "066.001",
         "067.001",
@@ -5631,6 +5666,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         "089.011",
         "089.012",
         "089.013",
+        "089.014",
     ),
     migration_digest=MIGRATION_DIGEST,
     accepted_predecessor_digests=(
@@ -5662,6 +5698,7 @@ CURRENT_DATA_PLANE_REVISION: Final = DataPlaneRevision(
         ("089.011", PLANE_SCHEMA_089_011_REGISTRY_DIGEST),
         ("089.012", PLANE_SCHEMA_089_012_REGISTRY_DIGEST),
         ("089.013", PLANE_SCHEMA_089_013_REGISTRY_DIGEST),
+        ("089.014", PLANE_SCHEMA_089_014_REGISTRY_DIGEST),
     ),
 )
 
@@ -5766,6 +5803,10 @@ __all__ = (
     "PLANE_SCHEMA_089_012_SCHEMA_VERIFIER_CHECKSUM",
     "PLANE_SCHEMA_089_013_MIGRATION",
     "PLANE_SCHEMA_089_014_MIGRATION",
+    "PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_014_REGISTRY_DIGEST",
+    "PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM",
+    "PLANE_SCHEMA_089_015_MIGRATION",
     "PREDECESSOR_SCHEMA_COMPATIBLE_STRUCTURE_DIGESTS",
     "PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM",
     "PUSH_DELIVERY_SCHEMA_STATEMENTS",

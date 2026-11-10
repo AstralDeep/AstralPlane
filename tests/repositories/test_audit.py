@@ -1,6 +1,6 @@
 """Tests for astralplane.repositories.audit: canonical-JSON hash-chain construction,
-genesis/continuation append, tamper detection, and owner-scoped trajectory queries
-against real PostgreSQL.
+genesis/continuation append, tamper detection, owner-scoped trajectory queries, and
+conversation range reads with chain-segment proofs against real PostgreSQL.
 """
 
 from __future__ import annotations
@@ -18,16 +18,20 @@ from _support import ScriptedTransaction
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.errors import PlaneError
 from astralplane.repositories.audit import (
+    AUDIT_CONVERSATION_READ_MAX_EVENTS,
     GENESIS_DIGEST,
     AuditCursor,
     AuditEvent,
     AuditPage,
     AuditRecord,
     AuditRepository,
+    AuditSegmentProof,
+    AuditSegmentRun,
     ToolTrajectoryEvent,
     canonical_event_bytes,
     canonical_json,
     verify_records,
+    verify_segment_proof,
 )
 from tests.fixtures.migrated_template import MigratedDatabase
 
@@ -506,3 +510,461 @@ def test_authenticator_must_return_sha256_sized_bytes() -> None:
             event(),
             lambda _key, _payload: b"short",
         )
+
+
+def segment_authenticate(key_id: str, payload: bytes) -> bytes:
+    return hmac.new(key_id.encode("utf-8") * 4, payload, hashlib.sha256).digest()
+
+
+def chained_rows(
+    *conversation_ids: str | None,
+    row_overrides: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    previous = GENESIS_DIGEST
+    for sequence, conversation_id in enumerate(conversation_ids, start=1):
+        value = event(
+            event_id=f"event-{sequence}",
+            correlation_id=f"correlation-{sequence}",
+            conversation_id=conversation_id,
+        )
+        merged: dict[str, object] = {
+            "recorded_at": NOW + timedelta(seconds=sequence),
+        }
+        merged.update(row_overrides or {})
+        row = event_row(
+            value,
+            sequence=sequence,
+            previous=previous,
+            entry=segment_authenticate(
+                value.key_id, previous + canonical_event_bytes(value, sequence)
+            ),
+            **merged,
+        )
+        previous = row["entry_hash"]
+        rows.append(row)
+    return rows
+
+
+def test_conversation_range_read_is_owner_scoped_bounded_and_paginated() -> None:
+    rows = chained_rows("chat-1", "chat-1", "chat-1")
+    transaction = ScriptedTransaction(one=[{"matched": 3}], all_rows=[(rows[2], rows[1], rows[0])])
+    page = AuditRepository().list_conversation_range(
+        transaction,
+        owner_id="owner-1",
+        conversation_id="chat-1",
+        limit=2,
+    )
+
+    assert isinstance(page, AuditPage)
+    assert [record.event.event_id for record in page.records] == ["event-3", "event-2"]
+    assert page.next_cursor == AuditCursor(
+        recorded_at=NOW + timedelta(seconds=2), event_id="event-2"
+    )
+    count_statement = transaction.calls[0][1]
+    count_parameters = transaction.calls[0][2]
+    assert "count(*) AS matched" in count_statement
+    assert "actor_user_id = %s" in count_statement
+    assert "conversation_id = %s" in count_statement
+    assert count_parameters[:2] == ("owner-1", "chat-1")
+    page_statement = transaction.calls[1][1]
+    page_parameters = transaction.calls[1][2]
+    assert "ORDER BY recorded_at DESC, event_id DESC" in page_statement
+    assert "LIMIT %s" in page_statement
+    assert page_parameters[-1] == 3
+
+
+def test_conversation_range_narrows_to_turn_metadata_and_time_window() -> None:
+    transaction = ScriptedTransaction(one=[{"matched": 0}], all_rows=[()])
+
+    AuditRepository().list_conversation_range(
+        transaction,
+        owner_id="owner-1",
+        conversation_id="chat-1",
+        turn_id="turn-9",
+        from_ts=NOW,
+        to_ts=NOW + timedelta(hours=1),
+    )
+
+    statement = transaction.calls[0][1]
+    parameters = transaction.calls[0][2]
+    assert "(inputs_meta->>%s = %s OR outputs_meta->>%s = %s)" in statement
+    assert parameters[2:6] == ("turn_id", "turn-9", "turn_id", "turn-9")
+    assert "recorded_at >= %s" in statement and "recorded_at < %s" in statement
+
+
+def test_conversation_range_above_bound_is_refused_not_truncated() -> None:
+    transaction = ScriptedTransaction(one=[{"matched": 3}])
+
+    with pytest.raises(PlaneError) as caught:
+        AuditRepository().list_conversation_range(
+            transaction,
+            owner_id="owner-1",
+            conversation_id="chat-1",
+            max_events=2,
+        )
+
+    assert caught.value.code == "audit_range_exceeds_bound"
+    assert len(transaction.calls) == 1
+
+
+def test_conversation_range_read_validates_arguments() -> None:
+    repository = AuditRepository()
+    transaction = ScriptedTransaction()
+    cases: tuple[tuple[dict[str, object]], ...] = (
+        {"conversation_id": ""},
+        {"conversation_id": "x" * 257},
+        {"conversation_id": "chat\x00-1"},
+        {"conversation_id": "chat-1", "turn_id": ""},
+        {"conversation_id": "chat-1", "turn_id": "turn\x00-9"},
+        {"conversation_id": "chat-1", "limit": 0},
+        {"conversation_id": "chat-1", "limit": 201},
+        {"conversation_id": "chat-1", "max_events": 0},
+        {
+            "conversation_id": "chat-1",
+            "max_events": AUDIT_CONVERSATION_READ_MAX_EVENTS + 1,
+        },
+        {"conversation_id": "chat-1", "from_ts": NOW.replace(tzinfo=None)},
+        {"conversation_id": "chat-1", "to_ts": NOW.replace(tzinfo=None)},
+        {
+            "conversation_id": "chat-1",
+            "from_ts": NOW + timedelta(hours=1),
+            "to_ts": NOW,
+        },
+        {"conversation_id": "chat-1", "cursor": "not-a-cursor"},
+    )
+    for changes in cases:
+        with pytest.raises(ValueError):
+            repository.list_conversation_range(transaction, owner_id="owner-1", **changes)  # type: ignore[arg-type]
+    assert transaction.calls == []
+
+
+def test_conversation_segment_groups_interleaved_events_into_anchored_runs() -> None:
+    rows = chained_rows("chat-1", "chat-2", "chat-1", "chat-1", "chat-2")
+    transaction = ScriptedTransaction(all_rows=[(rows[0], rows[2], rows[3])])
+
+    proof = AuditRepository().load_conversation_segment(
+        transaction,
+        owner_id="owner-1",
+        conversation_id="chat-1",
+    )
+
+    assert proof.chain_id == "owner-1"
+    assert proof.key_ids == ("audit-key-1",)
+    assert len(proof.runs) == 2
+    first, second = proof.runs
+    assert [record.sequence for record in first.records] == [1]
+    assert first.anchor_digest == GENESIS_DIGEST
+    assert [record.sequence for record in second.records] == [3, 4]
+    assert second.anchor_digest == rows[1]["entry_hash"]
+    statement = transaction.calls[0][1]
+    parameters = transaction.calls[0][2]
+    assert "actor_user_id = %s" in statement and "conversation_id = %s" in statement
+    assert "ORDER BY chain_sequence, event_id" in statement
+    assert parameters[-1] == AUDIT_CONVERSATION_READ_MAX_EVENTS + 1
+    result = verify_segment_proof(proof, authenticate=segment_authenticate)
+    assert result.valid
+    assert result.last_sequence == 4
+    assert result.last_digest == rows[3]["entry_hash"]
+
+
+def test_conversation_segment_narrows_by_turn_and_empty_selection_verifies() -> None:
+    transaction = ScriptedTransaction(all_rows=[()])
+
+    proof = AuditRepository().load_conversation_segment(
+        transaction,
+        owner_id="owner-1",
+        conversation_id="chat-1",
+        turn_id="turn-9",
+    )
+
+    assert proof.runs == ()
+    assert proof.key_ids == ()
+    result = verify_segment_proof(proof, authenticate=segment_authenticate)
+    assert result.valid
+    assert result.last_sequence == 0
+    assert result.last_digest == GENESIS_DIGEST
+    statement = transaction.calls[0][1]
+    assert "(inputs_meta->>%s = %s OR outputs_meta->>%s = %s)" in statement
+
+
+def test_conversation_segment_above_bound_is_refused_not_truncated() -> None:
+    rows = chained_rows("chat-1", "chat-1", "chat-1")
+    transaction = ScriptedTransaction(all_rows=[tuple(rows)])
+
+    with pytest.raises(PlaneError) as caught:
+        AuditRepository().load_conversation_segment(
+            transaction,
+            owner_id="owner-1",
+            conversation_id="chat-1",
+            max_events=2,
+        )
+
+    assert caught.value.code == "audit_segment_exceeds_bound"
+    assert transaction.calls[0][2][-1] == 3
+
+
+def test_conversation_segment_read_validates_arguments() -> None:
+    repository = AuditRepository()
+    transaction = ScriptedTransaction()
+    cases: tuple[tuple[dict[str, object]], ...] = (
+        {"conversation_id": ""},
+        {"conversation_id": "chat\x00-1"},
+        {"conversation_id": "chat-1", "turn_id": "turn\x00-9"},
+        {"conversation_id": "chat-1", "max_events": 0},
+        {
+            "conversation_id": "chat-1",
+            "max_events": AUDIT_CONVERSATION_READ_MAX_EVENTS + 1,
+        },
+    )
+    for changes in cases:
+        with pytest.raises(ValueError):
+            repository.load_conversation_segment(transaction, owner_id="owner-1", **changes)  # type: ignore[arg-type]
+    assert transaction.calls == []
+
+
+def segment_proof() -> tuple[AuditRepository, object]:
+    rows = chained_rows("chat-1", "chat-2", "chat-1", "chat-1")
+    transaction = ScriptedTransaction(all_rows=[(rows[0], rows[2], rows[3])])
+    proof = AuditRepository().load_conversation_segment(
+        transaction, owner_id="owner-1", conversation_id="chat-1"
+    )
+    return proof, rows  # type: ignore[return-value]
+
+
+def test_segment_verification_fails_when_any_event_field_changes() -> None:
+    proof, _rows = segment_proof()
+    run = proof.runs[1]
+    record = run.records[0]
+    tampered_record = replace(record, event=replace(record.event, description="changed"))
+    tampered = replace(
+        proof,
+        runs=(proof.runs[0], replace(run, records=(tampered_record, *run.records[1:]))),
+    )
+
+    result = verify_segment_proof(tampered, authenticate=segment_authenticate)
+
+    assert not result.valid
+    assert result.first_invalid_event_id == "event-3"
+    assert result.reason == "entry_digest_mismatch"
+    assert result.last_sequence == 2
+
+
+def test_segment_verification_fails_when_entry_hash_changes() -> None:
+    proof, _rows = segment_proof()
+    run = proof.runs[0]
+    record = run.records[0]
+    tampered = replace(
+        proof,
+        runs=(replace(run, records=(replace(record, entry_digest=b"\x02" * 32),)),),
+    )
+
+    result = verify_segment_proof(tampered, authenticate=segment_authenticate)
+
+    assert not result.valid
+    assert result.first_invalid_event_id == "event-1"
+    assert result.reason == "entry_digest_mismatch"
+
+
+def test_segment_verification_fails_when_chained_hash_changes() -> None:
+    proof, _rows = segment_proof()
+    run = proof.runs[1]
+    head, follower = run.records
+    tampered = replace(
+        proof,
+        runs=(
+            proof.runs[0],
+            replace(run, records=(head, replace(follower, previous_digest=b"\x03" * 32))),
+        ),
+    )
+
+    result = verify_segment_proof(tampered, authenticate=segment_authenticate)
+
+    assert not result.valid
+    assert result.first_invalid_event_id == "event-4"
+    assert result.reason == "previous_digest_mismatch"
+
+
+def test_segment_verification_fails_under_a_different_authenticator() -> None:
+    proof, _rows = segment_proof()
+
+    result = verify_segment_proof(proof, authenticate=authenticate)
+
+    assert not result.valid
+    assert result.reason == "entry_digest_mismatch"
+
+
+def test_segment_run_structure_is_validated_fail_closed() -> None:
+    proof, rows = segment_proof()
+    run = proof.runs[1]
+
+    with pytest.raises(ValueError):
+        replace(run, anchor_digest=b"\x04" * 32)
+    with pytest.raises(ValueError):
+        replace(run, records=(run.records[1], run.records[0]))
+    with pytest.raises(ValueError):
+        replace(proof, runs=(proof.runs[1], proof.runs[0]))
+    with pytest.raises(ValueError):
+        replace(proof, chain_id="owner-2")
+    with pytest.raises(ValueError):
+        AuditSegmentRun(anchor_digest=rows[0]["prev_hash"], records=())
+    with pytest.raises(ValueError):
+        verify_segment_proof("not-a-proof", authenticate=segment_authenticate)  # type: ignore[arg-type]
+
+
+def test_conversation_reads_are_owner_isolated_on_real_postgresql(
+    audit_postgres_database: PlaneDatabase,
+) -> None:
+    repository = AuditRepository()
+    owners = ("owner-iso-1", "owner-iso-2")
+    expected: dict[str, list[str]] = {}
+    with audit_postgres_database.transaction() as transaction:
+        for owner in owners:
+            expected[owner] = []
+            for number in range(1, 5):
+                conversation = "chat-shared" if number % 2 else "chat-other"
+                turn = '{"turn_id":"turn-1"}' if number % 2 else "{}"
+                appended = repository.append(
+                    transaction,
+                    event(
+                        event_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()),
+                        chain_id=owner,
+                        conversation_id=conversation,
+                        inputs_json=turn,
+                    ),
+                    authenticate,
+                )
+                expected[owner].append(appended.event.event_id)
+
+    with audit_postgres_database.transaction() as query:
+        page = repository.list_conversation_range(
+            query,
+            owner_id="owner-iso-1",
+            conversation_id="chat-shared",
+        )
+    with audit_postgres_database.transaction() as transaction:
+        proof = repository.load_conversation_segment(
+            transaction,
+            owner_id="owner-iso-1",
+            conversation_id="chat-shared",
+        )
+
+    assert {record.event.event_id for record in page.records} == set(expected["owner-iso-1"][::2])
+    assert len(page.records) == 2
+    assert page.records[0].sequence == 3 and page.records[1].sequence == 1
+    assert {record.event.chain_id for record in page.records} == {"owner-iso-1"}
+    assert [record.sequence for record in proof.runs[0].records] == [1]
+    assert [record.sequence for record in proof.runs[1].records] == [3]
+    with audit_postgres_database.transaction() as transaction:
+        chain = repository.load_chain(transaction, chain_id="owner-iso-1")
+    assert proof.runs[1].anchor_digest == chain[1].entry_digest
+    assert all(
+        record.event.chain_id == "owner-iso-1" for run in proof.runs for record in run.records
+    )
+    assert verify_segment_proof(proof, authenticate=authenticate).valid
+
+    with audit_postgres_database.transaction() as query:
+        foreign_page = repository.list_conversation_range(
+            query,
+            owner_id="owner-iso-2",
+            conversation_id="chat-shared",
+        )
+    assert {record.event.event_id for record in foreign_page.records} == set(
+        expected["owner-iso-2"][::2]
+    )
+    assert {record.event.chain_id for record in foreign_page.records} == {"owner-iso-2"}
+    with pytest.raises(PlaneError) as caught, audit_postgres_database.transaction() as query:
+        repository.list_conversation_range(
+            query,
+            owner_id="owner-iso-1",
+            conversation_id="chat-shared",
+            max_events=1,
+        )
+    assert caught.value.code == "audit_range_exceeds_bound"
+
+
+def test_conversation_range_paginates_and_narrows_by_turn_on_real_postgresql(
+    audit_postgres_database: PlaneDatabase,
+) -> None:
+    repository = AuditRepository()
+    with audit_postgres_database.transaction() as transaction:
+        for number in range(1, 4):
+            repository.append(
+                transaction,
+                event(
+                    event_id=str(uuid.uuid4()),
+                    correlation_id=str(uuid.uuid4()),
+                    chain_id="owner-page-1",
+                    conversation_id="chat-page",
+                    inputs_json='{"turn_id":"turn-7"}' if number == 2 else "{}",
+                ),
+                authenticate,
+            )
+
+    with audit_postgres_database.transaction() as query:
+        first = repository.list_conversation_range(
+            query, owner_id="owner-page-1", conversation_id="chat-page", limit=2
+        )
+    assert first.next_cursor is not None
+    with audit_postgres_database.transaction() as query:
+        second = repository.list_conversation_range(
+            query,
+            owner_id="owner-page-1",
+            conversation_id="chat-page",
+            cursor=first.next_cursor,
+        )
+    assert len(first.records) == 2 and len(second.records) == 1
+    assert first.next_cursor.event_id == first.records[-1].event.event_id
+    assert {record.event.event_id for record in first.records + second.records} == {
+        record.event.event_id for record in first.records + second.records
+    }
+    assert not {record.event.event_id for record in second.records} & {
+        record.event.event_id for record in first.records
+    }
+
+    with audit_postgres_database.transaction() as query:
+        turn_page = repository.list_conversation_range(
+            query,
+            owner_id="owner-page-1",
+            conversation_id="chat-page",
+            turn_id="turn-7",
+        )
+    with audit_postgres_database.transaction() as transaction:
+        turn_proof = repository.load_conversation_segment(
+            transaction,
+            owner_id="owner-page-1",
+            conversation_id="chat-page",
+            turn_id="turn-7",
+        )
+    assert [record.event.inputs_json for record in turn_page.records] == ['{"turn_id":"turn-7"}']
+    assert len(turn_proof.runs) == 1
+    assert verify_segment_proof(turn_proof, authenticate=authenticate).valid
+
+    with audit_postgres_database.transaction() as query:
+        unknown = repository.list_conversation_range(
+            query, owner_id="owner-page-1", conversation_id="chat-unknown"
+        )
+    with audit_postgres_database.transaction() as transaction:
+        unknown_proof = repository.load_conversation_segment(
+            transaction, owner_id="owner-page-1", conversation_id="chat-unknown"
+        )
+    assert unknown.records == () and unknown.next_cursor is None
+    assert unknown_proof.runs == ()
+
+
+def test_segment_structures_reject_wrong_types_and_shapes() -> None:
+    proof, _rows = segment_proof()
+    record = proof.runs[0].records[0]
+
+    with pytest.raises(ValueError):
+        AuditSegmentRun(anchor_digest=record.previous_digest, records=(record, "not-a-record"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        AuditSegmentRun(
+            anchor_digest=record.previous_digest,
+            records=(record, replace(record, sequence=record.sequence + 2)),
+        )
+    with pytest.raises(ValueError):
+        AuditSegmentProof(chain_id="owner-1", runs=[proof.runs[0]])  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        AuditSegmentProof(chain_id="owner-1", runs=("not-a-run",))  # type: ignore[arg-type]
