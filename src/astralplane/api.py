@@ -151,8 +151,20 @@ from astralplane.repositories.capability_publications import (
     CapabilityPublicationRepository,
     CapabilityPublicationState,
 )
+from astralplane.repositories.chat_queue import (
+    ChatQueueRepository,
+    QueuedFollowUpRecord,
+)
 from astralplane.repositories.chat_steps import ChatStepRepository
 from astralplane.repositories.completion_wake import CompletionWakeRepository
+from astralplane.repositories.computer_use import (
+    ApprovalFence,
+    ComputerSession,
+    ComputerTaskGrant,
+    ComputerUseRepository,
+    HostEffectIntent,
+    HostEffectIntentState,
+)
 from astralplane.repositories.conversation_files import ConversationFileRepository
 from astralplane.repositories.credentials import CredentialRepository
 from astralplane.repositories.drafts import (
@@ -329,6 +341,10 @@ def create_notification_repository() -> NotificationRepository:
     return NotificationRepository()
 
 
+def create_chat_queue_repository() -> ChatQueueRepository:
+    return ChatQueueRepository()
+
+
 def create_push_delivery_repository() -> PushDeliveryRepository:
     return PushDeliveryRepository()
 
@@ -371,6 +387,10 @@ def create_workspace_repository() -> WorkspaceRepository:
 
 def create_completion_wake_repository() -> CompletionWakeRepository:
     return CompletionWakeRepository()
+
+
+def create_computer_use_repository() -> ComputerUseRepository:
+    return ComputerUseRepository()
 
 
 def create_capability_publication_repository() -> CapabilityPublicationRepository:
@@ -521,12 +541,14 @@ class RepositoryCatalog:
     offline_grants: OfflineGrantRepository
     framework_credentials: FrameworkCredentialRepository
     share_grants: ShareGrantRepository
+    chat_queue: ChatQueueRepository
     chat_steps: ChatStepRepository
     conversation_files: ConversationFileRepository
     saved_components: SavedComponentRepository
     history: HistoryRepository
     workspaces: WorkspaceRepository
     completion_wake: CompletionWakeRepository
+    computer_use: ComputerUseRepository
     capability_publications: CapabilityPublicationRepository
     atlas_pages: AtlasPageRepository
     atlas_links: AtlasLinkRepository
@@ -574,6 +596,7 @@ class RepositoryCatalog:
                 "audit_retention": self.audit_retention,
                 "authority": self.authority,
                 "background_tasks": self.background_tasks,
+                "chat_queue": self.chat_queue,
                 "chat_steps": self.chat_steps,
                 "conversation_files": self.conversation_files,
                 "credentials": self.credentials,
@@ -613,6 +636,7 @@ class RepositoryCatalog:
                 "work_admission": self.work_admission,
                 "workspaces": self.workspaces,
                 "completion_wake": self.completion_wake,
+                "computer_use": self.computer_use,
                 "capability_publications": self.capability_publications,
                 "atlas_pages": self.atlas_pages,
                 "atlas_links": self.atlas_links,
@@ -640,12 +664,14 @@ def create_repository_catalog() -> RepositoryCatalog:
         offline_grants=create_offline_grant_repository(),
         framework_credentials=create_framework_credential_repository(),
         share_grants=create_share_grant_repository(),
+        chat_queue=create_chat_queue_repository(),
         chat_steps=create_chat_step_repository(),
         conversation_files=create_conversation_file_repository(),
         saved_components=create_saved_component_repository(),
         history=create_history_repository(),
         workspaces=create_workspace_repository(),
         completion_wake=create_completion_wake_repository(),
+        computer_use=create_computer_use_repository(),
         capability_publications=create_capability_publication_repository(),
         atlas_pages=create_atlas_page_repository(),
         atlas_links=create_atlas_link_repository(),
@@ -891,6 +917,7 @@ __all__ = (
     "JOINT_RESTORE_CONTRACT_VERSION",
     "AdmissionClass",
     "AgentRevisionRecord",
+    "ApprovalFence",
     "ArtifactCollisionError",
     "ArtifactIntegrityError",
     "ArtifactPublicationError",
@@ -937,7 +964,11 @@ __all__ = (
     "CapabilityPublicationRecord",
     "CapabilityPublicationRepository",
     "CapabilityPublicationState",
+    "ChatQueueRepository",
     "ClaimedPushDelivery",
+    "ComputerSession",
+    "ComputerTaskGrant",
+    "ComputerUseRepository",
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "EndpointFence",
@@ -953,6 +984,8 @@ __all__ = (
     "GeneratedAgentPublicationRepository",
     "GeneratedAgentPublicationResultMetadata",
     "HarnessProfileIdentity",
+    "HostEffectIntent",
+    "HostEffectIntentState",
     "ImmutableBundleContract",
     "ImmutableBundleStore",
     "JointRestoreCompletion",
@@ -994,6 +1027,7 @@ __all__ = (
     "PushDeliveryRecord",
     "PushDeliveryRepository",
     "PushDestinationRecord",
+    "QueuedFollowUpRecord",
     "ReceiptClaimConflictError",
     "ReceiptWatermarkConflictError",
     "RepositoryCatalog",
@@ -1018,7 +1052,9 @@ __all__ = (
     "create_authority_repository",
     "create_background_task_repository",
     "create_capability_publication_repository",
+    "create_chat_queue_repository",
     "create_chat_step_repository",
+    "create_computer_use_repository",
     "create_conversation_file_repository",
     "create_credential_repository",
     "create_draft_agent_repository",

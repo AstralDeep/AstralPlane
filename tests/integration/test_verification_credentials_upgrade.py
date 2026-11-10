@@ -21,29 +21,29 @@ CREDENTIAL = "10000000-0000-4000-8000-0000000000c1"
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.014"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.018"
         ),
-        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.014"),
-        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM,
+        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.018"),
+        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_018_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
         predecessor_schema_verifier_checksum=(
-            m.PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+            m.PLANE_SCHEMA_089_018_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
         ),
     )
-    assert registry.digest == m.PLANE_SCHEMA_089_014_REGISTRY_DIGEST
+    assert registry.digest == m.PLANE_SCHEMA_089_018_REGISTRY_DIGEST
     revision = replace(
         m.CURRENT_DATA_PLANE_REVISION,
-        schema_revision="089.014",
+        schema_revision="089.018",
         migration_digest=registry.digest,
         read_compatible_from=tuple(
             value
             for value in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from
-            if value < "089.014"
+            if value < "089.018"
         ),
         accepted_predecessor_digests=tuple(
             pair
             for pair in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
-            if pair[0] < "089.014"
+            if pair[0] < "089.018"
         ),
     )
     return m.MigrationRunner(database, revision=revision, registry=registry)
@@ -73,7 +73,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
     with database.transaction() as tx:
         tables = seed_populated(tx)
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.015")
+    report = runner(database).run(expected_revision="089.019")
     assert report.applied_steps == ("astralplane-089-verification-credentials",)
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -96,20 +96,20 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             tx, owner_id=OWNER, challenge_digest="a" * 64, consumption_id="upgrade-consumption"
         )
         assert consumed.challenge_digest == "a" * 64
-    assert runner(database).run(expected_revision="089.015").applied_steps == ()
+    assert runner(database).run(expected_revision="089.019").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
-        prior_runner(database).run(expected_revision="089.014")
+        prior_runner(database).run(expected_revision="089.018")
 
 
 def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
     def interrupt(tx):
-        m.PLANE_SCHEMA_089_015_MIGRATION.operation(tx)
+        m.PLANE_SCHEMA_089_019_MIGRATION.operation(tx)
         raise RuntimeError("synthetic interruption")
 
     registry = m.MigrationRegistry(
         tuple(
             replace(edge, operation=interrupt)
-            if edge.target_revision == "089.015"
+            if edge.target_revision == "089.019"
             else edge
             for edge in m.MIGRATION_REGISTRY.migrations
         ),
@@ -119,7 +119,7 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.015")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.019")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('verification_credential') AS relation")["relation"]
@@ -131,6 +131,6 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
             )["relation"]
             is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.015").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.019").applied_steps == (
         "astralplane-089-verification-credentials",
     )

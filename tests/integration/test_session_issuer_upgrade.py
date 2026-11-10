@@ -166,6 +166,10 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(p
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
     )
     with db.transaction() as tx:

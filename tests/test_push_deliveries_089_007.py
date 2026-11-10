@@ -106,7 +106,7 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
 
     edge = canonical.PLANE_SCHEMA_089_011_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-9] is edge
     assert edge.name == "astralplane-089-push-deliveries"
     assert edge.source_revisions == ("089.010",)
     assert edge.target_revision == "089.011"
@@ -125,7 +125,7 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
     assert canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST == (
         "facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.015"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.019"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.010") == (
         canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST
     )
@@ -133,16 +133,16 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
         "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "01fb2d3d839bb8cb02faae08d836d6b4a11f4e33eae5395aa50707b2546012fa"
+        "78774d997f0f9403dd19b1649ef48e230de62bc6c4954416a647e259d11a0203"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "55bd7203814b2f365220df77d42c11c5ef512b8b6be189a9959a5aefbf275f7c"
+        "908c445c4722c9dc9c1bc9e30a5beb855701d25e5accbbe78ada05cb11447ea8"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "1808a8e0c2e7fca7811708df4537b0084a0514bb78c321d71bb02920a617180a"
+        "5ca27137697062b307834d4c41ee970dad04ef5058f8c971acf021c99548e7e6"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "8de5bc510136925e777d7496d65bec54f0198c84db123a8cde12f4c5eb36e194"
+        "5c81191286b6cad6ef12d3e1005af7577b908f0a1b5ecbe63606c7e34a553746"
     )
 
 

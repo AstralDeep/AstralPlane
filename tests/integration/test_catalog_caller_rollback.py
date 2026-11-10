@@ -33,6 +33,7 @@ from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
+from astralplane.repositories.computer_use import ComputerSession
 from astralplane.repositories.generated_agent_publications import (
     GENERATED_AGENT_BUNDLE_CONTRACT,
     generated_agent_publication_operation_binding,
@@ -70,6 +71,7 @@ _SUPPORT_AGENT = "rollback-support-agent"
 _DIGEST_A = "a" * 64
 _DIGEST_B = "b" * 64
 _AUDIT_EVENT_ID = "74000000-0000-4000-8000-000000000001"
+_CHAT_QUEUE_ITEM = "74000000-0000-4000-8000-000000000004"
 _RETENTION_EVENT_1 = "74000000-0000-4000-8000-000000000002"
 _RETENTION_EVENT_2 = "74000000-0000-4000-8000-000000000003"
 _GENERATED_PUBLICATION_ID = "74000000-0000-4000-8000-000000000020"
@@ -405,6 +407,17 @@ def _write_background_tasks(catalog: api.RepositoryCatalog, transaction: Transac
             title="Rollback background task",
             created_at=_NOW,
         ),
+    )
+
+
+def _write_chat_queue(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.chat_queue.enqueue(
+        transaction,
+        owner_id=_OWNER,
+        chat_id=_SUPPORT_CHAT,
+        text="rollback follow-up",
+        created_at=10,
+        item_id=_CHAT_QUEUE_ITEM,
     )
 
 
@@ -1203,6 +1216,22 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_computer_use(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.computer_use.open_session(
+        transaction,
+        ComputerSession(
+            session_id="11111111-1111-4111-8111-111111110090",
+            owner_id=_OWNER,
+            host_id="rollback-host",
+            host_incarnation="rollback-incarnation",
+            state="active",
+            revision=1,
+            created_at=1,
+            updated_at=1,
+        ),
+    )
+
+
 def _write_capability_publications(
     catalog: api.RepositoryCatalog, transaction: Transaction
 ) -> None:
@@ -1401,6 +1430,13 @@ ROLLBACK_CASES = (
         "background_tasks",
         _write_background_tasks,
         _count("background_task", "task_id", "rollback-background-task"),
+        1,
+        0,
+    ),
+    RollbackCase(
+        "chat_queue",
+        _write_chat_queue,
+        _count("chat_queue_item", "item_id", _CHAT_QUEUE_ITEM),
         1,
         0,
     ),
@@ -1651,6 +1687,19 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "computer_use",
+        _write_computer_use,
+        _count(
+            "computer_session",
+            "session_id",
+            "11111111-1111-4111-8111-111111110090",
+            extra_sql=" AND owner_id = %s",
+            extra_parameters=(_OWNER,),
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
         "capability_publications",
         _write_capability_publications,
         _count(
@@ -1688,7 +1737,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 50
+    assert len(applicable_keys) == len(set(applicable_keys)) == 52
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name
