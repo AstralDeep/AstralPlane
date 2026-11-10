@@ -1154,7 +1154,9 @@ predecessor catalog and registry digest. It adds one partial btree index,
 recorded_at DESC, event_id DESC) WHERE conversation_id IS NOT NULL`. No audit row, chain
 sequence, digest, key identity or retention anchor is read for rewrite or changed. The index
 supports owner-scoped `audit.list_page(conversation_id=...)` reads in the existing descending
-cursor order.
+cursor order. The same index serves the owner-scoped
+`audit.list_conversation_range` read and the chain-ordered `audit.load_conversation_segment`
+proof read, which add no schema of their own.
 
 The edge runs inside the registry transaction like every other edge. A plain `CREATE INDEX`
 holds a write-blocking lock on `audit_events` while it builds, so audit appends wait for the

@@ -12,7 +12,7 @@ import pytest
 
 from astralplane.database import migrations as m
 from astralplane.errors import SchemaRevisionError
-from astralplane.repositories.audit import AuditEvent, AuditRepository
+from astralplane.repositories.audit import AuditEvent, AuditRepository, verify_segment_proof
 from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_atlas_pages_upgrade import seed_populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
@@ -137,9 +137,20 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         page = AuditRepository().list_page(
             tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
         )
+        conversation_range = AuditRepository().list_conversation_range(
+            tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
+        )
+        proof = AuditRepository().load_conversation_segment(
+            tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
+        )
     assert [record.event.event_id for record in page.records] == [
         "00000000-0000-4000-8000-000000000001"
     ]
+    assert [record.event.event_id for record in conversation_range.records] == [
+        "00000000-0000-4000-8000-000000000001"
+    ]
+    assert [record.sequence for run in proof.runs for record in run.records] == [1]
+    assert verify_segment_proof(proof, authenticate=_authenticate).valid
     assert runner(database).run(expected_revision="089.020").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.014")

@@ -500,3 +500,21 @@ exactly once under a uniqueness constraint with a bounded retention prune. Locke
 verification lookups never return a credential as active after a concurrent revocation
 commits. Only public key material and digests are stored; biometric verification, possession
 proof, and approval policy stay with the host. See the guarded migration and recovery section.
+
+### Conversation audit range reads and segment proofs
+
+`audit.list_conversation_range` returns one chat's events for the calling owner, optionally
+narrowed to a turn id carried at the top level of an event's `inputs_meta` or `outputs_meta`
+under the `turn_id` key and to a recorded-time window. It is cursor-paginated in the existing
+descending order and bounded: a selection above `max_events` is refused with a typed
+`audit_range_exceeds_bound` error instead of being truncated silently. The filter is always
+owner-scoped in the SQL predicate, so another owner's conversation, an unknown conversation or
+a differently cased identifier returns an empty page.
+
+`audit.load_conversation_segment` returns the same selection in chain order as an
+`AuditSegmentProof`: chain-contiguous `AuditSegmentRun` groups, each anchored with the previous
+entry hash of its first record, together with the key ids and chain sequence numbers. A third
+party recomputes every entry hash with `verify_segment_proof` and the chain authenticator
+without the rest of the chain; any changed field or hash fails verification. Both reads use the
+existing `idx_audit_user_conversation_recorded` index from schema `089.015` and add no schema.
+Chain rows, digests and whole-chain verification are unchanged.
