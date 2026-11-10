@@ -168,6 +168,7 @@ def test_populated_upgrade_preserves_exact_incarnations_and_issued_liabilities(p
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

@@ -139,6 +139,7 @@ def test_populated_089_012_upgrade_preserves_rows_adds_only_observation_tables(p
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -183,7 +184,8 @@ def test_interrupted_observation_edge_rolls_back_and_retries(predecessor):
     ).applied_steps == ("astralplane-089-observation-records", "astralplane-089-projects",
                             "astralplane-089-harness-captures",
                             "astralplane-089-audit-conversation-index",
-                            "astralplane-089-chat-queue")
+                            "astralplane-089-chat-queue",
+                            "astralplane-089-conversation-branches")
 
 
 def test_observation_namesake_or_damaged_predecessor_is_refused(predecessor):

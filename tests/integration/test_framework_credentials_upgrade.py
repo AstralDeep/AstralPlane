@@ -99,6 +99,7 @@ def test_populated007_upgrade_keeps_exact_rows_and_adds_no_credential(predecesso
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
     with db.transaction() as tx:
         after = retained_rows(tx, tables)

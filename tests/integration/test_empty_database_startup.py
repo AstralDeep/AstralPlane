@@ -439,6 +439,7 @@ def test_empty_database_reaches_current_revision_and_repeats_safely(
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
     assert second.already_current
     assert second.applied_steps == ()
@@ -1099,6 +1100,7 @@ def test_runtime_contract_upgrade_preserves_bounded_legacy_host_history(
         "astralplane-089-harness-captures",
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
 
     cursor = fixture.connection.cursor()

@@ -10,7 +10,6 @@ import pytest
 from astralplane import create_chat_queue_repository
 from astralplane.database import migrations as m
 from astralplane.errors import SchemaRevisionError
-from astralplane.repositories.history import ConversationRepository
 from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_atlas_pages_upgrade import seed_populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
@@ -69,17 +68,17 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
     database = predecessor.database
     with database.transaction() as tx:
         tables = seed_populated(tx)
-        ConversationRepository().create(
-            tx,
-            owner_id="queue-upgrade-owner",
-            conversation_id="queue-upgrade-chat",
-            title="Synthetic upgrade chat",
-            agent_id=None,
-            created_at=10,
+        tx.execute(
+            "INSERT INTO chats (id, user_id, title, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            ("queue-upgrade-chat", "queue-upgrade-owner", "Synthetic upgrade chat", 10, 10),
         )
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.016")
-    assert report.applied_steps == ("astralplane-089-chat-queue",)
+    report = runner(database).run(expected_revision="089.017")
+    assert report.applied_steps == (
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+    )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert tx.fetch_one("SELECT count(*) AS n FROM chat_queue_item")["n"] == 0
@@ -103,7 +102,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         assert repo.claim_next(
             tx, owner_id="queue-upgrade-owner", chat_id="queue-upgrade-chat"
         ) == first
-    assert runner(database).run(expected_revision="089.016").applied_steps == ()
+    assert runner(database).run(expected_revision="089.017").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.015")
 
@@ -124,13 +123,14 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.016")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.017")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('chat_queue_item') AS relation")["relation"] is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.016").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.017").applied_steps == (
         "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
     )
 
 
@@ -138,8 +138,8 @@ def test_foreign_namesake_and_current_structure_damage_fail_closed(predecessor, 
     with predecessor.database.transaction() as tx:
         tx.execute("CREATE TABLE chat_queue_item(wrong TEXT)")
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.016")
+        runner(predecessor.database).run(expected_revision="089.017")
     with migrated_clone.database.transaction() as tx:
         tx.execute("ALTER TABLE chat_queue_item DROP CONSTRAINT chat_queue_item_chat_order")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.016")
+        runner(migrated_clone.database).run(expected_revision="089.017")

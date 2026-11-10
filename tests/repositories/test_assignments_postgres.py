@@ -921,6 +921,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(
                 "astralplane-089-harness-captures",
                 "astralplane-089-audit-conversation-index",
                 "astralplane-089-chat-queue",
+                "astralplane-089-conversation-branches",
             )
             assert runner.run(
                 expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision
