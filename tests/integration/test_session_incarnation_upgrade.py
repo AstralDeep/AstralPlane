@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from astralplane.api import create_repository_catalog
 from astralplane.database import migrations as m
 from astralplane.database.baseline import BaselineMigrationRunner
 from astralplane.errors import SchemaRevisionError
@@ -80,14 +79,9 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
                 ),
             )
         before = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
-        catalog = create_repository_catalog()
-        catalog.history.conversations.create(
-            tx,
-            conversation_id="retained-chat",
-            owner_id="owner-0",
-            title="Synthetic history",
-            agent_id=None,
-            created_at=10,
+        tx.execute(
+            "INSERT INTO chats (id, user_id, title, created_at, updated_at) "
+            "VALUES ('retained-chat', 'owner-0', 'Synthetic history', 10, 10)"
         )
         tx.execute(
             "INSERT INTO user_offline_grant (id, user_id, agent_id, refresh_token_enc, "
@@ -97,7 +91,16 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         )
         tables = ("persistent_assignment", "user_offline_grant", "chats")
         unchanged = {
-            table: tuple(dict(row) for row in tx.fetch_all("SELECT * FROM " + table))
+            table: tuple(
+                dict(row)
+                for row in tx.fetch_all(
+                    "SELECT id, user_id, title, created_at, updated_at, "
+                    "has_saved_components, agent_id, render_revision, "
+                    "snapshot_committed_at, conversation_commit_id FROM " + table
+                    if table == "chats"
+                    else "SELECT * FROM " + table
+                )
+            )
             for table in tables
         }
     runner = current_runner(db)
@@ -125,7 +128,12 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
-        "astralplane-089-audit-conversation-reads",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     with db.transaction() as tx:
         after = tuple(dict(row) for row in tx.fetch_all("SELECT * FROM web_session ORDER BY sid"))
@@ -141,7 +149,16 @@ def test_populated_upgrade_preserves_all_prior_session_fields_and_repeats(predec
         assert len(identities) == 4
         assert all(UUID(value).version == 4 and str(UUID(value)) == value for value in identities)
         after_unchanged = {
-            table: tuple(dict(row) for row in tx.fetch_all("SELECT * FROM " + table))
+            table: tuple(
+                dict(row)
+                for row in tx.fetch_all(
+                    "SELECT id, user_id, title, created_at, updated_at, "
+                    "has_saved_components, agent_id, render_revision, "
+                    "snapshot_committed_at, conversation_commit_id FROM " + table
+                    if table == "chats"
+                    else "SELECT * FROM " + table
+                )
+            )
             for table in tables
         }
         # Later migration adds nullable cols here; excluded from diff
@@ -361,7 +378,12 @@ def test_populated_088001_issued_and_uncertain_liabilities_survive_upgrade(prede
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
-        "astralplane-089-audit-conversation-reads",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     for _ in range(2):
         with db.transaction() as tx:

@@ -179,6 +179,14 @@ def _mesh_enrollment(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _verification_credentials(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.verification_credentials.get_credential(
+        transaction,
+        owner_id=_OWNER,
+        credential_id=_UUID4,
+    )
+
+
 def _notifications(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
     catalog.notifications.get_preferences(transaction, owner_id=_OWNER)
 
@@ -205,6 +213,10 @@ def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecuto
         observed_revision=1,
         accepted_at=1,
     )
+
+
+def _computer_use(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.computer_use.get_session(transaction, owner_id=_OWNER, session_id=_UUID4)
 
 
 def _capability_publications(
@@ -250,6 +262,14 @@ def _attachment_parsers(catalog: api.RepositoryCatalog, transaction: FailingExec
         owner_id=_OWNER,
         gap_fingerprint="gap-1",
     )
+
+
+def _chat_queue(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.chat_queue.list(transaction, owner_id=_OWNER, chat_id="contract-chat")
+
+
+def _chat_read_receipts(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.chat_read_receipts.get(transaction, owner_id=_OWNER, chat_id="contract-chat")
 
 
 def _chat_steps(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
@@ -546,6 +566,39 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError"),
     ),
     RepositoryContract(
+        "chat_queue",
+        api.create_chat_queue_repository,
+        "src/astralplane/repositories/chat_queue.py",
+        _chat_queue,
+        _OWNER,
+        "owner_id = %s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "revision = %s"),
+        ("ON CONFLICT (item_id)", "replay changed durable semantics"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryDataError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
+        "chat_read_receipts",
+        api.create_chat_read_receipt_repository,
+        "src/astralplane/repositories/chat_read_receipts.py",
+        _chat_read_receipts,
+        _OWNER,
+        "owner_id = %s AND chat_id = %s",
+        ("last_seen_position < EXCLUDED.last_seen_position", "revision = %s"),
+        ("ON CONFLICT (owner_id, chat_id)", "read receipt revision is stale"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
         "chat_steps",
         api.create_chat_step_repository,
         "src/astralplane/repositories/chat_steps.py",
@@ -710,6 +763,18 @@ REPOSITORY_CONTRACT_MATRIX = (
         "owner_id = %s",
         ("FOR UPDATE", "record_version = %s", "membership_epoch"),
         ("ON CONFLICT", "replay changed"),
+        None,
+        ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
+    ),
+    RepositoryContract(
+        "verification_credentials",
+        api.create_verification_credential_repository,
+        "src/astralplane/repositories/verification_credentials.py",
+        _verification_credentials,
+        _OWNER,
+        "owner_id = %s",
+        ("pg_advisory_xact_lock", "FOR UPDATE", "record_version = %s"),
+        ("ON CONFLICT", "replay changed immutable semantics"),
         None,
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
@@ -1016,6 +1081,23 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "computer_use",
+        api.create_computer_use_repository,
+        "src/astralplane/repositories/computer_use.py",
+        _computer_use,
+        _OWNER,
+        "owner_id = %s",
+        ("revision = %s", "state = 'pending'"),
+        ("ON CONFLICT (session_id) DO NOTHING", "conflicting semantics"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryDataError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
         "capability_publications",
         api.create_capability_publication_repository,
         "src/astralplane/repositories/capability_publications.py",
@@ -1136,6 +1218,20 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_background_tasks:test_foreign_driver_row_fails_closed",
     ),
     BehavioralEvidence(
+        "chat_queue",
+        "tests.repositories.test_chat_queue_postgres:test_public_chat_queue_contract_behaviors",
+        "tests.repositories.test_chat_queue_postgres:test_public_chat_queue_contract_behaviors",
+        "tests.repositories.test_chat_queue_postgres:test_public_chat_queue_contract_behaviors",
+        "tests.repositories.test_chat_queue_postgres:test_public_chat_queue_contract_behaviors",
+    ),
+    BehavioralEvidence(
+        "chat_read_receipts",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+        "tests.repositories.test_chat_read_receipts_postgres:test_public_chat_read_receipt_contract_behaviors",
+    ),
+    BehavioralEvidence(
         "chat_steps",
         "tests.repositories.test_chat_steps:test_get_and_list_are_owner_scoped_and_chronological",
         "tests.repositories.test_chat_steps:test_create_step_accepts_exact_replay_after_terminal_transition",
@@ -1244,6 +1340,13 @@ BEHAVIORAL_EVIDENCE = (
         "tests.repositories.test_mesh_enrollment_postgres:test_invitation_lifecycle_is_atomic_and_single_use",
         "tests.repositories.test_mesh_enrollment_postgres:test_concurrent_invitation_consumption_admits_exactly_one",
         "tests.repositories.test_mesh_enrollment_postgres:test_invalid_enrollment_inputs_fail_closed",
+    ),
+    BehavioralEvidence(
+        "verification_credentials",
+        "tests.repositories.test_verification_credentials_postgres:test_owner_isolation_replay_and_limit_are_atomic",
+        "tests.repositories.test_verification_credentials_postgres:test_revocation_cas_replay_and_challenge_single_use",
+        "tests.repositories.test_verification_credentials_postgres:test_concurrent_revocation_never_returns_active",
+        "tests.repositories.test_verification_credentials_postgres:test_invalid_inputs_and_foreign_rows_fail_closed",
     ),
     BehavioralEvidence(
         "notifications",
@@ -1417,6 +1520,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
         "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
         "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
+    ),
+    BehavioralEvidence(
+        "computer_use",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
     ),
     BehavioralEvidence(
         "capability_publications",

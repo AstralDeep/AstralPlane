@@ -376,6 +376,11 @@ def test_descending_owner_page_empty_and_validation() -> None:
             "to_ts": NOW,
         },
         {"owner_id": "owner-1", "keyword": " "},
+        {"owner_id": "owner-1", "conversation_id": ""},
+        {"owner_id": "owner-1", "conversation_id": " "},
+        {"owner_id": "owner-1", "conversation_id": "c" * 257},
+        {"owner_id": "owner-1", "conversation_id": "chat\x00-1"},
+        {"owner_id": "owner-1", "conversation_id": 7},
         {"owner_id": "owner-1", "cursor": "encoded"},
     )
     for arguments in invalid_calls:
@@ -386,6 +391,104 @@ def test_descending_owner_page_empty_and_validation() -> None:
         AuditCursor(recorded_at=NOW.replace(tzinfo=None), event_id="event-1")
     with pytest.raises(ValueError):
         AuditCursor(recorded_at=NOW, event_id="")
+
+
+def test_conversation_page_binds_an_exact_owner_scoped_filter_before_the_cursor() -> None:
+    transaction = ScriptedTransaction(all_rows=[(event_row(),)])
+    cursor = AuditCursor(recorded_at=NOW + timedelta(seconds=5), event_id="event-9")
+
+    page = AuditRepository().list_page(
+        transaction,
+        owner_id="owner-1",
+        conversation_id="c" * 256,
+        cursor=cursor,
+        limit=1,
+    )
+
+    assert [record.event.event_id for record in page.records] == ["event-1"]
+    assert page.next_cursor is None
+    statement = transaction.calls[0][1]
+    assert "actor_user_id = %s AND conversation_id = %s AND (recorded_at, event_id) < (%s, %s)" in (
+        statement
+    )
+    assert "LIKE" not in statement
+    assert transaction.calls[0][2] == (
+        "owner-1",
+        "c" * 256,
+        NOW + timedelta(seconds=5),
+        "event-9",
+        2,
+    )
+
+
+def test_real_postgresql_conversation_page_is_owner_isolated_and_keeps_its_filter(
+    audit_postgres_database: PlaneDatabase,
+) -> None:
+    repository = AuditRepository()
+    seeded = []
+    with audit_postgres_database.transaction() as transaction:
+        for number, (owner, conversation) in enumerate(
+            (
+                ("owner-1", "chat-a"),
+                ("owner-1", "chat-b"),
+                ("owner-1", "chat-a"),
+                ("owner-1", None),
+                ("owner-2", "chat-a"),
+                ("owner-1", "chat-a"),
+                ("owner-1", "CHAT-A"),
+            )
+        ):
+            value = event(
+                event_id=str(uuid.uuid4()),
+                chain_id=owner,
+                correlation_id=str(uuid.uuid4()),
+                conversation_id=conversation,
+                started_at=NOW + timedelta(seconds=number),
+                completed_at=NOW + timedelta(seconds=number),
+            )
+            repository.append(transaction, value, authenticate)
+            seeded.append(value)
+
+    expected = [value.event_id for value in reversed(seeded) if value.chain_id == "owner-1"
+                and value.conversation_id == "chat-a"]
+    with audit_postgres_database.transaction() as transaction:
+        first = repository.list_page(
+            transaction, owner_id="owner-1", conversation_id="chat-a", limit=2
+        )
+        assert first.next_cursor is not None
+        second = repository.list_page(
+            transaction,
+            owner_id="owner-1",
+            conversation_id="chat-a",
+            cursor=first.next_cursor,
+            limit=2,
+        )
+        foreign = repository.list_page(transaction, owner_id="owner-3", conversation_id="chat-a")
+        unknown = repository.list_page(
+            transaction, owner_id="owner-1", conversation_id="chat-unknown"
+        )
+        narrowed = repository.list_page(
+            transaction,
+            owner_id="owner-2",
+            conversation_id="chat-a",
+            outcomes=("failure",),
+        )
+        transaction.execute("SET LOCAL enable_seqscan = off")
+        plan = transaction.fetch_all(
+            "EXPLAIN SELECT * FROM audit_events WHERE actor_user_id = %s "
+            "AND conversation_id = %s ORDER BY recorded_at DESC, event_id DESC LIMIT 51",
+            ("owner-1", "chat-a"),
+        )
+
+    assert [record.event.event_id for record in (*first.records, *second.records)] == expected
+    assert second.next_cursor is None
+    assert {record.event.chain_id for record in (*first.records, *second.records)} == {"owner-1"}
+    assert foreign == AuditPage(records=(), next_cursor=None)
+    assert unknown == AuditPage(records=(), next_cursor=None)
+    assert narrowed == AuditPage(records=(), next_cursor=None)
+    assert "idx_audit_user_conversation_recorded" in " ".join(
+        str(next(iter(row.values()))) for row in plan
+    )
 
 
 def test_admin_trajectory_query_is_fixed_bounded_and_typed() -> None:

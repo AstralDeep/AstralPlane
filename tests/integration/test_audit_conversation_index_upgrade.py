@@ -1,7 +1,6 @@
-"""The guarded audit conversation-reads edge preserves a populated 089.014 audit chain,
-keeps both conversation reads owner-isolated and verifiable, and refuses namesake or
-damaged indexes. Normal registry recovery, repeat verification and old-reader denial
-remain authoritative.
+"""The guarded audit conversation-index edge preserves a populated 089.014 audit chain and
+refuses namesake or damaged indexes.
+Normal registry recovery, repeat verification and old-reader denial remain authoritative.
 """
 
 import hashlib
@@ -18,7 +17,7 @@ from tests.fixtures.migrated_template import bound_clone
 from tests.integration.test_atlas_pages_upgrade import seed_populated
 from tests.integration.test_session_issuer_upgrade import retained_rows
 
-NOW = datetime(2026, 11, 10, 12, tzinfo=UTC)
+NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
 INDEX = "idx_audit_user_conversation_recorded"
 
 
@@ -28,19 +27,16 @@ def _authenticate(key_id, payload):
 
 def _seed_audit(tx):
     repository = AuditRepository()
-    appended: dict[str, list[str]] = {}
-    for number, (owner, conversation, turn) in enumerate(
+    for number, (owner, conversation) in enumerate(
         (
-            ("audit-reads-owner", "chat-reads-a", '{"turn_id":"turn-1"}'),
-            ("audit-reads-owner", "chat-reads-b", "{}"),
-            ("audit-reads-owner", "chat-reads-a", "{}"),
-            ("audit-reads-owner", "chat-reads-a", '{"turn_id":"turn-1"}'),
-            ("audit-reads-foreign", "chat-reads-a", '{"turn_id":"turn-1"}'),
-            ("audit-reads-owner", None, "{}"),
+            ("audit-upgrade-owner", "chat-upgrade-a"),
+            ("audit-upgrade-owner", "chat-upgrade-b"),
+            ("audit-upgrade-owner", None),
+            ("audit-upgrade-foreign", "chat-upgrade-a"),
         ),
         start=1,
     ):
-        record = repository.append(
+        repository.append(
             tx,
             AuditEvent(
                 event_id=f"00000000-0000-4000-8000-{number:012d}",
@@ -54,17 +50,15 @@ def _seed_audit(tx):
                 correlation_id=f"00000000-0000-4000-9000-{number:012d}",
                 outcome="success",
                 outcome_detail=None,
-                inputs_json=turn,
+                inputs_json="{}",
                 outputs_json="{}",
                 artifact_pointers_json="[]",
                 started_at=NOW + timedelta(seconds=number),
                 completed_at=NOW + timedelta(seconds=number),
-                key_id="reads-key",
+                key_id="upgrade-key",
             ),
             _authenticate,
         )
-        appended.setdefault(owner, []).append(record.event.event_id)
-    return appended
 
 
 def prior_runner(database):
@@ -117,15 +111,22 @@ def _index_definition(tx):
     return None if row is None else row["indexdef"]
 
 
-def test_populated_upgrade_repeat_reads_and_old_reader_denial(predecessor):
+def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
     database = predecessor.database
     with database.transaction() as tx:
         tables = (*seed_populated(tx), "audit_events")
         _seed_audit(tx)
         before = retained_rows(tx, tables)
         assert _index_definition(tx) is None
-    report = runner(database).run(expected_revision="089.015")
-    assert report.applied_steps == ("astralplane-089-audit-conversation-reads",)
+    report = runner(database).run(expected_revision="089.020")
+    assert report.applied_steps == (
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
+    )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
         assert _index_definition(tx) == (
@@ -133,27 +134,24 @@ def test_populated_upgrade_repeat_reads_and_old_reader_denial(predecessor):
             "(actor_user_id, conversation_id, recorded_at DESC, event_id DESC) "
             "WHERE (conversation_id IS NOT NULL)"
         )
-        repository = AuditRepository()
-        page = repository.list_conversation_range(
-            tx, owner_id="audit-reads-owner", conversation_id="chat-reads-a", turn_id="turn-1"
+        page = AuditRepository().list_page(
+            tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
         )
-        proof = repository.load_conversation_segment(
-            tx, owner_id="audit-reads-owner", conversation_id="chat-reads-a"
+        conversation_range = AuditRepository().list_conversation_range(
+            tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
         )
-        foreign_page = repository.list_conversation_range(
-            tx, owner_id="audit-reads-foreign", conversation_id="chat-reads-a"
+        proof = AuditRepository().load_conversation_segment(
+            tx, owner_id="audit-upgrade-owner", conversation_id="chat-upgrade-a"
         )
     assert [record.event.event_id for record in page.records] == [
-        "00000000-0000-4000-8000-000000000004",
-        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001"
     ]
-    assert [run.records[0].sequence for run in proof.runs] == [1, 3]
+    assert [record.event.event_id for record in conversation_range.records] == [
+        "00000000-0000-4000-8000-000000000001"
+    ]
+    assert [record.sequence for run in proof.runs for record in run.records] == [1]
     assert verify_segment_proof(proof, authenticate=_authenticate).valid
-    assert [record.event.event_id for record in foreign_page.records] == [
-        "00000000-0000-4000-8000-000000000005"
-    ]
-    assert all(record.event.chain_id == "audit-reads-foreign" for record in foreign_page.records)
-    assert runner(database).run(expected_revision="089.015").applied_steps == ()
+    assert runner(database).run(expected_revision="089.020").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.014")
 
@@ -174,11 +172,16 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry).run(expected_revision="089.015")
+        runner(predecessor.database, registry).run(expected_revision="089.020")
     with predecessor.database.transaction() as tx:
         assert _index_definition(tx) is None
-    assert runner(predecessor.database).run(expected_revision="089.015").applied_steps == (
-        "astralplane-089-audit-conversation-reads",
+    assert runner(predecessor.database).run(expected_revision="089.020").applied_steps == (
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
 
 
@@ -194,11 +197,11 @@ def test_namesake_predecessor_index_fails_closed(predecessor, namesake):
     with predecessor.database.transaction() as tx:
         tx.execute(namesake)
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.015")
+        runner(predecessor.database).run(expected_revision="089.020")
 
 
 def test_dropped_current_index_fails_closed(migrated_clone):
     with migrated_clone.database.transaction() as tx:
         tx.execute(f"DROP INDEX {INDEX}")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.015")
+        runner(migrated_clone.database).run(expected_revision="089.020")

@@ -1,5 +1,5 @@
-"""Owner-and-conversation audit index that lets repositories/audit.py serve conversation
-range reads and chain-segment proofs without scanning the owner's whole history.
+"""Owner-and-conversation audit index that lets repositories/audit.py page one chat's events
+without scanning the owner's whole history.
 The guarded migration registry in database/migrations.py installs it at schema 089.015.
 """
 

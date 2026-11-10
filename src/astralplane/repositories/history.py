@@ -43,6 +43,17 @@ class ConversationRecord:
     publication_id: str | None
     has_saved_components: bool
     snapshot_committed_at: datetime | None = None
+    fork_source_conversation_id: str | None = None
+    fork_source_message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationBranchHeadRecord:
+    conversation_id: str
+    owner_id: str
+    head_message_id: int | None
+    branch_snapshot_id: int | None
+    version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,7 @@ class MessageRecord:
     publication_id: str | None
     commit_position: int | None
     committed_render_revision: int | None
+    parent_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +310,16 @@ def _conversation(row: Any) -> ConversationRecord:
         snapshot_committed_at=(
             None if row.get("snapshot_committed_at") is None else row["snapshot_committed_at"]
         ),
+        fork_source_conversation_id=(
+            None
+            if row.get("fork_source_chat_id") is None
+            else str(row["fork_source_chat_id"])
+        ),
+        fork_source_message_id=(
+            None
+            if row.get("fork_source_message_id") is None
+            else int(row["fork_source_message_id"])
+        ),
     )
 
 
@@ -316,6 +338,20 @@ def _conversation_summary(row: Any) -> ConversationSummaryRecord:
         has_saved_components=conversation.has_saved_components,
         latest_message_content=(None if content is None else _content_value(content)),
         snapshot_committed_at=conversation.snapshot_committed_at,
+    )
+
+
+def _conversation_branch_head(row: Any) -> ConversationBranchHeadRecord:
+    return ConversationBranchHeadRecord(
+        conversation_id=str(_row_value(row, "chat_id")),
+        owner_id=str(_row_value(row, "user_id")),
+        head_message_id=(
+            None if row.get("head_message_id") is None else int(row["head_message_id"])
+        ),
+        branch_snapshot_id=(
+            None if row.get("branch_snapshot_id") is None else int(row["branch_snapshot_id"])
+        ),
+        version=int(_row_value(row, "version")),
     )
 
 
@@ -339,6 +375,9 @@ def _message(row: Any) -> MessageRecord:
             None
             if row.get("committed_render_revision") is None
             else int(row["committed_render_revision"])
+        ),
+        parent_message_id=(
+            None if row.get("parent_message_id") is None else int(row["parent_message_id"])
         ),
     )
 
@@ -370,8 +409,15 @@ class ConversationRepository:
         SELECT id, user_id, title, agent_id, created_at, updated_at,
                COALESCE(render_revision, 0) AS render_revision,
                conversation_commit_id, COALESCE(has_saved_components, FALSE)
-                   AS has_saved_components, snapshot_committed_at
+                   AS has_saved_components, snapshot_committed_at,
+               fork_source_chat_id, fork_source_message_id
         FROM chats
+    """
+
+    _HEAD_SELECT = """
+        SELECT head.chat_id, head.user_id, head.head_message_id,
+               head.branch_snapshot_id, head.version
+        FROM chat_branch_head AS head
     """
 
     def create(
@@ -404,6 +450,17 @@ class ConversationRepository:
         )
         row = _optional_returned(result, "conversation.create")
         if row is not None:
+            transaction.execute(
+                """
+                INSERT INTO chat_branch_head (chat_id, user_id, head_message_id,
+                                              branch_snapshot_id, version)
+                SELECT id, user_id, NULL, NULL, 0
+                FROM chats
+                WHERE id = %s AND user_id = %s
+                ON CONFLICT (chat_id) DO NOTHING
+                """,
+                (conversation_id, owner_id),
+            )
             return _conversation(row)
         existing = self.get(transaction, owner_id=owner_id, conversation_id=conversation_id)
         if existing is None:
@@ -411,14 +468,228 @@ class ConversationRepository:
                 "conversation identity is already owned by another namespace",
                 metadata={"operation": "conversation.create"},
             )
-        expected = (title, agent_id, created_at)
-        observed = (existing.title, existing.agent_id, existing.created_at)
+        expected = (title, agent_id, created_at, None, None)
+        observed = (
+            existing.title,
+            existing.agent_id,
+            existing.created_at,
+            existing.fork_source_conversation_id,
+            existing.fork_source_message_id,
+        )
         if observed != expected:
             raise RepositoryConflictError(
                 "conversation idempotency identity was reused with different semantics",
                 metadata={"operation": "conversation.create"},
             )
         return existing
+
+    def fork(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        source_conversation_id: str,
+        source_message_id: int,
+        title: str,
+        agent_id: str | None,
+        created_at: int,
+    ) -> ConversationRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        source_conversation_id = _required_id(source_conversation_id, "source_conversation_id")
+        source_message_id = _positive_int(source_message_id, "source_message_id")
+        title = _bounded_text(title, "title", maximum=512)
+        if agent_id is not None:
+            agent_id = _required_id(agent_id, "agent_id")
+        created_at = _non_negative_int(created_at, "created_at")
+        if conversation_id == source_conversation_id:
+            raise RepositoryValidationError("fork conversation must differ from its source")
+        source = transaction.fetch_one(
+            f"""
+            SELECT {MessageRepository._FIELDS}
+            FROM messages AS message
+            LEFT JOIN conversation_commit AS publication
+              ON publication.commit_id = message.conversation_commit_id
+             AND publication.chat_id = message.chat_id
+             AND publication.owner_user_id = message.user_id
+            WHERE message.id = %s AND message.chat_id = %s AND message.user_id = %s
+              AND (
+                message.conversation_commit_id IS NULL
+                OR (
+                    publication.state = 'committed'
+                    AND publication.committed_render_revision =
+                        message.committed_render_revision
+                )
+              )
+            """,
+            (source_message_id, source_conversation_id, owner_id),
+        )
+        if source is None:
+            raise RepositoryNotFoundError(
+                "fork source message was not found",
+                metadata={"operation": "conversation.fork"},
+            )
+        result = transaction.execute(
+            """
+            INSERT INTO chats (
+                id, user_id, title, agent_id, created_at, updated_at,
+                has_saved_components, render_revision,
+                fork_source_chat_id, fork_source_message_id
+            )
+            SELECT %s, %s, %s, %s, %s, %s, FALSE, 0, %s, %s
+            FROM messages AS message
+            WHERE message.id = %s AND message.chat_id = %s AND message.user_id = %s
+            ON CONFLICT (id) DO NOTHING
+            RETURNING id, user_id, title, agent_id, created_at, updated_at,
+                      render_revision, conversation_commit_id, has_saved_components,
+                      fork_source_chat_id, fork_source_message_id
+            """,
+            (
+                conversation_id,
+                owner_id,
+                title,
+                agent_id,
+                created_at,
+                created_at,
+                source_conversation_id,
+                source_message_id,
+                source_message_id,
+                source_conversation_id,
+                owner_id,
+            ),
+        )
+        row = _optional_returned(result, "conversation.fork")
+        if row is not None:
+            transaction.execute(
+                """
+                INSERT INTO chat_branch_head (chat_id, user_id, head_message_id,
+                                              branch_snapshot_id, version)
+                SELECT id, user_id, NULL, NULL, 0
+                FROM chats
+                WHERE id = %s AND user_id = %s
+                ON CONFLICT (chat_id) DO NOTHING
+                """,
+                (conversation_id, owner_id),
+            )
+            return _conversation(row)
+        existing = self.get(transaction, owner_id=owner_id, conversation_id=conversation_id)
+        if existing is None:
+            raise RepositoryConflictError(
+                "conversation identity is already owned by another namespace",
+                metadata={"operation": "conversation.fork"},
+            )
+        expected = (title, agent_id, created_at, source_conversation_id, source_message_id)
+        observed = (
+            existing.title,
+            existing.agent_id,
+            existing.created_at,
+            existing.fork_source_conversation_id,
+            existing.fork_source_message_id,
+        )
+        if observed != expected:
+            raise RepositoryConflictError(
+                "conversation idempotency identity was reused with different semantics",
+                metadata={"operation": "conversation.fork"},
+            )
+        return existing
+
+    def branch_head(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+    ) -> ConversationBranchHeadRecord | None:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        row = query.fetch_one(
+            self._HEAD_SELECT + " WHERE head.chat_id = %s AND head.user_id = %s",
+            (conversation_id, owner_id),
+        )
+        return None if row is None else _conversation_branch_head(row)
+
+    def move_branch_head(
+        self,
+        transaction: Transaction,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        head_message_id: int | None,
+        expected_version: int,
+        branch_snapshot_id: int | None = None,
+    ) -> ConversationBranchHeadRecord:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        expected_version = _non_negative_int(expected_version, "expected_version")
+        if branch_snapshot_id is not None:
+            branch_snapshot_id = _positive_int(branch_snapshot_id, "branch_snapshot_id")
+        if head_message_id is not None:
+            head_message_id = _positive_int(head_message_id, "head_message_id")
+            visible = transaction.fetch_one(
+                f"""
+                SELECT {MessageRepository._FIELDS}
+                FROM messages AS message
+                LEFT JOIN conversation_commit AS publication
+                  ON publication.commit_id = message.conversation_commit_id
+                 AND publication.chat_id = message.chat_id
+                 AND publication.owner_user_id = message.user_id
+                WHERE message.id = %s AND message.chat_id = %s AND message.user_id = %s
+                  AND (
+                    message.conversation_commit_id IS NULL
+                    OR (
+                        publication.state = 'committed'
+                        AND publication.committed_render_revision =
+                            message.committed_render_revision
+                    )
+                  )
+                """,
+                (head_message_id, conversation_id, owner_id),
+            )
+            if visible is None:
+                raise RepositoryNotFoundError(
+                    "branch head message was not found",
+                    metadata={"operation": "conversation.move_branch_head"},
+                )
+        if branch_snapshot_id is not None:
+            snapshot = transaction.fetch_one(
+                """
+                SELECT snapshot.id
+                FROM workspace_snapshot AS snapshot
+                WHERE snapshot.id = %s AND snapshot.chat_id = %s AND snapshot.user_id = %s
+                """,
+                (branch_snapshot_id, conversation_id, owner_id),
+            )
+            if snapshot is None:
+                raise RepositoryNotFoundError(
+                    "branch head snapshot was not found",
+                    metadata={"operation": "conversation.move_branch_head"},
+                )
+        result = transaction.execute(
+            """
+            UPDATE chat_branch_head AS head
+            SET head_message_id = %s, branch_snapshot_id = %s, version = head.version + 1
+            WHERE head.chat_id = %s AND head.user_id = %s AND head.version = %s
+            RETURNING head.chat_id, head.user_id, head.head_message_id,
+                      head.branch_snapshot_id, head.version
+            """,
+            (head_message_id, branch_snapshot_id, conversation_id, owner_id, expected_version),
+        )
+        row = _optional_returned(result, "conversation.move_branch_head")
+        if row is not None:
+            return _conversation_branch_head(row)
+        if self.get(transaction, owner_id=owner_id, conversation_id=conversation_id) is None:
+            raise RepositoryNotFoundError(
+                "conversation was not found",
+                metadata={"operation": "conversation.move_branch_head"},
+            )
+        raise RepositoryConflictError(
+            "branch head changed since it was read",
+            metadata={
+                "operation": "conversation.move_branch_head",
+                "expected_version": expected_version,
+            },
+        )
 
     def get(
         self,
@@ -608,13 +879,71 @@ class MessageRepository:
     _FIELDS = (
         "message.id, message.chat_id, message.user_id, message.role, message.content, "
         "message.timestamp, message.conversation_commit_id, message.commit_position, "
-        "message.committed_render_revision"
+        "message.committed_render_revision, message.parent_message_id"
     )
 
     @staticmethod
     def _stored_content(content: object) -> str:
         # Encode as JSON so prose like '[]' can't be misread as data
         return _canonical_json(content, "content")
+
+    @staticmethod
+    def _visible_message_filter() -> str:
+        return """
+              AND (
+                message.conversation_commit_id IS NULL
+                OR (
+                    publication.state = 'committed'
+                    AND publication.committed_render_revision =
+                        message.committed_render_revision
+                )
+              )"""
+
+    def _visible_parent_id(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        parent_message_id: int,
+        publication_id: str | None = None,
+    ) -> int:
+        same_publication = (
+            """
+              OR message.conversation_commit_id = %s"""
+            if publication_id is not None
+            else ""
+        )
+        parameters: list[object] = [parent_message_id, conversation_id, owner_id]
+        if publication_id is not None:
+            parameters.append(publication_id)
+        row = query.fetch_one(
+            f"""
+            SELECT message.id
+            FROM messages AS message
+            LEFT JOIN conversation_commit AS publication
+              ON publication.commit_id = message.conversation_commit_id
+             AND publication.chat_id = message.chat_id
+             AND publication.owner_user_id = message.user_id
+            WHERE message.id = %s AND message.chat_id = %s AND message.user_id = %s
+              AND (
+                message.conversation_commit_id IS NULL
+                OR (
+                    publication.state = 'committed'
+                    AND publication.committed_render_revision =
+                        message.committed_render_revision
+                )
+                {same_publication}
+              )
+            """,
+            tuple(parameters),
+        )
+        if row is None:
+            raise RepositoryNotFoundError(
+                "branch parent message was not found",
+                metadata={"operation": "message.append"},
+            )
+        return int(_row_value(row, "id"))
 
     def append(
         self,
@@ -628,11 +957,20 @@ class MessageRepository:
         publication_id: str | None = None,
         commit_position: int | None = None,
         committed_render_revision: int | None = None,
+        parent_message_id: int | None = None,
     ) -> MessageRecord:
         owner_id = _required_id(owner_id, "owner_id")
         conversation_id = _required_id(conversation_id, "conversation_id")
         role = _bounded_text(role, "role", maximum=64)
         timestamp = _non_negative_int(timestamp, "timestamp")
+        if parent_message_id is not None:
+            parent_message_id = self._visible_parent_id(
+                transaction,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                parent_message_id=parent_message_id,
+                publication_id=publication_id,
+            )
         stored_content = self._stored_content(content)
         revisioned = publication_id is not None
         if revisioned:
@@ -650,9 +988,9 @@ class MessageRepository:
                 INSERT INTO messages (
                     chat_id, user_id, role, content, timestamp,
                     conversation_commit_id, commit_position,
-                    committed_render_revision
+                    committed_render_revision, parent_message_id
                 )
-                SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s
                 FROM conversation_commit AS publication
                 WHERE publication.commit_id = %s
                   AND publication.chat_id = %s
@@ -664,7 +1002,7 @@ class MessageRepository:
                     DO NOTHING
                 RETURNING id, chat_id, user_id, role, content, timestamp,
                           conversation_commit_id, commit_position,
-                          committed_render_revision
+                          committed_render_revision, parent_message_id
                 """,
                 (
                     conversation_id,
@@ -675,6 +1013,7 @@ class MessageRepository:
                     publication_id,
                     commit_position,
                     committed_render_revision,
+                    parent_message_id,
                     publication_id,
                     conversation_id,
                     owner_id,
@@ -686,14 +1025,15 @@ class MessageRepository:
                 raise RepositoryValidationError("legacy messages cannot carry publication metadata")
             result = transaction.execute(
                 """
-                INSERT INTO messages (chat_id, user_id, role, content, timestamp)
-                SELECT %s, %s, %s, %s, %s
+                INSERT INTO messages (chat_id, user_id, role, content, timestamp,
+                                      parent_message_id)
+                SELECT %s, %s, %s, %s, %s, %s
                 FROM chats
                 WHERE id = %s AND user_id = %s
                   AND COALESCE(render_revision, 0) = 0
                 RETURNING id, chat_id, user_id, role, content, timestamp,
                           conversation_commit_id, commit_position,
-                          committed_render_revision
+                          committed_render_revision, parent_message_id
                 """,
                 (
                     conversation_id,
@@ -701,6 +1041,7 @@ class MessageRepository:
                     role,
                     stored_content,
                     timestamp,
+                    parent_message_id,
                     conversation_id,
                     owner_id,
                 ),
@@ -730,12 +1071,14 @@ class MessageRepository:
             _content_value(stored_content),
             timestamp,
             committed_render_revision,
+            parent_message_id,
         )
         observed = (
             existing.role,
             existing.content,
             existing.timestamp,
             existing.committed_render_revision,
+            existing.parent_message_id,
         )
         if observed != expected:
             raise RepositoryConflictError(
@@ -820,6 +1163,34 @@ class MessageRepository:
             if timestamp_row is None:  # pragma: no cover
                 raise RepositoryDataError("database timestamp query returned no row")
             timestamp = int(_row_value(timestamp_row, "observed_at")) + position
+        if position == 0:
+            head_row = transaction.fetch_one(
+                """
+                SELECT head.head_message_id
+                FROM chat_branch_head AS head
+                WHERE head.chat_id = %s AND head.user_id = %s
+                """,
+                (conversation_id, owner_id),
+            )
+            parent_message_id = (
+                None
+                if head_row is None or head_row.get("head_message_id") is None
+                else int(head_row["head_message_id"])
+            )
+        else:
+            previous_row = transaction.fetch_one(
+                """
+                SELECT message.id
+                FROM messages AS message
+                WHERE message.chat_id = %s AND message.user_id = %s
+                  AND message.conversation_commit_id = %s
+                  AND message.commit_position = %s
+                """,
+                (conversation_id, owner_id, publication_id, position - 1),
+            )
+            if previous_row is None:  # pragma: no cover
+                raise RepositoryDataError("staged publication chain is broken")
+            parent_message_id = int(_row_value(previous_row, "id"))
         return self.append(
             transaction,
             owner_id=owner_id,
@@ -830,6 +1201,7 @@ class MessageRepository:
             publication_id=publication_id,
             commit_position=position,
             committed_render_revision=base_revision + 1,
+            parent_message_id=parent_message_id,
         )
 
     def get_by_publication_position(
@@ -1013,6 +1385,147 @@ class MessageRepository:
             (conversation_id, owner_id),
         )
         return None if row is None else int(_row_value(row, "id"))
+
+    def _require_conversation(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+    ) -> None:
+        row = query.fetch_one(
+            "SELECT id FROM chats WHERE id = %s AND user_id = %s",
+            (conversation_id, owner_id),
+        )
+        if row is None:
+            raise RepositoryNotFoundError(
+                "conversation was not found",
+                metadata={"operation": "message.branch_read"},
+            )
+
+    def list_branch_path(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        limit: int = 200,
+    ) -> tuple[MessageRecord, ...]:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        limit = _bounded_limit(limit, maximum=1000)
+        self._require_conversation(query, owner_id=owner_id, conversation_id=conversation_id)
+        rows = query.fetch_all(
+            f"""
+            WITH RECURSIVE branch_path AS (
+                SELECT head.head_message_id AS message_id, 1 AS depth
+                FROM chat_branch_head AS head
+                WHERE head.chat_id = %s AND head.user_id = %s
+                  AND head.head_message_id IS NOT NULL
+                UNION ALL
+                SELECT message.parent_message_id, branch_path.depth + 1
+                FROM branch_path
+                JOIN messages AS message ON message.id = branch_path.message_id
+                WHERE message.parent_message_id IS NOT NULL
+                  AND branch_path.depth < 4096
+            )
+            SELECT {self._FIELDS}
+            FROM branch_path AS branch
+            JOIN messages AS message ON message.id = branch.message_id
+            LEFT JOIN conversation_commit AS publication
+              ON publication.commit_id = message.conversation_commit_id
+             AND publication.chat_id = message.chat_id
+             AND publication.owner_user_id = message.user_id
+            WHERE message.chat_id = %s AND message.user_id = %s
+            {self._visible_message_filter()}
+            ORDER BY branch.depth DESC
+            LIMIT %s
+            """,
+            (conversation_id, owner_id, conversation_id, owner_id, limit),
+        )
+        return tuple(_message(row) for row in rows)
+
+    def count_message_siblings(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        message_id: int,
+    ) -> int:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        message_id = _positive_int(message_id, "message_id")
+        self._require_conversation(query, owner_id=owner_id, conversation_id=conversation_id)
+        message = self.get(
+            query,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        if message is None:
+            raise RepositoryNotFoundError(
+                "message was not found",
+                metadata={"operation": "message.count_message_siblings"},
+            )
+        row = query.fetch_one(
+            f"""
+            SELECT count(*) AS siblings
+            FROM messages AS message
+            LEFT JOIN conversation_commit AS publication
+              ON publication.commit_id = message.conversation_commit_id
+             AND publication.chat_id = message.chat_id
+             AND publication.owner_user_id = message.user_id
+            WHERE message.chat_id = %s AND message.user_id = %s
+              AND message.parent_message_id IS NOT DISTINCT FROM %s
+            {self._visible_message_filter()}
+            """,
+            (conversation_id, owner_id, message.parent_message_id),
+        )
+        if row is None:  # pragma: no cover
+            raise RepositoryDataError("sibling count query returned no row")
+        return int(_row_value(row, "siblings"))
+
+    def list_branch_heads(
+        self,
+        query: QueryExecutor,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        limit: int = 200,
+    ) -> tuple[MessageRecord, ...]:
+        owner_id = _required_id(owner_id, "owner_id")
+        conversation_id = _required_id(conversation_id, "conversation_id")
+        limit = _bounded_limit(limit, maximum=1000)
+        self._require_conversation(query, owner_id=owner_id, conversation_id=conversation_id)
+        rows = query.fetch_all(
+            f"""
+            SELECT {self._FIELDS}
+            FROM messages AS message
+            LEFT JOIN conversation_commit AS publication
+              ON publication.commit_id = message.conversation_commit_id
+             AND publication.chat_id = message.chat_id
+             AND publication.owner_user_id = message.user_id
+            WHERE message.chat_id = %s AND message.user_id = %s
+            {self._visible_message_filter()}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM messages AS child
+                  WHERE child.parent_message_id = message.id
+              )
+            ORDER BY
+                COALESCE(message.committed_render_revision, 0) ASC,
+                CASE
+                    WHEN message.conversation_commit_id IS NULL
+                        THEN message.timestamp
+                    ELSE message.commit_position::BIGINT
+                END ASC,
+                message.id ASC
+            LIMIT %s
+            """,
+            (conversation_id, owner_id, limit),
+        )
+        return tuple(_message(row) for row in rows)
 
 
 class SessionRepository:
@@ -1515,6 +2028,7 @@ class HistoryRepository:
 
 
 __all__ = (
+    "ConversationBranchHeadRecord",
     "ConversationRecord",
     "ConversationRepository",
     "ConversationSummaryRecord",

@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017 -> 089.018 -> 089.019 -> 089.020`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`7e67f34212cd4b72589fa04cce839cee491602e49de2a6ef64f1585fcfa4cc9d`. Existing notification, Atlas, mesh, stop,
+`82e6c45424227803221853d05c7fed7496de11b1c7025124f1c745a7736a793f`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.015` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.020` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`, `089.015`, `089.016`, `089.017`, `089.018`, `089.019`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.015` state must carry the exact current registry
+   predecessor catalogs. A restored `089.020` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1061,9 +1061,9 @@ and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1
 It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
-The current catalog digest is `5a2943f2bc607fa8a9e88d4123abc866348cfe95164f22b87a44fca82c1986af`;
-the current registry digest is `7e67f34212cd4b72589fa04cce839cee491602e49de2a6ef64f1585fcfa4cc9d`.
-Package version is `0.1.6`; read-compatible floor remains `066.001`.
+The current catalog digest is `07bc6c360942f7890b2c77fbf6a36a4e26f4bf74ee45005f1bee003371d220ef`;
+the current registry digest is `82e6c45424227803221853d05c7fed7496de11b1c7025124f1c745a7736a793f`.
+Package version is `0.1.10`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
 by the host. Create replay compares original name and position, even after rename, and does
@@ -1146,26 +1146,26 @@ replay ordinary submit alone decides the original accepted/refused/conflicting o
 rollout or configuration must not reinterpret it. Authentication and current-caller checks remain
 mandatory in either path.
 
-### `089.015` Audit conversation reads and recovery
+### `089.015` Audit conversation index and recovery
 
-The guarded `astralplane-089-audit-conversation-reads` edge accepts only the exact `089.014`
+The guarded `astralplane-089-audit-conversation-index` edge accepts only the exact `089.014`
 predecessor catalog and registry digest. It adds one partial btree index,
 `idx_audit_user_conversation_recorded ON audit_events (actor_user_id, conversation_id,
 recorded_at DESC, event_id DESC) WHERE conversation_id IS NOT NULL`. No audit row, chain
 sequence, digest, key identity or retention anchor is read for rewrite or changed. The index
-serves the owner-scoped conversation range read `audit.list_conversation_range` and the
-chain-segment proof read `audit.load_conversation_segment` in `repositories/audit.py`; the
-segment proof groups a conversation's events into chain-contiguous runs and anchors each run
-with the previous entry hash so a third party can recompute every entry hash offline.
+supports owner-scoped `audit.list_page(conversation_id=...)` reads in the existing descending
+cursor order. The same index serves the owner-scoped
+`audit.list_conversation_range` read and the chain-ordered `audit.load_conversation_segment`
+proof read, which add no schema of their own.
 
 The edge runs inside the registry transaction like every other edge. A plain `CREATE INDEX`
 holds a write-blocking lock on `audit_events` while it builds, so audit appends wait for the
 build. Plan the upgrade with the normal startup migration window, when the host has not yet
-opened admission. An interrupted edge rolls back completely and the next normal runner applies
-it again. A predecessor that already has a same-name index, with any definition, fails catalog
-attestation before the first write. Never drop or rename such an object to force the edge
-through; investigate its origin first. A current `089.015` database missing or changing the
-index fails current verification.
+opened admission. On a 2,000,000-row local table the build took about 2.3 seconds. An interrupted
+edge rolls back completely and the next normal runner applies it again. A predecessor that
+already has a same-name index, with any definition, fails catalog attestation before the first
+write. Never drop or rename such an object to force the edge through; investigate its origin
+first. A current `089.020` database missing or changing the index fails current verification.
 
 The current binary can migrate every declared predecessor revision. An older binary cannot run
 against `089.015`: its guarded registry rejects the unknown revision and catalog. Exact Deep
@@ -1173,11 +1173,194 @@ composition pin checks must also pass before admission opens. To recover availab
 repair under the current binary, or use a verified joint restore of the matching database and
 blob state. Never drop the index under an `089.015` marker, rewrite revision or digest markers,
 or run ad-hoc downgrade SQL. The current catalog digest is
-`5a2943f2bc607fa8a9e88d4123abc866348cfe95164f22b87a44fca82c1986af`; the current registry digest is
-`7e67f34212cd4b72589fa04cce839cee491602e49de2a6ef64f1585fcfa4cc9d`.
+`07bc6c360942f7890b2c77fbf6a36a4e26f4bf74ee45005f1bee003371d220ef`; the current registry digest is
+`82e6c45424227803221853d05c7fed7496de11b1c7025124f1c745a7736a793f`.
 
-Representative PostgreSQL tests populate an `089.014` catalog with a mixed-owner audit chain
-and retained rows from earlier slices, then upgrade it. They check that the rows are preserved,
-that both conversation reads stay owner-isolated and verify, that a repeated run does nothing,
-that an interrupted edge rolls back and recovers, that same-name predecessor indexes are
-refused, that a dropped current index is refused, and that an old reader is denied.
+Representative PostgreSQL tests populate an `089.014` catalog with a mixed-owner audit chain and
+retained rows from earlier slices, then upgrade it. They check that the rows are preserved and
+the conversation page works, that a repeated run does nothing, that an interrupted edge rolls
+back and recovers, that same-name predecessor indexes are refused, that a dropped current index
+is refused, and that an old reader is denied.
+
+### `089.016` Chat follow-up queue and recovery
+
+The guarded `astralplane-089-chat-queue` edge accepts only the exact `089.015`
+predecessor catalog and registry digest. It adds `chat_queue_item`, an owner- and
+chat-scoped queued follow-up row with a bounded text body, a per-item revision fence,
+a chat-local ordering position, and `ON DELETE CASCADE` retention through its parent
+chat. Deleting a chat retires its queued items in the same transaction; no queue row
+outlives its conversation, and no queue row stores tokens, credentials, approval
+state, or PHI beyond the owner-authored text the host already stores for messages.
+
+Queue mechanics stay neutral: enqueue is idempotent by caller-supplied item identity
+and serialized per chat under an advisory lock, every text update, deletion, and full
+permutation reorder carries the owner predicate and the expected revision in the same
+statement, and `claim_next` is a single atomic statement that hands the head item to
+exactly one turn dispatcher. A dispatcher that loses the head race receives a typed
+conflict and retries; it never observes a partially reordered queue because the
+ordering constraint defers only inside the reorder statement's own transaction.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot
+run against `089.016`: its guarded registry rejects the unknown revision and catalog.
+Exact Deep composition pin checks must also pass before admission opens. Never delete
+queue rows or rewrite revisions to recover availability; quiesce admission and use a
+verified joint restore of the matching database and blob state, or forward repair,
+which re-runs this additive edge from the attested `089.015` catalog. Queue rows are
+recreated only by their owner re-enqueueing the follow-up.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows,
+repeat the migration, interrupt and recover the edge transaction, reject foreign
+namesakes and damaged current structure, and prove old-reader denial. Queue tests
+cover owner isolation for list, edit, reorder, and claim; stale-revision conflicts
+that change nothing; full-permutation reorder refusals; concurrent claim handoff to
+exactly one dispatcher; and caller-rollback composition.
+
+### `089.017` Conversation branches and recovery
+
+The guarded `astralplane-089-conversation-branches` edge accepts only the exact `089.016`
+predecessor catalog and registry digest. It adds `messages.parent_message_id`, the
+per-conversation `chat_branch_head` with a compare-and-set version and optional
+workspace-snapshot pointer, and fork lineage columns on `chats`. The backfill chains each
+chat's visible messages in the exact `list_visible` order, so migrated chats become one
+linear branch whose head is the last visible message; staged, aborted, and deleted chat
+rows are never made visible and visible order never changes. Rows are never rewritten
+except for the new parent pointer, and the original exchange stays reconstructible from
+commit positions alone.
+
+Branch and fork rows carry stable parent identifiers; fork creation copies references,
+never task grants, approvals, bypass state, or pending cards, and every read stays
+owner-scoped in the SQL predicate. Moving a branch head is one compare-and-set statement:
+a stale version is refused with a typed conflict and the caller reloads the head record
+and retries. Messages are appended with an explicit visible parent from the same
+conversation; a parent from another owner or conversation is refused as not found.
+A branch-head move accepts a head message and a workspace-snapshot pointer only from the
+same conversation and owner and refuses any other, or a missing snapshot, as not found
+before the head changes. The repository enforces that snapshot scope; the `089.017` catalog
+constrains the pointer only to an existing snapshot.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot run
+against `089.017`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. Do not downgrade a composition
+that already serves branch reads; quiesce admission and use a verified joint restore of the
+matching database and blob state, or forward repair while preserving parent links and branch
+heads. Never delete parent links, zero branch-head versions, or infer lineage from message
+order at read time to recover availability. Normal chat deletion cascades messages, branch
+heads, and fork lineage references; deleting a source chat or message nulls the surviving
+fork's lineage columns without touching its own rows.
+
+Representative PostgreSQL tests populate long chats, chats with committed, staged, and
+aborted publications, deleted chats, and multiple owners, then prove identical visible
+output, visible-order parent backfill, one branch head per chat, repeat safety, whole-edge
+rollback after an injected interruption with full recovery, foreign namesake and damaged
+catalog refusal, and old-reader denial. Repository tests cover owner-scoped branch reads,
+sibling counts, compare-and-set head moves including a concurrent single-winner race,
+fork lineage replay, and typed cross-owner refusals.
+
+### `089.018` Mac computer-use bookkeeping and recovery
+
+The guarded `astralplane-089-computer-use` edge accepts only the exact `089.017`
+predecessor catalog and registry digest. It adds `computer_session`,
+`computer_task_grant`, `computer_host_effect_intent`, and `computer_approval_fence`
+with their owner-scoped ordering indexes and lifecycle constraints. Existing
+operations, assignments, captures, and every earlier record remain unchanged; the
+edge installs empty bookkeeping tables and never backfills sessions, grants,
+intents, or fences from any other store.
+
+Sessions carry host id, host incarnation, bounded state (`active`, `paused`,
+`ended`), and a bounded pause reason; transitions are revision-fenced
+compare-and-set writes scoped to the calling owner in the same statement. Task
+grants carry a SHA-256 binding digest, expiry, hard cap, use count, and revocation;
+consumption is a fenced increment that refuses exhausted, expired, or revoked
+grants with a typed error so the caller can fail closed. Host effect intents bind
+the remote operation id, a bounded verb, and an argument digest; states move one
+way only from `pending` to `committed` or `unknown`, then to `acknowledged`, and an
+`unknown` intent never returns to `pending`. Bulk startup recovery marks an owner's
+pending intents unknown in one bounded statement and returns the records. Approval
+fences are single-use: `open` becomes `consumed` or `released` exactly once.
+
+Records hold only digests and bounded identifiers; screenshots, file contents,
+command output, and clipboard text have no column and no path into Plane. Another
+owner cannot read, acknowledge, revoke, consume, or delete a record because every
+statement filters on the owner. Retention is explicit: ended sessions and expired
+or revoked grants are deleted in bounded batches ordered by their end timestamps,
+and no purge tombstone is required because these rows never gate admission.
+
+The current binary can migrate declared predecessor revisions. An older binary
+cannot run against `089.018`: its guarded registry rejects the unknown revision and
+catalog. Exact Deep composition pin checks must also pass before admission opens.
+Do not downgrade a composition that could lose effect bookkeeping; quiesce
+admission and use a verified joint restore of the matching database and blob state,
+or forward repair while preserving the bookkeeping tables. Never drop intent rows
+or rewrite revision markers to recover availability: after a crash, list open
+intents per owner, mark them unknown in bulk, and let Deep decide the recovery
+policy for the uncertain host effects. A database restore cannot restore live Mac
+sessions; the host must re-establish them.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows,
+repeat the migration, interrupt and recover the edge transaction, reject foreign
+namesakes and damaged indexes, and prove old-reader denial. Repository tests cover
+owner isolation, monotonic intent transitions under concurrency, revision fences,
+expiry and hard-cap refusal, single-use fences, retention bounds, and rollback
+safety. The live check restarts a sandbox server mid-task only after the Deep work
+lands; until then this remains host-side acceptance, not Plane qualification.
+
+### `089.019` Verification credential storage and recovery
+
+The guarded `astralplane-089-verification-credentials` edge accepts only the exact
+`089.018` predecessor catalog and registry digest. It adds `verification_credential` and
+`verification_challenge_consumption`, holding only owner-scoped public key material (SEC1 or
+SPKI), device and algorithm labels, state timestamps, and opaque challenge digests. No private
+key, token, or biometric sample is ever stored or accepted. A state-shape constraint keeps
+`revoked` rows paired with a revocation timestamp; the per-owner uniqueness constraint makes
+each challenge digest consumable exactly once, and an owner index bounds lookups and pruning.
+
+Enrollment refuses an owner above the bounded active-credential count under a per-owner
+advisory lock. Revocation is a record-version compare-and-set carrying the owner predicate in
+the same statement; a revoked credential can never verify again. Verification looks up the
+credential with a locked owner-scoped read, so a lookup concurrent with a revocation
+transaction blocks, then observes the committed revoked state instead of returning an active
+record. Consumed challenges support a bounded retention prune that deletes only the calling
+owner's rows consumed before an explicit cutoff, with a bounded delete count.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot run
+against `089.019`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. Do not downgrade a composition
+that could accept a revoked credential; quiesce admission and use a verified joint restore of
+the matching database and blob state, or forward repair while preserving revocations. Never
+delete revocation rows, rewrite consumed challenges, or reuse a consumed digest to recover
+availability; enroll a new credential instead. Normal retention pruning deletes only consumed
+challenge rows; credential rows are owner records and are removed only by explicit host policy
+through its own administration paths.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows, repeat the
+migration, interrupt and recover the edge transaction, and prove old-reader denial. Behavior
+tests cover owner isolation, bounded enrollment, revocation CAS, replay, exactly-once
+challenge consumption, bounded pruning, and the revocation-lookup race on real PostgreSQL.
+
+### `089.020` Chat read receipts and recovery
+
+The guarded `astralplane-089-chat-read-receipts` edge accepts only the exact `089.019`
+predecessor catalog and registry digest. It adds `chat_read_receipt`, one owner- and
+chat-scoped row holding the chat's last-seen commit position and a monotonic revision,
+with `ON DELETE CASCADE` retention through its parent chat. Deleting a chat retires its
+receipt in the same transaction; a re-created chat id starts with no receipt, and no
+receipt stores message content, tokens, credentials, approval state, or PHI. Receipts
+are owner-isolated non-audit metadata: every read and write carries the owner predicate,
+the monotonic advance and revision fence share one statement, and each accepted write
+returns the new revision so the host can resolve conflicts between the owner's devices
+deterministically.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot
+run against `089.020`: its guarded registry rejects the unknown revision and catalog.
+Exact Deep composition pin checks must also pass before admission opens. Never delete
+receipt rows or rewrite revisions to recover availability; quiesce admission and use a
+verified joint restore of the matching database and blob state, or forward repair,
+which re-runs this additive edge from the attested `089.019` catalog. Receipts are
+recreated only by their owner marking the chat seen again.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows,
+repeat the migration, interrupt and recover the edge transaction, reject foreign
+namesakes and damaged current structure, and prove old-reader denial. Receipt tests
+cover owner isolation for reads and marks, monotonic no-op regression, stale-revision
+conflicts that change nothing, the batched read that includes chats without receipts,
+cascade retirement with non-inheriting re-creation, and caller-rollback composition.

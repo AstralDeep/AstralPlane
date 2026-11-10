@@ -482,6 +482,8 @@ def test_message_append_next_locks_stage_and_allocates_database_time() -> None:
             },
             {"next_position": 1},
             {"observed_at": 100},
+            {"id": 8},
+            {"id": 8},
         )
     )
     transaction.execute_results.append(
@@ -494,6 +496,7 @@ def test_message_append_next_locks_stage_and_allocates_database_time() -> None:
                 conversation_commit_id="commit-1",
                 commit_position=1,
                 committed_render_revision=3,
+                parent_message_id=8,
             )
         )
     )
@@ -508,8 +511,9 @@ def test_message_append_next_locks_stage_and_allocates_database_time() -> None:
     )
 
     assert appended.message_id == 9 and appended.commit_position == 1
+    assert appended.parent_message_id == 8
     assert "FOR UPDATE OF publication, chat" in transaction.calls[0][1]
-    assert transaction.calls[-1][2][4:8] == (101, "commit-1", 1, 3)
+    assert transaction.calls[-1][2][4:9] == (101, "commit-1", 1, 3, 8)
 
 
 @pytest.mark.parametrize(

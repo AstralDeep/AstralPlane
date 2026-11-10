@@ -132,7 +132,12 @@ def test_populated_push_upgrade_preserves_rows_and_supports_claim_acknowledgment
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
-        "astralplane-089-audit-conversation-reads",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
     repo = PushDeliveryRepository()
     with db.transaction() as tx:
@@ -240,7 +245,12 @@ def test_interrupted_push_edge_rolls_back_and_can_retry(predecessor):
         "astralplane-089-observation-records",
         "astralplane-089-projects",
         "astralplane-089-harness-captures",
-        "astralplane-089-audit-conversation-reads",
+        "astralplane-089-audit-conversation-index",
+        "astralplane-089-chat-queue",
+        "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
+        "astralplane-089-verification-credentials",
+        "astralplane-089-chat-read-receipts",
     )
 
 

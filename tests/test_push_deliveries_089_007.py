@@ -106,7 +106,7 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
 
     edge = canonical.PLANE_SCHEMA_089_011_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-10] is edge
     assert edge.name == "astralplane-089-push-deliveries"
     assert edge.source_revisions == ("089.010",)
     assert edge.target_revision == "089.011"
@@ -125,7 +125,7 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
     assert canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST == (
         "facf476fbde30deb1952b352e2f80d56742956c368b9f97e3e04478934cc2d9b"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.015"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.020"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.010") == (
         canonical.PLANE_SCHEMA_089_010_REGISTRY_DIGEST
     )
@@ -133,16 +133,16 @@ def test_089_011_push_delivery_edge_is_pinned_to_the_exact_089_010_registry() ->
         "1e1fb4ca7f6ec63e790a65c3ebbaf028702f0ddefb084152fba6cb19cb161c68",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "5a2943f2bc607fa8a9e88d4123abc866348cfe95164f22b87a44fca82c1986af"
+        "07bc6c360942f7890b2c77fbf6a36a4e26f4bf74ee45005f1bee003371d220ef"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "1f9ec8b14a9896084d983e2b67753fdf7515097d74e916c2315c365c3292a45f"
+        "d75843ce5c5dbb94710db9686ea044ff187d2db2182ec474c203fceeed08e58f"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "cd117c845e11e3ee4f7c9bb6f858a2b228e6afa104c5923441e0fabb22c304db"
+        "3af8aea2946271a51338c96c6db3dc944332d9044168e02665b2fc6d1bcffb60"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "7e67f34212cd4b72589fa04cce839cee491602e49de2a6ef64f1585fcfa4cc9d"
+        "82e6c45424227803221853d05c7fed7496de11b1c7025124f1c745a7736a793f"
     )
 
 
