@@ -118,11 +118,12 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         _seed_audit(tx)
         before = retained_rows(tx, tables)
         assert _index_definition(tx) is None
-    report = runner(database).run(expected_revision="089.017")
+    report = runner(database).run(expected_revision="089.018")
     assert report.applied_steps == (
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
     )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -137,7 +138,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
     assert [record.event.event_id for record in page.records] == [
         "00000000-0000-4000-8000-000000000001"
     ]
-    assert runner(database).run(expected_revision="089.017").applied_steps == ()
+    assert runner(database).run(expected_revision="089.018").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.014")
 
@@ -158,13 +159,14 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry).run(expected_revision="089.017")
+        runner(predecessor.database, registry).run(expected_revision="089.018")
     with predecessor.database.transaction() as tx:
         assert _index_definition(tx) is None
-    assert runner(predecessor.database).run(expected_revision="089.017").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.018").applied_steps == (
         "astralplane-089-audit-conversation-index",
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
+        "astralplane-089-computer-use",
     )
 
 
@@ -180,11 +182,11 @@ def test_namesake_predecessor_index_fails_closed(predecessor, namesake):
     with predecessor.database.transaction() as tx:
         tx.execute(namesake)
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.017")
+        runner(predecessor.database).run(expected_revision="089.018")
 
 
 def test_dropped_current_index_fails_closed(migrated_clone):
     with migrated_clone.database.transaction() as tx:
         tx.execute(f"DROP INDEX {INDEX}")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.017")
+        runner(migrated_clone.database).run(expected_revision="089.018")

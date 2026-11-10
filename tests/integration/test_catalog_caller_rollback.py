@@ -33,6 +33,7 @@ from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
+from astralplane.repositories.computer_use import ComputerSession
 from astralplane.repositories.generated_agent_publications import (
     GENERATED_AGENT_BUNDLE_CONTRACT,
     generated_agent_publication_operation_binding,
@@ -1180,6 +1181,22 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_computer_use(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.computer_use.open_session(
+        transaction,
+        ComputerSession(
+            session_id="11111111-1111-4111-8111-111111110090",
+            owner_id=_OWNER,
+            host_id="rollback-host",
+            host_incarnation="rollback-incarnation",
+            state="active",
+            revision=1,
+            created_at=1,
+            updated_at=1,
+        ),
+    )
+
+
 def _write_capability_publications(
     catalog: api.RepositoryCatalog, transaction: Transaction
 ) -> None:
@@ -1628,6 +1645,19 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "computer_use",
+        _write_computer_use,
+        _count(
+            "computer_session",
+            "session_id",
+            "11111111-1111-4111-8111-111111110090",
+            extra_sql=" AND owner_id = %s",
+            extra_parameters=(_OWNER,),
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
         "capability_publications",
         _write_capability_publications,
         _count(
@@ -1665,7 +1695,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 50
+    assert len(applicable_keys) == len(set(applicable_keys)) == 51
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name

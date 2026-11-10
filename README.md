@@ -10,7 +10,7 @@ package in-process; AstralPlane does not add a service port or a second database
 - Python: 3.11 or newer
 - Package: `astralplane`
 - Contract: `astralplane.contract/v1`
-- Current schema: `089.017`, read-compatible from `066.001`, with guarded upgrade entry points
+- Current schema: `089.018`, read-compatible from `066.001`, with guarded upgrade entry points
   at `066.001`, `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`,
   `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`,
   `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, and `089.006`
@@ -25,11 +25,11 @@ package in-process; AstralPlane does not add a service port or a second database
 composition, and guarded startup. On a truly empty application schema it first installs the
 schema-only `066.001` compatibility baseline under the migration advisory lock, then applies every
 required edge of
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017`
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017 -> 089.018`
 in one registry transaction. A pre-split `066.001` database has only its legacy revision marker.
 Every later predecessor, from `067.001` through `089.006`, is accepted only when it carries its own
 pinned historical migration-registry digest. Every supported predecessor is structurally attested
-before the first migration write. A current `089.017` database must carry the exact current
+before the first migration write. A current `089.018` database must carry the exact current
 registry digest and pass canonical catalog-structure verification over all Plane-owned tables,
 sequences, functions, indexes, constraints, triggers, rules, policies, inheritance, and
 owned-schema privileges. A same-name or unexpected object with changed behavior is rejected. A
@@ -52,8 +52,8 @@ The package contains no AstralDeep, AstralProjection, AstralPrimitives, LETS, AP
 media, or transport implementation dependency. Product policy and authorization remain in
 AstralDeep; callers pass neutral owner context and retain transaction ownership.
 
-`create_repository_catalog()` returns the stable repository catalog. Its 51 members, in `RepositoryCatalog.as_mapping()` order, are
-`assignments`, `agent_management`, `agents`, `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`, `chat_queue`, `chat_steps`, `conversation_files`, `credentials`, `draft_agents`, `generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`, `framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`, `mesh_enrollment`, `notifications`, `push_deliveries`, `projects`, `observations`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`, `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`, `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`, `work_admission`, `workspaces`, `completion_wake`, `capability_publications`, `atlas_pages`, and `atlas_links`.
+`create_repository_catalog()` returns the stable repository catalog. Its 52 members, in `RepositoryCatalog.as_mapping()` order, are
+`assignments`, `agent_management`, `agents`, `artifacts`, `attachment_parsers`, `audit`, `audit_retention`, `authority`, `background_tasks`, `chat_queue`, `chat_steps`, `conversation_files`, `credentials`, `draft_agents`, `generated_agent_publications`, `encrypted_llm_config`, `encrypted_typesafe_credential`, `framework_credentials`, `history`, `harness_cleanup`, `identity`, `knowledge`, `maintenance`, `mesh_enrollment`, `notifications`, `push_deliveries`, `projects`, `observations`, `offline_grants`, `outbox`, `preferences`, `personalization_graph`, `purge`, `quality_audit`, `remote`, `remote_operation_proposals`, `revocations`, `saved_components`, `scheduler`, `share_grants`, `stop_epochs`, `tool_policy_state`, `tracked_jobs`, `tutorials`, `voice`, `work_admission`, `workspaces`, `completion_wake`, `computer_use`, `capability_publications`, `atlas_pages`, and `atlas_links`.
 
 `preferences.personalization.get_memory(query, owner_id=..., memory_id=...,
 for_update=True)` reads and locks the current owner-scoped memory row until the caller's
@@ -474,3 +474,17 @@ row. The guarded migration backfills each existing linear chat as one branch in 
 `list_visible` order, so visible output never changes. Branch-path, sibling-count, and
 branch-head reads stay owner-scoped; fork creation copies references and never task grants,
 approvals, bypass state, or pending cards. See the guarded migration and recovery section.
+
+### Mac computer-use bookkeeping
+
+Schema `089.018` adds owner-scoped durable bookkeeping for Mac computer use through the
+`computer_use` repository: session records (host id, host incarnation, state, pause reason),
+task-grant records (binding digest, expiry, hard cap, revocation), host effect intents
+(remote operation id, verb, argument digest) with one-way states `pending`, then `committed`
+or `unknown`, then `acknowledged`, and approval-continuation fences. Every statement carries
+its owner predicate and revision or state fence; intent transitions are compare-and-set and
+monotonic, so an `unknown` intent never returns to `pending`. Records store only digests and
+bounded metadata; screenshots, file contents, command output, and clipboard text stay outside
+Plane. Hosts list open intents after a restart, mark them unknown in bulk, and record the
+owner's acknowledgment; ended sessions and expired grants have bounded cleanup paths. Deep
+owns the recovery policy for what happens to unknown effects.

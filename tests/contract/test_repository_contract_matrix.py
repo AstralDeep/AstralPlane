@@ -207,6 +207,10 @@ def _completion_wake(catalog: api.RepositoryCatalog, transaction: FailingExecuto
     )
 
 
+def _computer_use(catalog: api.RepositoryCatalog, transaction: FailingExecutor) -> None:
+    catalog.computer_use.get_session(transaction, owner_id=_OWNER, session_id=_UUID4)
+
+
 def _capability_publications(
     catalog: api.RepositoryCatalog,
     transaction: FailingExecutor,
@@ -1037,6 +1041,23 @@ REPOSITORY_CONTRACT_MATRIX = (
         ("RepositoryConflictError", "RepositoryNotFoundError", "RepositoryValidationError"),
     ),
     RepositoryContract(
+        "computer_use",
+        api.create_computer_use_repository,
+        "src/astralplane/repositories/computer_use.py",
+        _computer_use,
+        _OWNER,
+        "owner_id = %s",
+        ("revision = %s", "state = 'pending'"),
+        ("ON CONFLICT (session_id) DO NOTHING", "conflicting semantics"),
+        None,
+        (
+            "RepositoryConflictError",
+            "RepositoryNotFoundError",
+            "RepositoryDataError",
+            "RepositoryValidationError",
+        ),
+    ),
+    RepositoryContract(
         "capability_publications",
         api.create_capability_publication_repository,
         "src/astralplane/repositories/capability_publications.py",
@@ -1445,6 +1466,17 @@ BEHAVIORAL_EVIDENCE = (
         "tests.test_completion_wake_089_004:test_accept_happy_path_inserts_fenced",
         "tests.test_completion_wake_089_004:test_accept_loses_race_to_revoke",
         "tests.test_completion_wake_089_004:test_revoke_loses_race_to_concurrent_revoke",
+    ),
+    BehavioralEvidence(
+        "computer_use",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
+        "tests.repositories.test_computer_use_postgres:"
+        "test_public_computer_use_contract_behaviors",
     ),
     BehavioralEvidence(
         "capability_publications",

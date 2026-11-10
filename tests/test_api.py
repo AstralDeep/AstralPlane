@@ -352,6 +352,7 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "work_admission",
         "workspaces",
         "completion_wake",
+        "computer_use",
         "capability_publications",
         "atlas_pages",
         "atlas_links",
