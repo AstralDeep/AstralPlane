@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`6a4faf0c0e5ae1d5b35e61548dc63b5acdf81236fdc382c2e3b6832b2525a070`. Existing notification, Atlas, mesh, stop,
+`99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.015` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.017` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`, `089.015`, `089.016`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.015` state must carry the exact current registry
+   predecessor catalogs. A restored `089.017` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1061,9 +1061,9 @@ and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1
 It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
-The current catalog digest is `5879c71ec6a7ebb414126087034e00663503174b10701f538b32cb22c28ef8e1`;
-the current registry digest is `6a4faf0c0e5ae1d5b35e61548dc63b5acdf81236fdc382c2e3b6832b2525a070`.
-Package version is `0.1.6`; read-compatible floor remains `066.001`.
+The current catalog digest is `86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f`;
+the current registry digest is `99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5`.
+Package version is `0.1.8`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
 by the host. Create replay compares original name and position, even after rename, and does
@@ -1146,9 +1146,76 @@ replay ordinary submit alone decides the original accepted/refused/conflicting o
 rollout or configuration must not reinterpret it. Authentication and current-caller checks remain
 mandatory in either path.
 
-### `089.015` Conversation branches and recovery
+### `089.015` Audit conversation index and recovery
 
-The guarded `astralplane-089-conversation-branches` edge accepts only the exact `089.014`
+The guarded `astralplane-089-audit-conversation-index` edge accepts only the exact `089.014`
+predecessor catalog and registry digest. It adds one partial btree index,
+`idx_audit_user_conversation_recorded ON audit_events (actor_user_id, conversation_id,
+recorded_at DESC, event_id DESC) WHERE conversation_id IS NOT NULL`. No audit row, chain
+sequence, digest, key identity or retention anchor is read for rewrite or changed. The index
+supports owner-scoped `audit.list_page(conversation_id=...)` reads in the existing descending
+cursor order.
+
+The edge runs inside the registry transaction like every other edge. A plain `CREATE INDEX`
+holds a write-blocking lock on `audit_events` while it builds, so audit appends wait for the
+build. Plan the upgrade with the normal startup migration window, when the host has not yet
+opened admission. On a 2,000,000-row local table the build took about 2.3 seconds. An interrupted
+edge rolls back completely and the next normal runner applies it again. A predecessor that
+already has a same-name index, with any definition, fails catalog attestation before the first
+write. Never drop or rename such an object to force the edge through; investigate its origin
+first. A current `089.017` database missing or changing the index fails current verification.
+
+The current binary can migrate every declared predecessor revision. An older binary cannot run
+against `089.015`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. To recover availability, forward
+repair under the current binary, or use a verified joint restore of the matching database and
+blob state. Never drop the index under an `089.015` marker, rewrite revision or digest markers,
+or run ad-hoc downgrade SQL. The current catalog digest is
+`86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f`; the current registry digest is
+`99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5`.
+
+Representative PostgreSQL tests populate an `089.014` catalog with a mixed-owner audit chain and
+retained rows from earlier slices, then upgrade it. They check that the rows are preserved and
+the conversation page works, that a repeated run does nothing, that an interrupted edge rolls
+back and recovers, that same-name predecessor indexes are refused, that a dropped current index
+is refused, and that an old reader is denied.
+
+### `089.016` Chat follow-up queue and recovery
+
+The guarded `astralplane-089-chat-queue` edge accepts only the exact `089.015`
+predecessor catalog and registry digest. It adds `chat_queue_item`, an owner- and
+chat-scoped queued follow-up row with a bounded text body, a per-item revision fence,
+a chat-local ordering position, and `ON DELETE CASCADE` retention through its parent
+chat. Deleting a chat retires its queued items in the same transaction; no queue row
+outlives its conversation, and no queue row stores tokens, credentials, approval
+state, or PHI beyond the owner-authored text the host already stores for messages.
+
+Queue mechanics stay neutral: enqueue is idempotent by caller-supplied item identity
+and serialized per chat under an advisory lock, every text update, deletion, and full
+permutation reorder carries the owner predicate and the expected revision in the same
+statement, and `claim_next` is a single atomic statement that hands the head item to
+exactly one turn dispatcher. A dispatcher that loses the head race receives a typed
+conflict and retries; it never observes a partially reordered queue because the
+ordering constraint defers only inside the reorder statement's own transaction.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot
+run against `089.016`: its guarded registry rejects the unknown revision and catalog.
+Exact Deep composition pin checks must also pass before admission opens. Never delete
+queue rows or rewrite revisions to recover availability; quiesce admission and use a
+verified joint restore of the matching database and blob state, or forward repair,
+which re-runs this additive edge from the attested `089.015` catalog. Queue rows are
+recreated only by their owner re-enqueueing the follow-up.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows,
+repeat the migration, interrupt and recover the edge transaction, reject foreign
+namesakes and damaged current structure, and prove old-reader denial. Queue tests
+cover owner isolation for list, edit, reorder, and claim; stale-revision conflicts
+that change nothing; full-permutation reorder refusals; concurrent claim handoff to
+exactly one dispatcher; and caller-rollback composition.
+
+### `089.017` Conversation branches and recovery
+
+The guarded `astralplane-089-conversation-branches` edge accepts only the exact `089.016`
 predecessor catalog and registry digest. It adds `messages.parent_message_id`, the
 per-conversation `chat_branch_head` with a compare-and-set version and optional
 workspace-snapshot pointer, and fork lineage columns on `chats`. The backfill chains each
@@ -1166,7 +1233,7 @@ and retries. Messages are appended with an explicit visible parent from the same
 conversation; a parent from another owner or conversation is refused as not found.
 
 The current binary can migrate declared predecessor revisions. An older binary cannot run
-against `089.015`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+against `089.017`: its guarded registry rejects the unknown revision and catalog. Exact Deep
 composition pin checks must also pass before admission opens. Do not downgrade a composition
 that already serves branch reads; quiesce admission and use a verified joint restore of the
 matching database and blob state, or forward repair while preserving parent links and branch

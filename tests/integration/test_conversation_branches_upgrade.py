@@ -47,27 +47,27 @@ ORDER BY
 def prior_runner(database):
     registry = m.MigrationRegistry(
         tuple(
-            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.014"
+            edge for edge in m.MIGRATION_REGISTRY.migrations if edge.target_revision <= "089.016"
         ),
-        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.014"),
-        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_014_SCHEMA_VERIFIER_CHECKSUM,
+        current_schema_verifier=lambda tx: m._verify_predecessor_plane_schema(tx, "089.016"),
+        current_schema_verifier_checksum=m.PLANE_SCHEMA_089_016_SCHEMA_VERIFIER_CHECKSUM,
         predecessor_schema_verifier=m._verify_predecessor_plane_schema,
         predecessor_schema_verifier_checksum=(
-            m.PLANE_SCHEMA_089_014_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
+            m.PLANE_SCHEMA_089_016_PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM
         ),
     )
-    assert registry.digest == m.PLANE_SCHEMA_089_014_REGISTRY_DIGEST
+    assert registry.digest == m.PLANE_SCHEMA_089_016_REGISTRY_DIGEST
     revision = replace(
         m.CURRENT_DATA_PLANE_REVISION,
-        schema_revision="089.014",
+        schema_revision="089.016",
         migration_digest=registry.digest,
         read_compatible_from=tuple(
-            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "089.014"
+            v for v in m.CURRENT_DATA_PLANE_REVISION.read_compatible_from if v < "089.016"
         ),
         accepted_predecessor_digests=tuple(
             p
             for p in m.CURRENT_DATA_PLANE_REVISION.accepted_predecessor_digests
-            if p[0] < "089.014"
+            if p[0] < "089.016"
         ),
     )
     return m.MigrationRunner(database, revision=revision, registry=registry)
@@ -255,7 +255,7 @@ def test_populated_upgrade_preserves_visible_output_and_backfills_one_branch(
             for name, conversation_id in chats.items()
         }
 
-    report = runner(database).run(expected_revision="089.015")
+    report = runner(database).run(expected_revision="089.017")
     assert report.applied_steps == ("astralplane-089-conversation-branches",)
 
     with database.transaction() as tx:
@@ -331,9 +331,9 @@ def test_populated_upgrade_preserves_visible_output_and_backfills_one_branch(
             tx, owner_id=OWNER_B, conversation_id=chats["long"]
         ) == ()
 
-    assert runner(database).run(expected_revision="089.015").applied_steps == ()
+    assert runner(database).run(expected_revision="089.017").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
-        prior_runner(database).run(expected_revision="089.014")
+        prior_runner(database).run(expected_revision="089.016")
 
 
 def test_interrupted_edge_rolls_back_then_normal_runner_recovers_and_backfills(
@@ -348,13 +348,13 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers_and_backfills(
         }
 
     def interrupt(tx):
-        m.PLANE_SCHEMA_089_015_MIGRATION.operation(tx)
+        m.PLANE_SCHEMA_089_017_MIGRATION.operation(tx)
         raise RuntimeError("synthetic interruption")
 
     registry = m.MigrationRegistry(
         tuple(
             replace(edge, operation=interrupt)
-            if edge.target_revision == "089.015"
+            if edge.target_revision == "089.017"
             else edge
             for edge in m.MIGRATION_REGISTRY.migrations
         ),
@@ -367,7 +367,7 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers_and_backfills(
         database, revision=m.CURRENT_DATA_PLANE_REVISION, registry=registry
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        interrupted.run(expected_revision="089.015")
+        interrupted.run(expected_revision="089.017")
     with database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('chat_branch_head') AS relation")["relation"] is None
@@ -377,10 +377,10 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers_and_backfills(
             "WHERE table_name = 'messages' AND column_name = 'parent_message_id'"
         )["n"] == 0
         assert tx.fetch_one("SELECT value FROM schema_meta WHERE key='revision'")["value"] == (
-            "089.014"
+            "089.016"
         )
 
-    report = runner(database).run(expected_revision="089.015")
+    report = runner(database).run(expected_revision="089.017")
     assert report.applied_steps == ("astralplane-089-conversation-branches",)
     with database.transaction() as tx:
         for name, conversation_id in chats.items():
@@ -409,7 +409,7 @@ def test_namesake_or_damaged_predecessor_is_refused(predecessor, corruption):
     with predecessor.database.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.015")
+        runner(predecessor.database).run(expected_revision="089.017")
 
 
 @pytest.mark.parametrize(
@@ -423,4 +423,4 @@ def test_current_catalog_damage_is_refused(predecessor, migrated_clone, corrupti
     with migrated_clone.database.transaction() as tx:
         tx.execute(corruption)
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.015")
+        runner(migrated_clone.database).run(expected_revision="089.017")

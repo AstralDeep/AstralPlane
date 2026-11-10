@@ -270,10 +270,13 @@ class AuditRepository:
         from_ts: datetime | None = None,
         to_ts: datetime | None = None,
         keyword: str | None = None,
+        conversation_id: str | None = None,
         cursor: AuditCursor | None = None,
         limit: int = 50,
     ) -> AuditPage:
         _required("owner_id", owner_id, 512)
+        if conversation_id is not None:
+            _required_conversation_id(conversation_id)
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
         classes = _bounded_filters("event_classes", event_classes)
@@ -294,6 +297,9 @@ class AuditRepository:
 
         clauses = ["actor_user_id = %s"]
         parameters: list[object] = [owner_id]
+        if conversation_id is not None:
+            clauses.append("conversation_id = %s")
+            parameters.append(conversation_id)
         if cursor is not None:
             clauses.append("(recorded_at, event_id) < (%s, %s)")
             parameters.extend((cursor.recorded_at, cursor.event_id))
@@ -646,6 +652,12 @@ def _bounded_filters(name: str, values: Sequence[str] | None) -> tuple[str, ...]
     for value in result:
         _required(name, value, 128)
     return result
+
+
+def _required_conversation_id(value: str) -> None:
+    _required("conversation_id", value, 256)
+    if "\x00" in value:
+        raise ValueError("conversation_id cannot contain null characters")
 
 
 def _required_keyword(value: str) -> str:

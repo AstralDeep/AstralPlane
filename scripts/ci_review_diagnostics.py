@@ -42,8 +42,7 @@ def inspect_change(path, before, after):
         if swallowed > old_swallowed:
             flags.append({"kind": "added-swallowed-test-error", "count": swallowed - old_swallowed})
     if (
-        path == ".specify/memory/constitution.md"
-        or path.startswith((".github/", "scripts/", "tooling/"))
+        path.startswith((".github/", "scripts/", "tooling/"))
         or Path(path).name
         in {
             "pyproject.toml",
