@@ -33,6 +33,7 @@ from astralplane.repositories.background_tasks import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
+from astralplane.repositories.computer_use import ComputerSession
 from astralplane.repositories.generated_agent_publications import (
     GENERATED_AGENT_BUNDLE_CONTRACT,
     generated_agent_publication_operation_binding,
@@ -70,6 +71,7 @@ _SUPPORT_AGENT = "rollback-support-agent"
 _DIGEST_A = "a" * 64
 _DIGEST_B = "b" * 64
 _AUDIT_EVENT_ID = "74000000-0000-4000-8000-000000000001"
+_CHAT_QUEUE_ITEM = "74000000-0000-4000-8000-000000000004"
 _RETENTION_EVENT_1 = "74000000-0000-4000-8000-000000000002"
 _RETENTION_EVENT_2 = "74000000-0000-4000-8000-000000000003"
 _GENERATED_PUBLICATION_ID = "74000000-0000-4000-8000-000000000020"
@@ -405,6 +407,17 @@ def _write_background_tasks(catalog: api.RepositoryCatalog, transaction: Transac
             title="Rollback background task",
             created_at=_NOW,
         ),
+    )
+
+
+def _write_chat_queue(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.chat_queue.enqueue(
+        transaction,
+        owner_id=_OWNER,
+        chat_id=_SUPPORT_CHAT,
+        text="rollback follow-up",
+        created_at=10,
+        item_id=_CHAT_QUEUE_ITEM,
     )
 
 
@@ -747,6 +760,41 @@ def _write_mesh_enrollment(catalog: api.RepositoryCatalog, transaction: Transact
         display_name="rollback mesh",
         bootstrap_member_id="22222222-2222-4222-8222-222222220075",
         bootstrap_member_kind="device",
+    )
+
+
+def _write_verification_credentials(
+    catalog: api.RepositoryCatalog, transaction: Transaction
+) -> None:
+    catalog.verification_credentials.enroll_credential(
+        transaction,
+        owner_id=_OWNER,
+        credential_id="11111111-1111-4111-8111-111111110076",
+        device_id="rollback-mac-device",
+        algorithm="es256",
+        key_format="spki",
+        public_key="0" * 64,
+    )
+    catalog.verification_credentials.consume_challenge(
+        transaction,
+        owner_id=_OWNER,
+        challenge_digest="b" * 64,
+        consumption_id="22222222-2222-4222-8222-222222220076",
+    )
+
+
+def _observe_verification_credentials(transaction: Transaction) -> object:
+    return (
+        transaction.fetch_one(
+            "SELECT COUNT(*) AS value FROM verification_credential "
+            "WHERE credential_id = %s",
+            ("11111111-1111-4111-8111-111111110076",),
+        )["value"],
+        transaction.fetch_one(
+            "SELECT COUNT(*) AS value FROM verification_challenge_consumption "
+            "WHERE consumption_id = %s",
+            ("22222222-2222-4222-8222-222222220076",),
+        )["value"],
     )
 
 
@@ -1178,6 +1226,22 @@ def _write_completion_wake(catalog: api.RepositoryCatalog, transaction: Transact
     )
 
 
+def _write_computer_use(catalog: api.RepositoryCatalog, transaction: Transaction) -> None:
+    catalog.computer_use.open_session(
+        transaction,
+        ComputerSession(
+            session_id="11111111-1111-4111-8111-111111110090",
+            owner_id=_OWNER,
+            host_id="rollback-host",
+            host_incarnation="rollback-incarnation",
+            state="active",
+            revision=1,
+            created_at=1,
+            updated_at=1,
+        ),
+    )
+
+
 def _write_capability_publications(
     catalog: api.RepositoryCatalog, transaction: Transaction
 ) -> None:
@@ -1380,6 +1444,13 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "chat_queue",
+        _write_chat_queue,
+        _count("chat_queue_item", "item_id", _CHAT_QUEUE_ITEM),
+        1,
+        0,
+    ),
+    RollbackCase(
         "chat_read_receipts",
         _write_chat_read_receipts,
         _count("chat_read_receipt", "owner_id", _OWNER),
@@ -1461,6 +1532,13 @@ ROLLBACK_CASES = (
         _count("mesh_record", "mesh_id", "11111111-1111-4111-8111-111111110075"),
         1,
         0,
+    ),
+    RollbackCase(
+        "verification_credentials",
+        _write_verification_credentials,
+        _observe_verification_credentials,
+        (1, 1),
+        (0, 0),
     ),
     RollbackCase(
         "notifications",
@@ -1626,6 +1704,19 @@ ROLLBACK_CASES = (
         0,
     ),
     RollbackCase(
+        "computer_use",
+        _write_computer_use,
+        _count(
+            "computer_session",
+            "session_id",
+            "11111111-1111-4111-8111-111111110090",
+            extra_sql=" AND owner_id = %s",
+            extra_parameters=(_OWNER,),
+        ),
+        1,
+        0,
+    ),
+    RollbackCase(
         "capability_publications",
         _write_capability_publications,
         _count(
@@ -1663,7 +1754,7 @@ def test_rollback_matrix_exactly_classifies_every_public_catalog_member() -> Non
     public_keys = tuple(api.create_repository_catalog().as_mapping())
     applicable_keys = tuple(case.key for case in ROLLBACK_CASES)
 
-    assert len(applicable_keys) == len(set(applicable_keys)) == 50
+    assert len(applicable_keys) == len(set(applicable_keys)) == 53
     assert tuple(key for key in public_keys if key != "agent_management") == applicable_keys
     read_only_methods = tuple(
         name
