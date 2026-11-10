@@ -651,6 +651,20 @@ class ConversationRepository:
                     "branch head message was not found",
                     metadata={"operation": "conversation.move_branch_head"},
                 )
+        if branch_snapshot_id is not None:
+            snapshot = transaction.fetch_one(
+                """
+                SELECT snapshot.id
+                FROM workspace_snapshot AS snapshot
+                WHERE snapshot.id = %s AND snapshot.chat_id = %s AND snapshot.user_id = %s
+                """,
+                (branch_snapshot_id, conversation_id, owner_id),
+            )
+            if snapshot is None:
+                raise RepositoryNotFoundError(
+                    "branch head snapshot was not found",
+                    metadata={"operation": "conversation.move_branch_head"},
+                )
         result = transaction.execute(
             """
             UPDATE chat_branch_head AS head

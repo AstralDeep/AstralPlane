@@ -382,7 +382,7 @@
         },
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "64e43f67e9a272b94ead3377d4c21115bbf6f4e7efa23d1e6d25f6e81130c19d"
+          "sha256": "7d7898627064623a4d88e4cac7260a3feb0d6f72c80069f4997040ffff5f60e6"
         }
       ],
       "task": "T078",
@@ -465,7 +465,7 @@
         },
         {
           "path": "src/astralplane/repositories/history.py",
-          "sha256": "64e43f67e9a272b94ead3377d4c21115bbf6f4e7efa23d1e6d25f6e81130c19d"
+          "sha256": "7d7898627064623a4d88e4cac7260a3feb0d6f72c80069f4997040ffff5f60e6"
         },
         {
           "path": "src/astralplane/repositories/revocations.py",
