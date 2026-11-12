@@ -925,6 +925,7 @@ def test_populated_079_upgrade_preserves_legacy_bytes_and_repeats(
                 "astralplane-089-computer-use",
                 "astralplane-089-verification-credentials",
                 "astralplane-089-chat-read-receipts",
+                "astralplane-089-mesh-event-store",
             )
             assert runner.run(
                 expected_revision=CURRENT_DATA_PLANE_REVISION.schema_revision

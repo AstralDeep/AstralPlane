@@ -120,6 +120,7 @@ def test_populated_089_008_upgrade_preserves_pages_and_adds_only_link_tables(pre
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
         "astralplane-089-chat-read-receipts",
+        "astralplane-089-mesh-event-store",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -190,6 +191,7 @@ def test_interrupted_atlas_link_edge_rolls_back_and_retries(predecessor):
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
         "astralplane-089-chat-read-receipts",
+        "astralplane-089-mesh-event-store",
     )
     with db.transaction() as tx:
         assert retained_rows(tx, ("atlas_page", "atlas_page_command")) == pages_before

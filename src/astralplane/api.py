@@ -172,6 +172,11 @@ from astralplane.repositories.computer_use import (
 )
 from astralplane.repositories.conversation_files import ConversationFileRepository
 from astralplane.repositories.credentials import CredentialRepository
+from astralplane.repositories.derived_chat import (
+    DerivedChatRecord,
+    DerivedChatRepository,
+    DerivedMessageRecord,
+)
 from astralplane.repositories.drafts import (
     DraftAgentRecord,
     DraftAgentRepository,
@@ -203,6 +208,24 @@ from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
+from astralplane.repositories.mesh_events import (
+    EventAppendResult,
+    EventBodyRecord,
+    EventCursor,
+    EventFeedRecord,
+    EventLogRepository,
+    EventMeshRecord,
+    EventRecord,
+    ForkEvidenceRecord,
+)
+from astralplane.repositories.mesh_roster import (
+    CheckpointContradiction,
+    CheckpointRecord,
+    CountersignatureRecord,
+    EventRosterRepository,
+    FeedBehindCheckpoint,
+    RosterEntryRecord,
+)
 from astralplane.repositories.notifications import (
     NotificationDeliveryIdentity,
     NotificationEventKind,
@@ -376,6 +399,18 @@ def create_share_grant_repository() -> ShareGrantRepository:
 
 def create_chat_read_receipt_repository() -> ChatReadReceiptRepository:
     return ChatReadReceiptRepository()
+
+
+def create_derived_chat_repository() -> DerivedChatRepository:
+    return DerivedChatRepository()
+
+
+def create_event_log_repository() -> EventLogRepository:
+    return EventLogRepository()
+
+
+def create_event_roster_repository() -> EventRosterRepository:
+    return EventRosterRepository()
 
 
 def create_chat_step_repository() -> ChatStepRepository:
@@ -553,6 +588,9 @@ class RepositoryCatalog:
     chat_queue: ChatQueueRepository
     chat_read_receipts: ChatReadReceiptRepository
     chat_steps: ChatStepRepository
+    derived_chat: DerivedChatRepository
+    event_log: EventLogRepository
+    event_roster: EventRosterRepository
     conversation_files: ConversationFileRepository
     saved_components: SavedComponentRepository
     history: HistoryRepository
@@ -609,6 +647,9 @@ class RepositoryCatalog:
                 "chat_queue": self.chat_queue,
                 "chat_read_receipts": self.chat_read_receipts,
                 "chat_steps": self.chat_steps,
+                "derived_chat": self.derived_chat,
+                "event_log": self.event_log,
+                "event_roster": self.event_roster,
                 "conversation_files": self.conversation_files,
                 "credentials": self.credentials,
                 "draft_agents": self.draft_agents,
@@ -678,6 +719,9 @@ def create_repository_catalog() -> RepositoryCatalog:
         chat_queue=create_chat_queue_repository(),
         chat_read_receipts=create_chat_read_receipt_repository(),
         chat_steps=create_chat_step_repository(),
+        derived_chat=create_derived_chat_repository(),
+        event_log=create_event_log_repository(),
+        event_roster=create_event_roster_repository(),
         conversation_files=create_conversation_file_repository(),
         saved_components=create_saved_component_repository(),
         history=create_history_repository(),
@@ -980,10 +1024,16 @@ __all__ = (
     "ChatReadReceiptRecord",
     "ChatReadReceiptRepository",
     "ChatReadStateRecord",
+    "CheckpointContradiction",
+    "CheckpointRecord",
     "ClaimedPushDelivery",
     "ComputerSession",
     "ComputerTaskGrant",
     "ComputerUseRepository",
+    "CountersignatureRecord",
+    "DerivedChatRecord",
+    "DerivedChatRepository",
+    "DerivedMessageRecord",
     "DraftAgentRecord",
     "DraftPublicationRecord",
     "EndpointFence",
@@ -992,8 +1042,18 @@ __all__ = (
     "EndpointReadinessError",
     "EndpointReadinessState",
     "EndpointTopology",
+    "EventAppendResult",
+    "EventBodyRecord",
+    "EventCursor",
+    "EventFeedRecord",
+    "EventLogRepository",
+    "EventMeshRecord",
+    "EventRecord",
+    "EventRosterRepository",
     "ExecutionFence",
+    "FeedBehindCheckpoint",
     "FinalizedBundle",
+    "ForkEvidenceRecord",
     "GeneratedAgentPublicationIntent",
     "GeneratedAgentPublicationOperationBinding",
     "GeneratedAgentPublicationRepository",
@@ -1048,6 +1108,7 @@ __all__ = (
     "RepositoryCatalog",
     "RestoreBlobEntry",
     "RestoredSessionRetirement",
+    "RosterEntryRecord",
     "SessionRetirementError",
     "StagedBundleReceipt",
     "StopEpochConflictError",
@@ -1073,10 +1134,13 @@ __all__ = (
     "create_computer_use_repository",
     "create_conversation_file_repository",
     "create_credential_repository",
+    "create_derived_chat_repository",
     "create_draft_agent_repository",
     "create_durable_purge_executor",
     "create_encrypted_llm_config_repository",
     "create_encrypted_typesafe_credential_repository",
+    "create_event_log_repository",
+    "create_event_roster_repository",
     "create_generated_agent_publication_repository",
     "create_harness_cleanup_repository",
     "create_history_repository",
