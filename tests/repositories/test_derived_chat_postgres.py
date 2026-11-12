@@ -3,7 +3,6 @@ upserts keyed by event id, refusal when another event or owner holds the row, pa
 resolved through event ids, and the existing history reads seeing the derived rows.
 """
 
-import psycopg2
 import pytest
 
 from astralplane import create_derived_chat_repository
@@ -13,6 +12,7 @@ from astralplane.repositories import (
     RepositoryValidationError,
 )
 from astralplane.repositories.history import ConversationRepository, MessageRepository
+from tests.fixtures.database_errors import INTEGRITY_ERRORS
 from tests.repositories._mesh_support import OTHER, OWNER, ref
 
 repo = create_derived_chat_repository()
@@ -152,11 +152,11 @@ def test_database_enforces_the_event_link_shape_and_uniqueness(migrated_clone):
         chat(tx)
         message(tx)
         message(tx, event=SECOND)
-    with pytest.raises(psycopg2.IntegrityError), migrated_clone.database.transaction() as tx:
+    with pytest.raises(INTEGRITY_ERRORS), migrated_clone.database.transaction() as tx:
         tx.execute("UPDATE messages SET event_id = 'sha256:short'")
-    with pytest.raises(psycopg2.IntegrityError), migrated_clone.database.transaction() as tx:
+    with pytest.raises(INTEGRITY_ERRORS), migrated_clone.database.transaction() as tx:
         tx.execute("UPDATE messages SET event_id = %s", (FIRST,))
-    with pytest.raises(psycopg2.IntegrityError), migrated_clone.database.transaction() as tx:
+    with pytest.raises(INTEGRITY_ERRORS), migrated_clone.database.transaction() as tx:
         tx.execute("UPDATE chats SET event_id = 'not a hash'")
 
 

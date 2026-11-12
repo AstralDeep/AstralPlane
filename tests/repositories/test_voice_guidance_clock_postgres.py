@@ -231,6 +231,7 @@ def test_voice_unavailable_state_refuses(database, work, damage):
 
 
 @pytest.mark.parametrize("lock", ["session", "turn"])
+@pytest.mark.postgresql_lock_catalog
 def test_nowait_refusal_releases_partial_locks_for_reverse_writer(database, work, lock):
     repo, fence, args = live_turn(database, work)
     schema = schema_of(database)
@@ -351,10 +352,22 @@ def test_voice_read_fault_or_cancellation_releases_partial_locks(database, work,
         with pytest.raises(KeyboardInterrupt if damage == "cancel" else RepositoryConflictError):
             repo.assert_current_guidance_turn(FaultedRead(tx), **args)
         assert tx.fetch_one("SELECT 1 AS usable")["usable"] == 1
-        with independent_database(schema) as db, db.transaction() as other:
-            other.fetch_one(
-                "SELECT session_id FROM voice_session WHERE session_id=%s FOR UPDATE NOWAIT",
-                (args["session_id"],),
-            )
+        with independent_database(schema) as db:
+            if tx.dialect.is_sqlite:
+                from astralplane.database.sqlite import SQLiteLockTimeoutError
+
+                with pytest.raises(SQLiteLockTimeoutError), db.transaction() as other:
+                    other.fetch_one(
+                        "SELECT session_id FROM voice_session "
+                        "WHERE session_id=%s FOR UPDATE NOWAIT",
+                        (args["session_id"],),
+                    )
+            else:
+                with db.transaction() as other:
+                    other.fetch_one(
+                        "SELECT session_id FROM voice_session "
+                        "WHERE session_id=%s FOR UPDATE NOWAIT",
+                        (args["session_id"],),
+                    )
     with database.transaction() as tx:
         assert repo.assert_current_guidance_turn(tx, **args).turn["state"] == "accepted"

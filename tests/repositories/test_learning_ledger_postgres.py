@@ -3,7 +3,6 @@ reversal order, idempotent replay by event id, the evidence and review requireme
 reads for adopted items and proposals awaiting a decision, and owner isolation.
 """
 
-import psycopg2
 import pytest
 
 from astralplane import create_learning_ledger_repository
@@ -12,6 +11,7 @@ from astralplane.repositories import (
     RepositoryNotFoundError,
     RepositoryValidationError,
 )
+from tests.fixtures.database_errors import INTEGRITY_ERRORS
 from tests.repositories._mesh_support import OTHER, OWNER, genesis, ref
 
 repo = create_learning_ledger_repository()
@@ -189,7 +189,7 @@ def test_database_enforces_the_ledger_shapes(migrated_clone):
         (ref(b"a3"), "adoption", PROPOSAL, "owner", "[]"),
     )
     for event, kind, proposal, review, evidence in cases:
-        with pytest.raises(psycopg2.IntegrityError), migrated_clone.database.transaction() as tx:
+        with pytest.raises(INTEGRITY_ERRORS), migrated_clone.database.transaction() as tx:
             tx.execute(insert, (OWNER, mesh, event, kind, proposal, CONTENT, review, evidence))
 
 

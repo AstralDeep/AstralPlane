@@ -10,6 +10,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Any
 
 from astralplane.async_runtime import AsyncPlaneRuntime
 from astralplane.audit_retention import AuditRetentionRepository
@@ -46,6 +47,7 @@ from astralplane.database.baseline import (
     inspect_baseline_compatibility,
 )
 from astralplane.database.bootstrap import BootInitializer, BootStatus, InitializationReport
+from astralplane.database.dialect import POSTGRES, SQLITE, Dialect
 from astralplane.database.migrations import (
     CURRENT_DATA_PLANE_REVISION,
     MIGRATION_REGISTRY,
@@ -53,7 +55,14 @@ from astralplane.database.migrations import (
 )
 from astralplane.database.pool import ConnectionPool, DriverPool, PoolSnapshot
 from astralplane.database.postgres import create_postgres_driver_pool
-from astralplane.database.revision import SCHEMA_REVISION
+from astralplane.database.revision import SCHEMA_REVISION, DataPlaneRevision
+from astralplane.database.sqlite import create_sqlite_driver_pool, is_sqlite_url
+from astralplane.database.sqlite_migrations import (
+    SQLITE_DATA_PLANE_REVISION,
+    SQLITE_MIGRATION_REGISTRY,
+    SQLiteBootRunner,
+)
+from astralplane.database.sqlite_reconciliation import SQLiteReconciliationCoordinator
 from astralplane.database.transaction import PlaneDatabase
 from astralplane.endpoint_readiness import (
     ENDPOINT_READINESS_CONTRACT_VERSION,
@@ -65,7 +74,7 @@ from astralplane.endpoint_readiness import (
     EndpointTopology,
     inspect_endpoint_readiness,
 )
-from astralplane.errors import InitializationError
+from astralplane.errors import InitializationError, LockContentionError, is_lock_contention
 from astralplane.immutable_bundle_store import (
     ArtifactCollisionError,
     ArtifactIntegrityError,
@@ -826,6 +835,7 @@ class PlaneRuntime:
         expected_contract_version: str = CONTRACT_VERSION,
         observed_schema_revision: str = SCHEMA_REVISION,
         consumer_version: str = PACKAGE_VERSION,
+        data_plane_revision: DataPlaneRevision = CURRENT_DATA_PLANE_REVISION,
     ) -> None:
         self._pool = pool
         self._database = database
@@ -835,12 +845,14 @@ class PlaneRuntime:
         self._expected_contract_version = expected_contract_version
         self._observed_schema_revision = observed_schema_revision
         self._consumer_version = consumer_version
+        self._data_plane_revision = data_plane_revision
 
     def inspect_compatibility(self) -> CompatibilityReport:
         return inspect_compatibility(
             expected_contract_version=self._expected_contract_version,
             observed_schema_revision=self._observed_schema_revision,
             consumer_version=self._consumer_version,
+            data_plane_revision=self._data_plane_revision,
         )
 
     def inspect_baseline_compatibility(self) -> BaselineCompatibilityReport:
@@ -908,21 +920,40 @@ def create_plane_runtime(
     expected_contract_version: str = CONTRACT_VERSION,
     observed_schema_revision: str = SCHEMA_REVISION,
     consumer_version: str = PACKAGE_VERSION,
+    dialect: Dialect = POSTGRES,
 ) -> PlaneRuntime:
     pool = ConnectionPool(driver_pool)
     database = PlaneDatabase(pool)
-    migration_runner = MigrationRunner(
-        database,
-        revision=CURRENT_DATA_PLANE_REVISION,
-        registry=MIGRATION_REGISTRY,
-    )
+    boot_runner: object
+    if dialect.is_sqlite:
+        boot_runner = SQLiteBootRunner(
+            database,
+            MigrationRunner(
+                database,
+                revision=SQLITE_DATA_PLANE_REVISION,
+                registry=SQLITE_MIGRATION_REGISTRY,
+            ),
+        )
+    else:
+        boot_runner = BaselineMigrationRunner(
+            database,
+            MigrationRunner(
+                database,
+                revision=CURRENT_DATA_PLANE_REVISION,
+                registry=MIGRATION_REGISTRY,
+            ),
+        )
+    if coordinator is None and dialect.is_sqlite:
+        coordinator = SQLiteReconciliationCoordinator(
+            pool, driver_pool.database_path, timeout_seconds=driver_pool.busy_timeout_seconds
+        )
     reconciliation_runner = ReconciliationRunner(
         coordinator or PostgresReconciliationCoordinator(pool),
         reconcilers,
     )
     initializer = BootInitializer(
         identity,
-        BaselineMigrationRunner(database, migration_runner),
+        boot_runner,  # type: ignore[arg-type]
         reconciliation_runner,
         reconciliation_context=reconciliation_context,
     )
@@ -935,6 +966,65 @@ def create_plane_runtime(
         expected_contract_version=expected_contract_version,
         observed_schema_revision=observed_schema_revision,
         consumer_version=consumer_version,
+        data_plane_revision=SQLITE_DATA_PLANE_REVISION
+        if dialect.is_sqlite
+        else CURRENT_DATA_PLANE_REVISION,
+    )
+
+
+def create_sqlite_runtime(
+    database_url: str,
+    *,
+    identity: str,
+    reconcilers: Iterable[ProductReconciler],
+    coordinator: ReconciliationCoordinator | None = None,
+    reconciliation_context: Mapping[str, object] | None = None,
+    repositories: RepositoryCatalog | None = None,
+    expected_contract_version: str = CONTRACT_VERSION,
+    observed_schema_revision: str = SCHEMA_REVISION,
+    consumer_version: str = PACKAGE_VERSION,
+    maximum_connections: int = 8,
+    acquire_timeout_seconds: float = 30.0,
+    busy_timeout_seconds: float = 10.0,
+) -> PlaneRuntime:
+    driver_pool = create_sqlite_driver_pool(
+        database_url,
+        maximum_connections=maximum_connections,
+        acquire_timeout_seconds=acquire_timeout_seconds,
+        busy_timeout_seconds=busy_timeout_seconds,
+    )
+    try:
+        return create_plane_runtime(
+            driver_pool,
+            identity=identity,
+            coordinator=coordinator,
+            reconcilers=reconcilers,
+            reconciliation_context=reconciliation_context,
+            repositories=repositories,
+            expected_contract_version=expected_contract_version,
+            observed_schema_revision=observed_schema_revision,
+            consumer_version=consumer_version,
+            dialect=SQLITE,
+        )
+    except BaseException:
+        with suppress(BaseException):
+            driver_pool.closeall()
+        raise
+
+
+def create_runtime(
+    database_url: str,
+    *,
+    identity: str,
+    reconcilers: Iterable[ProductReconciler],
+    **options: Any,
+) -> PlaneRuntime:
+    if is_sqlite_url(database_url):
+        return create_sqlite_runtime(
+            database_url, identity=identity, reconcilers=reconcilers, **options
+        )
+    return create_postgres_runtime(
+        database_url, identity=identity, reconcilers=reconcilers, **options
     )
 
 
@@ -1089,6 +1179,7 @@ __all__ = (
     "LearningItemRecord",
     "LearningLedgerRepository",
     "LedgerEntryRecord",
+    "LockContentionError",
     "NotificationDeliveryIdentity",
     "NotificationEventKind",
     "NotificationInboxEntry",
@@ -1191,9 +1282,11 @@ __all__ = (
     "create_repository_catalog",
     "create_revocation_repository",
     "create_run_repository",
+    "create_runtime",
     "create_saved_component_repository",
     "create_scheduler_repository",
     "create_share_grant_repository",
+    "create_sqlite_runtime",
     "create_stop_epoch_repository",
     "create_streaming_blob_store",
     "create_tool_policy_state_repository",
@@ -1208,6 +1301,7 @@ __all__ = (
     "initialize_empty_database",
     "inspect_baseline_compatibility",
     "inspect_endpoint_readiness",
+    "is_lock_contention",
     "paths_for",
     "qualify_joint_restore",
     "recover_joint_restore",

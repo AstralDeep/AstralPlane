@@ -10,6 +10,7 @@ from typing import Final
 
 from astralplane.contracts import Parameters, Transaction
 from astralplane.contracts import PlaneDatabase as PlaneDatabaseContract
+from astralplane.database.dialect import dialect_of
 from astralplane.database.legacy_baseline_066 import (
     LEGACY_BASELINE_SOURCE_BLOB,
     _LegacyBaseline066Builder,
@@ -147,6 +148,12 @@ WHERE table_schema = current_schema()
   AND table_type = 'BASE TABLE'
 ORDER BY table_name
 """.strip()
+_LIST_TABLES_SQLITE_SQL: Final = """
+SELECT name AS table_name
+FROM sqlite_master
+WHERE type = 'table' AND substr(name, 1, 7) <> 'sqlite_'
+ORDER BY name
+""".strip()
 _READ_METADATA_SQL: Final = """
 SELECT key, value
 FROM schema_meta
@@ -228,7 +235,9 @@ class _LegacyCursorAdapter:
 
 
 def _inspect_transaction(transaction: Transaction) -> BaselineCompatibilityReport:
-    table_rows = transaction.fetch_all(_LIST_TABLES_SQL)
+    table_rows = transaction.fetch_all(
+        dialect_of(transaction).choose(postgres=_LIST_TABLES_SQL, sqlite=_LIST_TABLES_SQLITE_SQL)
+    )
     tables = frozenset(str(row["table_name"]) for row in table_rows)
     if not tables:
         return BaselineCompatibilityReport(

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from astralplane.contracts import QueryExecutor, Transaction
+from astralplane.database.dialect import dialect_of
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
@@ -411,7 +412,15 @@ class EventRosterRepository:
         self, query: QueryExecutor, *, owner_id: str, mesh_id: str
     ) -> tuple[RosterEntryRecord, ...]:
         owner = _required_id(owner_id, "owner_id")
-        rows = tuple(query.fetch_all(_TIPS_SQL, (owner, hash_value(mesh_id, "mesh_id"))))
+        statement = dialect_of(query).choose(
+            postgres=_TIPS_SQL,
+            sqlite=_TIPS_SQL.replace(
+                "follower.follows @> jsonb_build_array(entry.entry_id)",
+                "EXISTS (SELECT 1 FROM json_each(follower.follows) AS followed "
+                "WHERE followed.value = entry.entry_id)",
+            ),
+        )
+        rows = tuple(query.fetch_all(statement, (owner, hash_value(mesh_id, "mesh_id"))))
         _owned(rows, owner)
         return tuple(_entry(row) for row in rows)
 

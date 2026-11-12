@@ -297,6 +297,7 @@ class WatchSQL:
 
 
 @pytest.mark.parametrize("resource", ["operation", "slot", "grant"])
+@pytest.mark.postgresql_lock_catalog
 def test_expiry_during_real_lock_wait_uses_clock_not_transaction_start(database, work, resource):
     fence = running(database, work)
     repo, original = grant(database)
@@ -352,6 +353,7 @@ def test_expiry_during_real_lock_wait_uses_clock_not_transaction_start(database,
 
 
 @pytest.mark.parametrize("lock", ["owner", "state"])
+@pytest.mark.postgresql_lock_catalog
 def test_grant_late_upstream_contention_refuses_without_aborting_caller(database, work, lock):
     fence = running(database, work)
     repo, original = grant(database)
@@ -440,6 +442,7 @@ def test_grant_observation_does_not_adopt_replacement_and_outer_rollback(databas
 
 
 @pytest.mark.parametrize("mutation", ["cancel", "reselect", "terminal", "recover", "revoke"])
+@pytest.mark.postgresql_lock_catalog
 def test_locked_mutation_is_seen_by_new_read_before_delivery(database, work, mutation):
     fence = running(database, work)
     repo, original = grant(database)

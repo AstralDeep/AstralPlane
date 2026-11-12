@@ -1,9 +1,14 @@
 # AstralPlane
 
-AstralPlane is Astral's independent embedded durable-state library. It owns PostgreSQL connection
+AstralPlane is Astral's independent embedded durable-state library. It owns PostgreSQL and SQLite connection
 and transaction mechanics, guarded schema evolution, owner-scoped repositories, audit-chain
 storage, transactional outbox delivery, and explicit blob-purge recovery. AstralDeep installs the
 package in-process; AstralPlane does not add a service port or a second database.
+
+Personal nodes can select a persistent SQLite file through `create_sqlite_runtime(...)` or
+the URL-selecting `create_runtime(...)`; institutional nodes keep `create_postgres_runtime(...)`.
+See [SQLite composition, locking and recovery](docs/sqlite-backend.md) for the dialect-specific
+registry pin, file requirements and single-writer contract.
 
 ## Contracts
 

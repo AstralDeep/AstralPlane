@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from astralplane.contracts import QueryExecutor, Transaction
+from astralplane.database.dialect import dialect_of
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryNotFoundError,
@@ -84,6 +85,15 @@ ORDER BY latest.run_id ASC LIMIT %s
 _GOAL_BY_EVENT_SQL: Final = f"""
 SELECT {_GOAL_FIELDS} FROM run_goal_transition
 WHERE owner_id = %s AND mesh_id = %s AND event_id = %s
+""".strip()
+
+_EXECUTOR_RUNS_SQLITE_SQL: Final = f"""
+SELECT {_LEASE_FIELDS} FROM (
+    SELECT {_LEASE_FIELDS}, row_number() OVER (PARTITION BY run_id ORDER BY epoch DESC) AS rank
+    FROM run_lease_entry WHERE owner_id = %s AND mesh_id = %s
+) AS latest
+WHERE latest.rank = 1 AND latest.executor_feed_id = %s AND latest.state IN ('running', 'paused')
+ORDER BY latest.run_id ASC LIMIT %s
 """.strip()
 
 _GOAL_LATEST_SQL: Final = f"""
@@ -293,7 +303,7 @@ class RunRepository:
         limit: int = 200,
     ) -> tuple[RunLeaseRecord, ...]:
         rows = query.fetch_all(
-            _EXECUTOR_RUNS_SQL,
+            dialect_of(query).choose(postgres=_EXECUTOR_RUNS_SQL, sqlite=_EXECUTOR_RUNS_SQLITE_SQL),
             (
                 _required_id(owner_id, "owner_id"),
                 hash_value(mesh_id, "mesh_id"),

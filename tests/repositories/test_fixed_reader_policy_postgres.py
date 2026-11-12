@@ -65,6 +65,16 @@ def clean_facts(catalog_database):
 
 @contextmanager
 def independent(fixture):
+    if os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"].startswith("sqlite:"):
+        from astralplane.database.sqlite import create_sqlite_driver_pool
+
+        driver = create_sqlite_driver_pool(os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"])
+        pool = ConnectionPool(driver)
+        try:
+            yield PlaneDatabase(pool)
+        finally:
+            pool.close()
+        return
     connection = psycopg2.connect(
         make_dsn(
             os.environ["ASTRALPLANE_TEST_POSTGRES_DSN"],
@@ -181,6 +191,7 @@ def test_every_ordinary_writer_conflicts_immediately(catalog_database, table):
 
 @pytest.mark.parametrize("kind", ["new_override", "same_owner", "other_owner", "global", "prefs"])
 @pytest.mark.parametrize("rollback", [False, True])
+@pytest.mark.postgresql_lock_catalog
 def test_fence_blocks_phantom_and_existing_writers_until_transaction_ends(
     catalog_database,
     kind,
@@ -237,6 +248,7 @@ def test_fence_blocks_phantom_and_existing_writers_until_transaction_ends(
         assert future.result(timeout=3) is True
 
 
+@pytest.mark.postgresql_lock_catalog
 def test_reverse_policy_then_config_writer_cannot_deadlock(catalog_database):
     ready, proceed = threading.Event(), threading.Event()
     pid = []
@@ -270,6 +282,7 @@ def test_reverse_policy_then_config_writer_cannot_deadlock(catalog_database):
         assert not snapshot(catalog_database, tx).scopes[0].enabled
 
 
+@pytest.mark.postgresql_lock_catalog
 def test_config_then_revoke_is_observed_after_config_wait(catalog_database):
     entered = threading.Event()
     pid = []
