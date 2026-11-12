@@ -66,7 +66,7 @@ single current-schema digest has the same owner/ACL posture for default `public`
 application schemas.
 
 The canonical current path is
-`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017 -> 089.018 -> 089.019 -> 089.020 -> 089.021`; every edge required
+`066.001 -> 067.001 -> 074.001 -> 074.002 -> 074.003 -> 074.004 -> 075.001 -> 079.001 -> 088.001 -> 088.002 -> 088.003 -> 088.004 -> 088.005 -> 088.006 -> 088.007 -> 088.008 -> 089.001 -> 089.002 -> 089.003 -> 089.004 -> 089.005 -> 089.006 -> 089.007 -> 089.008 -> 089.009 -> 089.010 -> 089.011 -> 089.012 -> 089.013 -> 089.014 -> 089.015 -> 089.016 -> 089.017 -> 089.018 -> 089.019 -> 089.020 -> 089.021 -> 089.022`; every edge required
 for one run commits in the same transaction. Before the first write, the runner compares the exact source
 revision's complete normalized catalog with its pinned predecessor allowlist. Every edge then runs
 its own postcondition. This prevents a later `IF NOT EXISTS` statement from repairing or concealing
@@ -389,7 +389,7 @@ This additive edge requires the exact `089.008` registry digest
 publication table, its live-publication index, and no provider, discovery, IAM,
 or transport object. The catalog digest immediately after this edge is
 `50c157e6451628840bb6b2a7ae245dfbd281a9ef1e3a5248831de4ce776ad3a5`; the current migration registry digest is
-`c7bdb010951e3d27b13b9f6fdc7e3d8a4e70ac34478807df12c2727b6b3739e6`. Existing notification, Atlas, mesh, stop,
+`dde302967743cf8f6f5d55e82f8355ef405823dfee638909c3a2f11b85f5cb27`. Existing notification, Atlas, mesh, stop,
 completion-wake, assignment, session, audit, grant, credential, accounting, and
 blob records remain unchanged.
 
@@ -800,7 +800,7 @@ An empty database is an approved source only for Plane's guarded baseline initia
 inspection accepts either no application tables or a metadata-table-only shell with no metadata; any
 other non-empty database must carry a known revision and every required baseline table. A partial or
 unknown schema fails closed without being overwritten. Every predecessor from `067.001` through
-`089.007` must carry its own pinned historical registry digest. A current `089.021` marker and
+`089.007` must carry its own pinned historical registry digest. A current `089.022` marker and
 digest are still insufficient on their own. The verifier binds the owned schema owner/ACL and the
 behavior, durability, authorization, namespace, dependency, and lifecycle shape of all Plane-owned
 tables, columns, sequences, constraints, indexes, functions, triggers, policies, rules, and
@@ -903,9 +903,9 @@ maintenance window has been verified:
    selecting a composition. Supply the complete root-name set and relative-key/size/digest
    manifest to `qualify_joint_restore`; it rejects wrong roots, incomplete or extra blobs,
    non-current metadata, and a damaged catalog before any session mutation. A restored `066.001`
-   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`, `089.015`, `089.016`, `089.017`, `089.018`, `089.019`, `089.020`
+   state has no Plane digest and must match its pinned predecessor catalog. Restored `067.001`, `074.001`, `074.002`, `074.003`, `074.004`, `075.001`, `079.001`, `088.001`, `088.002`, `088.003`, `088.004`, `088.005`, `088.006`, `088.007`, `088.008`, `089.001`, `089.002`, `089.003`, `089.004`, `089.005`, `089.006`, `089.007`, `089.008`, `089.009`, `089.010`, `089.011`, `089.012`, `089.013`, `089.014`, `089.015`, `089.016`, `089.017`, `089.018`, `089.019`, `089.020`, `089.021`
    states must carry their exact pinned historical registry digests and match their pinned
-   predecessor catalogs. A restored `089.021` state must carry the exact current registry
+   predecessor catalogs. A restored `089.022` state must carry the exact current registry
    digest and pass the current structural verifier.
 5. Select a composition whose Plane metadata declares the restored revision readable. Prefer the
    current composition and forward-retry the full guarded registry when possible.
@@ -1061,8 +1061,8 @@ and catalog digest `e506006358926677d9dba3261e0a17b4c56815132f747953048f6fcca1e1
 It adds `chat_project`, `chat_project_membership`, their ordering indexes, and the
 `chats_owner_identity` unique constraint on existing `(user_id,id)` values.
 Existing chat, message, publication, observation, preferences, and blob contents remain unchanged.
-The current catalog digest is `6d5601534ee90bbd5d45916b248cffe1da44f64768a09ce6efd084cb5d199365`;
-the current registry digest is `c7bdb010951e3d27b13b9f6fdc7e3d8a4e70ac34478807df12c2727b6b3739e6`.
+The current catalog digest is `cb564e2d95f3b58fe9861227bde05e16d56e9852f89a2abdcc825e156b08cbc9`;
+the current registry digest is `dde302967743cf8f6f5d55e82f8355ef405823dfee638909c3a2f11b85f5cb27`.
 Package version is `0.1.11`; read-compatible floor remains `066.001`.
 
 Projects use composite owner/project identities and integer millisecond timestamps supplied
@@ -1165,7 +1165,7 @@ opened admission. On a 2,000,000-row local table the build took about 2.3 second
 edge rolls back completely and the next normal runner applies it again. A predecessor that
 already has a same-name index, with any definition, fails catalog attestation before the first
 write. Never drop or rename such an object to force the edge through; investigate its origin
-first. A current `089.021` database missing or changing the index fails current verification.
+first. A current `089.022` database missing or changing the index fails current verification.
 
 The current binary can migrate every declared predecessor revision. An older binary cannot run
 against `089.015`: its guarded registry rejects the unknown revision and catalog. Exact Deep
@@ -1173,8 +1173,8 @@ composition pin checks must also pass before admission opens. To recover availab
 repair under the current binary, or use a verified joint restore of the matching database and
 blob state. Never drop the index under an `089.015` marker, rewrite revision or digest markers,
 or run ad-hoc downgrade SQL. The current catalog digest is
-`6d5601534ee90bbd5d45916b248cffe1da44f64768a09ce6efd084cb5d199365`; the current registry digest is
-`c7bdb010951e3d27b13b9f6fdc7e3d8a4e70ac34478807df12c2727b6b3739e6`.
+`cb564e2d95f3b58fe9861227bde05e16d56e9852f89a2abdcc825e156b08cbc9`; the current registry digest is
+`dde302967743cf8f6f5d55e82f8355ef405823dfee638909c3a2f11b85f5cb27`.
 
 Representative PostgreSQL tests populate an `089.014` catalog with a mixed-owner audit chain and
 retained rows from earlier slices, then upgrade it. They check that the rows are preserved and
@@ -1398,3 +1398,34 @@ damaged current structure, and prove old-reader denial. Repository tests cover c
 idempotent replay, fork evidence and freezing, concurrent competing appends, clock-ordered
 scope reads, absent bodies, roster ordering, checkpoint comparison with feed heads, derived
 row upserts, owner isolation on every read and write, and caller-rollback composition.
+
+### `089.022` Run leases, goals and the learning ledger and recovery
+
+The guarded `astralplane-089-run-and-learning-ledger` edge accepts only the exact `089.021`
+predecessor catalog and registry digest. It adds `run_lease_entry`, `run_goal_transition` and
+`learning_ledger_entry`, each keyed by owner and mesh and cascading from `event_mesh`. No
+existing row is read or rewritten and all three tables start empty.
+
+Each table is a history. A lease entry carries an epoch, a kind (take, transfer, takeover or
+state), the executor feed, a run state and the event that produced it. The repository appends only
+the next epoch, refuses a second take, a handoff to the current executor, a state change by another
+executor and any entry after the run is completed, failed or cancelled. A goal transition carries
+the next revision, the goal text, a state, round and stall counts and its event. Rounds never
+decrease, the text never changes and nothing follows an achieved or abandoned goal. A ledger entry
+is a proposal, an adoption or a reversal with a content hash, a scope and one or more justifying
+event ids. A partial unique index allows one adoption and one reversal per proposal, and an
+adoption must name a review of `automatic` or `owner`. Every entry is idempotent by its own event
+id, and the same id with different content is refused. Repositories never update or delete these rows.
+
+The current binary can migrate declared predecessor revisions. An older binary cannot run
+against `089.022`: its guarded registry rejects the unknown revision and catalog. Exact Deep
+composition pin checks must also pass before admission opens. Never delete or edit history rows
+to recover availability or to undo an adoption. A reversal is a new entry. Use a verified joint
+restore of the matching database and blob state, or forward repair, which re-runs this additive
+edge from the attested `089.021` catalog.
+
+Representative PostgreSQL tests populate a prior catalog, preserve retained rows, repeat the
+migration, interrupt and recover the edge transaction, reject same-name tables and damaged
+current structure, and prove old-reader denial. Repository tests cover epoch and revision
+contiguity, handoff and takeover rules, finished runs and goals, the proposal, adoption and
+reversal order, idempotent replay, owner isolation and caller-rollback composition.
