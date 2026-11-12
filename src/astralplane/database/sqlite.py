@@ -26,7 +26,12 @@ from astralplane.database.sqlite_functions import (
     register_adapters,
     timeout_seconds,
 )
-from astralplane.database.sqlite_sql import classify_control, statement_access, translate
+from astralplane.database.sqlite_sql import (
+    classify_control,
+    is_try_lock,
+    statement_access,
+    translate,
+)
 from astralplane.errors import InitializationError, LockContentionError
 
 MINIMUM_SQLITE_VERSION: Final = (3, 39, 0)
@@ -139,7 +144,10 @@ class SQLiteCursor:
             self._connection.begin_if_needed(write=True, no_wait=no_wait)
             locking_select = False
         if not scalar:
-            self._connection.begin_if_needed(write=write and not locking_select)
+            self._connection.begin_if_needed(
+                write=(write and not locking_select) or not self._connection.raw.in_transaction,
+                defer_writer=is_try_lock(statement),
+            )
         raw = self._connection.raw.cursor()
         self._raw = raw
         self._execute_raw(raw, translated, bound, deadline)
@@ -278,14 +286,16 @@ class SQLiteConnection:
             raise sqlite3.ProgrammingError("connection is closed")
         return SQLiteCursor(self)
 
-    def begin_if_needed(self, *, write: bool = True, no_wait: bool = False) -> None:
+    def begin_if_needed(
+        self, *, write: bool = True, no_wait: bool = False, defer_writer: bool = False
+    ) -> None:
         if self.autocommit:
             return
         if self.raw.in_transaction:
             if write:
                 self.reserve_writer(no_wait=no_wait)
             return
-        immediate = write and self.begin_mode == "IMMEDIATE"
+        immediate = write and self.begin_mode == "IMMEDIATE" and not defer_writer
         timeout = (
             0
             if no_wait
@@ -350,6 +360,13 @@ class SQLiteConnection:
             return True
         except sqlite3.Error as exc:
             self._release_gate()
+            if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_BUSY_SNAPSHOT:
+                if try_only:
+                    return False
+                raise SQLiteLockTimeoutError(
+                    "another writer committed after this transaction began reading, "
+                    "so it can no longer take the SQLite writer: retry the transaction"
+                ) from exc
             wrapped = _wrap_lock_error(exc)
             if try_only and isinstance(wrapped, SQLiteLockTimeoutError):
                 return False

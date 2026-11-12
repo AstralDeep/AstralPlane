@@ -191,6 +191,30 @@ def test_read_only_snapshot_and_lock_deadline(tmp_path):
         competing_pool.close()
 
 
+def test_read_first_write_transaction_holds_the_writer_from_its_first_statement(tmp_path):
+    path = tmp_path / "plane.db"
+    pool = ConnectionPool(create_sqlite_driver_pool(f"sqlite://{path}"))
+    competing_pool = ConnectionPool(create_sqlite_driver_pool(f"sqlite://{path}"))
+    database, competing = PlaneDatabase(pool), PlaneDatabase(competing_pool)
+    try:
+        runner(database).run(expected_revision=SCHEMA_REVISION)
+        with database.transaction() as tx:
+            tx.execute("CREATE TABLE value_table(value INTEGER)")
+            tx.execute("INSERT INTO value_table VALUES(1)")
+        with database.transaction() as writer:
+            assert writer.fetch_one("SELECT value FROM value_table")["value"] == 1
+            with pytest.raises(SQLiteLockTimeoutError), competing.transaction() as rejected:
+                rejected.execute("SET LOCAL lock_timeout='1ms'")
+                rejected.execute("UPDATE value_table SET value=3")
+            writer.fetch_one("SELECT value FROM value_table FOR UPDATE")
+            writer.execute("UPDATE value_table SET value=2")
+        with competing.transaction(read_only=True) as reader:
+            assert reader.fetch_one("SELECT value FROM value_table")["value"] == 2
+    finally:
+        pool.close()
+        competing_pool.close()
+
+
 @pytest.mark.parametrize(
     "sql,parameters,expected",
     [
@@ -212,6 +236,10 @@ def test_read_only_snapshot_and_lock_deadline(tmp_path):
         ("SELECT clock_timestamp()+(%s*interval '1 second') AS value", (2,), "timestamp"),
         ("SELECT clock_timestamp()-interval '1 day' AS value", (), "timestamp"),
         ("SELECT left(%s,2) AS value", ("text",), "te"),
+        ("SELECT right(%s,2) AS value", ("text",), "xt"),
+        ("SELECT right(%s,-1) AS value", ("text",), "ext"),
+        ("SELECT right(%s,9) AS value", ("text",), "text"),
+        ("SELECT right(%s,0) AS value", ("text",), ""),
         ('SELECT %s COLLATE "C" AS value', ("é",), "é"),
         (
             "SELECT jsonb_set(%s,'{nested,x}',to_jsonb(%s)) AS value",
@@ -793,6 +821,42 @@ def test_baseline_rejects_invalid_uuid_nul_and_integer_width(database):
             == 2**31 - 1
         )
         assert tx.fetch_one("SELECT count(*) AS n FROM chat_project")["n"] == 0
+
+
+def test_transaction_started_by_a_refused_try_lock_reports_a_stale_snapshot_on_write(tmp_path):
+    from contextlib import ExitStack
+
+    path = tmp_path / "plane.db"
+    pools = [
+        ConnectionPool(create_sqlite_driver_pool(f"sqlite://{path}", busy_timeout_seconds=0.05))
+        for _ in range(2)
+    ]
+    first, second = [PlaneDatabase(pool) for pool in pools]
+    try:
+        runner(first).run(expected_revision=SCHEMA_REVISION)
+        with first.transaction() as tx:
+            tx.execute("CREATE TABLE value_table(value INTEGER)")
+            tx.execute("INSERT INTO value_table VALUES(1)")
+        with ExitStack() as stack:
+            held = stack.enter_context(first.transaction())
+            held.fetch_one("SELECT pg_advisory_xact_lock(%s,%s)", (1, 2))
+            with (
+                pytest.raises(SQLiteLockTimeoutError, match="retry the transaction"),
+                second.transaction() as contender,
+            ):
+                query = "SELECT pg_try_advisory_xact_lock(%s,%s) AS acquired"
+                assert contender.fetch_one(query, (1, 2))["acquired"] is False
+                assert contender.fetch_one("SELECT value FROM value_table")["value"] == 1
+                held.execute("UPDATE value_table SET value=2")
+                stack.close()
+                assert contender.fetch_one(query, (1, 2))["acquired"] is False
+                contender.execute("UPDATE value_table SET value=3")
+        with second.transaction() as fresh:
+            fresh.execute("UPDATE value_table SET value=3")
+            assert fresh.fetch_one("SELECT value FROM value_table")["value"] == 3
+    finally:
+        for pool in pools:
+            pool.close()
 
 
 def test_try_lock_reports_a_real_writer_reservation_and_retries_fresh(tmp_path):

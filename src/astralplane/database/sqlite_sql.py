@@ -481,4 +481,10 @@ def statement_access(statement: str) -> tuple[bool, bool, bool, bool]:
     )
 
 
-__all__ = ("UnsupportedSQLiteConstructError", "classify_control", "translate")
+def is_try_lock(statement: str) -> bool:
+    code = " ".join(text for is_code, text in _segments(statement) if is_code)
+    pattern = r"\bpg_try_advisory_xact_lock(?:_shared)?\s*\("
+    return re.search(pattern, code, re.IGNORECASE) is not None
+
+
+__all__ = ("UnsupportedSQLiteConstructError", "classify_control", "is_try_lock", "translate")
