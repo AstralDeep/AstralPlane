@@ -48,3 +48,30 @@ def test_classifier_refuses_unproven_semantic_conflicts_and_cycles():
     first.__cause__, second.__cause__ = second, first
     assert not is_lock_contention(first)
     assert isinstance(SQLiteLockTimeoutError(), RepositoryConflictError)
+
+
+def test_native_backend_lock_failure_uses_the_public_classifier(migrated_clone):
+    from tests.integration.test_lifecycle_acceptance import concurrent_database
+
+    with migrated_clone.database.transaction() as tx:
+        tx.execute("INSERT INTO user_preferences(user_id) VALUES('contention-owner')")
+    with (
+        migrated_clone.database.transaction() as held,
+        concurrent_database(migrated_clone) as other,
+    ):
+        held.fetch_one(
+            "SELECT user_id FROM user_preferences WHERE user_id=%s FOR UPDATE",
+            ("contention-owner",),
+        )
+        with (
+            pytest.raises((LockContentionError, psycopg2.errors.LockNotAvailable)) as caught,
+            other.transaction() as contender,
+        ):
+            contender.execute("SET LOCAL lock_timeout='10ms'")
+            contender.fetch_one(
+                "SELECT user_id FROM user_preferences WHERE user_id=%s FOR UPDATE",
+                ("contention-owner",),
+            )
+        assert is_lock_contention(caught.value)
+    with migrated_clone.database.transaction() as retry:
+        retry.execute("UPDATE user_preferences SET updated_at=1 WHERE user_id='contention-owner'")

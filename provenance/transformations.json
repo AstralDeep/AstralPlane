@@ -136,7 +136,7 @@
       "resultPaths": [
         {
           "path": "src/astralplane/repositories/knowledge.py",
-          "sha256": "5c4edf9adeb90822dfa2b4f2aaed427eb7fd195ffdfab32964fe5f76b73c4368"
+          "sha256": "c3e5ca27e1c1886c0f89e2996258b7fafa9dbd7fdf35e125fb7cabfa0f09d43e"
         },
         {
           "path": "src/astralplane/repositories/preferences.py",
