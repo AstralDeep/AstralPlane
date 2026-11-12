@@ -345,6 +345,16 @@ def _jsonb_set(raw: object, path: object, replacement: object, create: object = 
     return "null" if value is None else _to_jsonb(value)
 
 
+def _right(value: object, count: object) -> str | None:
+    if value is None or count is None:
+        return None
+    text = str(value)
+    size = int(count)
+    if size >= 0:
+        return text[len(text) - size :] if size else ""
+    return text[-size:]
+
+
 def _text(value: object) -> str | None:
     if value is None:
         return None
@@ -870,6 +880,7 @@ def install_functions(
         ("pg_try_advisory_xact_lock_shared", 1, try_transaction_lock),
         ("pg_try_advisory_xact_lock_shared", 2, try_transaction_lock),
         ("pg_is_in_recovery", 0, lambda: 0),
+        ("right", 2, _right),
     )
     for name, arity, function in simple:
         connection.create_function(name, arity, function)
