@@ -172,7 +172,7 @@ def test_facade_exposes_computer_use_repository() -> None:
 def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> None:
     edge = canonical.PLANE_SCHEMA_089_018_MIGRATION
     assert edge in canonical.MIGRATION_REGISTRY.migrations
-    assert canonical.MIGRATION_REGISTRY.migrations[-4] is edge
+    assert canonical.MIGRATION_REGISTRY.migrations[-5] is edge
     assert edge.name == "astralplane-089-computer-use"
     assert edge.source_revisions == ("089.017",)
     assert edge.target_revision == "089.018"
@@ -193,7 +193,7 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
     assert canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST == (
         "99862c91fe45769d9b037987e80dbd3b685be5f7afbf0bafb2c895d15592c0f5"
     )
-    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.021"
+    assert canonical.CURRENT_DATA_PLANE_REVISION.schema_revision == "089.022"
     assert canonical.CURRENT_DATA_PLANE_REVISION.predecessor_digest_for("089.017") == (
         canonical.PLANE_SCHEMA_089_017_REGISTRY_DIGEST
     )
@@ -201,16 +201,16 @@ def test_089_018_computer_use_edge_is_pinned_to_the_exact_089_017_registry() -> 
         "86af1f46f4909106c0ab736203acfdbca86f3ed105559a8972db4899faa8c03f",
     )
     assert canonical.CURRENT_SCHEMA_STRUCTURE_DIGEST == (
-        "6d5601534ee90bbd5d45916b248cffe1da44f64768a09ce6efd084cb5d199365"
+        "cb564e2d95f3b58fe9861227bde05e16d56e9852f89a2abdcc825e156b08cbc9"
     )
     assert canonical.CURRENT_SCHEMA_VERIFIER_CHECKSUM == (
-        "3dd7fe6a7dbdaa793a34ee6bafdca64cdd9fcf3a66e6985175adf4d06b18b53b"
+        "2aba6eb28dcfcea86eb53f704719332ff5dc3a8dcee37f26dae267f32e761d9c"
     )
     assert canonical.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM == (
-        "5eff29adc4c4e8ae9d620c1e49b3bdf049ee6520848a211731f55f2d0ec2b749"
+        "836964bd86b0329361aaa84d33712cdb07ee2277f62c143bca5ddd3fa31f627e"
     )
     assert canonical.MIGRATION_DIGEST == (
-        "c7bdb010951e3d27b13b9f6fdc7e3d8a4e70ac34478807df12c2727b6b3739e6"
+        "dde302967743cf8f6f5d55e82f8355ef405823dfee638909c3a2f11b85f5cb27"
     )
 
 

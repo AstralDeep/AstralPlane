@@ -319,6 +319,8 @@ def test_repository_catalog_is_complete_immutable_and_fresh() -> None:
         "derived_chat",
         "event_log",
         "event_roster",
+        "learning_ledger",
+        "runs",
         "conversation_files",
         "credentials",
         "draft_agents",

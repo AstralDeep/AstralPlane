@@ -83,8 +83,11 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             created_at=10,
         )
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.021")
-    assert report.applied_steps == ("astralplane-089-mesh-event-store",)
+    report = runner(database).run(expected_revision="089.022")
+    assert report.applied_steps == (
+        "astralplane-089-mesh-event-store",
+        "astralplane-089-run-and-learning-ledger",
+    )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
         for table in (
@@ -131,7 +134,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             .head_seq
             == 2
         )
-    assert runner(database).run(expected_revision="089.021").applied_steps == ()
+    assert runner(database).run(expected_revision="089.022").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.020")
 
@@ -152,7 +155,7 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.021")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.022")
     with predecessor.database.transaction() as tx:
         assert tx.fetch_one("SELECT to_regclass('event_entry') AS relation")["relation"] is None
         assert (
@@ -163,8 +166,9 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
             )["n"]
             == 0
         )
-    assert runner(predecessor.database).run(expected_revision="089.021").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.022").applied_steps == (
         "astralplane-089-mesh-event-store",
+        "astralplane-089-run-and-learning-ledger",
     )
 
 
@@ -180,7 +184,7 @@ def test_foreign_namesakes_fail_closed(predecessor, namesake):
     with predecessor.database.transaction() as tx:
         tx.execute(namesake)
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.021")
+        runner(predecessor.database).run(expected_revision="089.022")
 
 
 @pytest.mark.parametrize(
@@ -195,4 +199,4 @@ def test_current_structure_damage_fails_closed(migrated_clone, damage):
     with migrated_clone.database.transaction() as tx:
         tx.execute(damage)
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.021")
+        runner(migrated_clone.database).run(expected_revision="089.022")

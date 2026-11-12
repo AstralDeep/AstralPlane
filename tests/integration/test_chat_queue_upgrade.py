@@ -74,7 +74,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
             ("queue-upgrade-chat", "queue-upgrade-owner", "Synthetic upgrade chat", 10, 10),
         )
         before = retained_rows(tx, tables)
-    report = runner(database).run(expected_revision="089.021")
+    report = runner(database).run(expected_revision="089.022")
     assert report.applied_steps == (
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
@@ -82,6 +82,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         "astralplane-089-verification-credentials",
         "astralplane-089-chat-read-receipts",
         "astralplane-089-mesh-event-store",
+        "astralplane-089-run-and-learning-ledger",
     )
     with database.transaction() as tx:
         assert retained_rows(tx, tables) == before
@@ -106,7 +107,7 @@ def test_populated_upgrade_repeat_and_old_reader_denial(predecessor):
         assert repo.claim_next(
             tx, owner_id="queue-upgrade-owner", chat_id="queue-upgrade-chat"
         ) == first
-    assert runner(database).run(expected_revision="089.021").applied_steps == ()
+    assert runner(database).run(expected_revision="089.022").applied_steps == ()
     with pytest.raises(SchemaRevisionError):
         prior_runner(database).run(expected_revision="089.015")
 
@@ -127,18 +128,19 @@ def test_interrupted_edge_rolls_back_then_normal_runner_recovers(predecessor):
         predecessor_schema_verifier_checksum=m.PREDECESSOR_SCHEMA_VERIFIER_CHECKSUM,
     )
     with pytest.raises(RuntimeError, match="synthetic interruption"):
-        runner(predecessor.database, registry=registry).run(expected_revision="089.021")
+        runner(predecessor.database, registry=registry).run(expected_revision="089.022")
     with predecessor.database.transaction() as tx:
         assert (
             tx.fetch_one("SELECT to_regclass('chat_queue_item') AS relation")["relation"] is None
         )
-    assert runner(predecessor.database).run(expected_revision="089.021").applied_steps == (
+    assert runner(predecessor.database).run(expected_revision="089.022").applied_steps == (
         "astralplane-089-chat-queue",
         "astralplane-089-conversation-branches",
         "astralplane-089-computer-use",
         "astralplane-089-verification-credentials",
         "astralplane-089-chat-read-receipts",
         "astralplane-089-mesh-event-store",
+        "astralplane-089-run-and-learning-ledger",
     )
 
 
@@ -146,8 +148,8 @@ def test_foreign_namesake_and_current_structure_damage_fail_closed(predecessor, 
     with predecessor.database.transaction() as tx:
         tx.execute("CREATE TABLE chat_queue_item(wrong TEXT)")
     with pytest.raises(SchemaRevisionError):
-        runner(predecessor.database).run(expected_revision="089.021")
+        runner(predecessor.database).run(expected_revision="089.022")
     with migrated_clone.database.transaction() as tx:
         tx.execute("ALTER TABLE chat_queue_item DROP CONSTRAINT chat_queue_item_chat_order")
     with pytest.raises(SchemaRevisionError):
-        runner(migrated_clone.database).run(expected_revision="089.021")
+        runner(migrated_clone.database).run(expected_revision="089.022")

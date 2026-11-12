@@ -206,6 +206,11 @@ from astralplane.repositories.harness_cleanup import HarnessCleanupRepository
 from astralplane.repositories.history import HistoryRepository
 from astralplane.repositories.identity import IdentityRepository
 from astralplane.repositories.knowledge import KnowledgeRepository
+from astralplane.repositories.learning_ledger import (
+    LearningItemRecord,
+    LearningLedgerRepository,
+    LedgerEntryRecord,
+)
 from astralplane.repositories.maintenance import MaintenanceRepository
 from astralplane.repositories.mesh_enrollment import MeshEnrollmentRepository
 from astralplane.repositories.mesh_events import (
@@ -266,6 +271,7 @@ from astralplane.repositories.quality_audit import QualityAuditRepository
 from astralplane.repositories.remote import RemoteRepository
 from astralplane.repositories.remote_proposals import RemoteOperationProposalRepository
 from astralplane.repositories.revocations import RevocationQueueRepository
+from astralplane.repositories.runs import RunGoalRecord, RunLeaseRecord, RunRepository
 from astralplane.repositories.saved_components import SavedComponentRepository
 from astralplane.repositories.scheduler import SchedulerRepository
 from astralplane.repositories.secrets import (
@@ -403,6 +409,14 @@ def create_chat_read_receipt_repository() -> ChatReadReceiptRepository:
 
 def create_derived_chat_repository() -> DerivedChatRepository:
     return DerivedChatRepository()
+
+
+def create_learning_ledger_repository() -> LearningLedgerRepository:
+    return LearningLedgerRepository()
+
+
+def create_run_repository() -> RunRepository:
+    return RunRepository()
 
 
 def create_event_log_repository() -> EventLogRepository:
@@ -591,6 +605,8 @@ class RepositoryCatalog:
     derived_chat: DerivedChatRepository
     event_log: EventLogRepository
     event_roster: EventRosterRepository
+    learning_ledger: LearningLedgerRepository
+    runs: RunRepository
     conversation_files: ConversationFileRepository
     saved_components: SavedComponentRepository
     history: HistoryRepository
@@ -650,6 +666,8 @@ class RepositoryCatalog:
                 "derived_chat": self.derived_chat,
                 "event_log": self.event_log,
                 "event_roster": self.event_roster,
+                "learning_ledger": self.learning_ledger,
+                "runs": self.runs,
                 "conversation_files": self.conversation_files,
                 "credentials": self.credentials,
                 "draft_agents": self.draft_agents,
@@ -722,6 +740,8 @@ def create_repository_catalog() -> RepositoryCatalog:
         derived_chat=create_derived_chat_repository(),
         event_log=create_event_log_repository(),
         event_roster=create_event_roster_repository(),
+        learning_ledger=create_learning_ledger_repository(),
+        runs=create_run_repository(),
         conversation_files=create_conversation_file_repository(),
         saved_components=create_saved_component_repository(),
         history=create_history_repository(),
@@ -1066,6 +1086,9 @@ __all__ = (
     "JointRestoreCompletion",
     "JointRestoreError",
     "JointRestoreEvidence",
+    "LearningItemRecord",
+    "LearningLedgerRepository",
+    "LedgerEntryRecord",
     "NotificationDeliveryIdentity",
     "NotificationEventKind",
     "NotificationInboxEntry",
@@ -1109,6 +1132,9 @@ __all__ = (
     "RestoreBlobEntry",
     "RestoredSessionRetirement",
     "RosterEntryRecord",
+    "RunGoalRecord",
+    "RunLeaseRecord",
+    "RunRepository",
     "SessionRetirementError",
     "StagedBundleReceipt",
     "StopEpochConflictError",
@@ -1146,6 +1172,7 @@ __all__ = (
     "create_history_repository",
     "create_identity_repository",
     "create_knowledge_repository",
+    "create_learning_ledger_repository",
     "create_maintenance_repository",
     "create_notification_repository",
     "create_observation_repository",
@@ -1163,6 +1190,7 @@ __all__ = (
     "create_remote_repository",
     "create_repository_catalog",
     "create_revocation_repository",
+    "create_run_repository",
     "create_saved_component_repository",
     "create_scheduler_repository",
     "create_share_grant_repository",
