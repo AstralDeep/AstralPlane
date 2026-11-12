@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from astralplane import SCHEMA_REVISION, create_runtime
+from astralplane import SCHEMA_REVISION, create_runtime, is_lock_contention
 from astralplane.database.migrations import MigrationRunner
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.sqlite import (
@@ -558,6 +558,209 @@ def test_lock_contention_uses_the_shared_repository_conflict_type():
     assert SharedConflict is RepositoryConflictError
     assert isinstance(error, RepositoryConflictError)
     assert error.code == "repository_busy" and error.pgcode == "55P03"
+
+
+def test_lock_words_in_a_native_sql_error_do_not_create_contention(database):
+    with pytest.raises(sqlite3.OperationalError) as caught, database.transaction() as tx:
+        tx.fetch_one("SELECT [database is locked]")
+    assert caught.value.sqlite_errorcode == sqlite3.SQLITE_ERROR
+    assert not is_lock_contention(caught.value)
+
+
+@pytest.mark.parametrize("method", ["fetchall", "fetchone"])
+def test_statement_deadline_covers_deferred_cursor_consumption(database, monkeypatch, method):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        cursor.execute(
+            "WITH RECURSIVE sequence(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM sequence "
+            "WHERE n<100000) SELECT n FROM sequence"
+        )
+        observed[0] = 100.0
+        with pytest.raises(TimeoutError, match="statement deadline exceeded") as caught:
+            getattr(cursor, method)()
+        assert not hasattr(caught.value, "sqlite_errorcode")
+        cursor.close()
+        connection.rollback()
+        with connection.cursor() as retry:
+            retry.execute("SELECT 1 AS usable")
+            assert retry.fetchall() == [(1,)]
+
+
+def test_vm_work_crossing_deadline_produces_native_interrupt(database, monkeypatch):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+
+        def advance(value):
+            if value >= 10:
+                observed[0] = 100.0
+            return value
+
+        connection.raw.create_function("advance_clock", 1, advance)
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        cursor.execute(
+            "WITH RECURSIVE sequence(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM sequence "
+            "WHERE n<100000) SELECT advance_clock(n) FROM sequence"
+        )
+        with pytest.raises(sqlite3.OperationalError, match="interrupted") as caught:
+            cursor.fetchall()
+        assert caught.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
+        cursor.close()
+        connection.rollback()
+        assert connection.raw.execute("SELECT 1").fetchall() == [(1,)]
+
+
+def test_short_final_fetch_checks_expired_deadline_without_vm_progress(database, monkeypatch):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        cursor.execute("SELECT 1")
+        observed[0] = 100.0
+        with pytest.raises(TimeoutError, match="statement deadline exceeded"):
+            cursor.fetchone()
+        with pytest.raises(sqlite3.ProgrammingError):
+            cursor.fetchall()
+        cursor.close()
+
+
+@pytest.mark.parametrize("phase", ["execute", "fetch"])
+def test_short_step_crossing_deadline_cannot_return_late_results(database, monkeypatch, phase):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+
+        def advance(value):
+            if phase == "execute" or value == 1:
+                observed[0] = 100.0
+            return value
+
+        connection.raw.create_function("advance_clock", 1, advance)
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        query = "WITH seq(n) AS (VALUES(0),(1)) SELECT advance_clock(n) FROM seq"
+        with pytest.raises(TimeoutError, match="statement deadline exceeded"):
+            cursor.execute(query)
+            cursor.fetchone()
+        with pytest.raises(sqlite3.ProgrammingError):
+            cursor.fetchall()
+        cursor.close()
+
+
+@pytest.mark.parametrize("prior_read", [False, True])
+def test_locked_select_internal_probe_consumption_keeps_original_deadline(
+    database, monkeypatch, prior_read
+):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+
+        def advance(value):
+            if value >= 10:
+                observed[0] = 100.0
+            return value
+
+        connection.raw.create_function("advance_clock", 1, advance)
+        connection.raw.execute("CREATE TABLE probe_values(value INTEGER)")
+        connection.raw.execute("INSERT INTO probe_values VALUES(1)")
+        if prior_read:
+            connection.begin_if_needed(write=False)
+            connection.raw.execute("SELECT * FROM probe_values").fetchall()
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        with pytest.raises(sqlite3.OperationalError, match="interrupted") as caught:
+            cursor.execute(
+                "WITH RECURSIVE sequence(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM sequence "
+                "WHERE n<100000) SELECT value,n FROM probe_values CROSS JOIN sequence "
+                "WHERE advance_clock(n) IN (0,100000) FOR UPDATE OF probe_values"
+            )
+        assert caught.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
+        cursor.close()
+        connection.rollback()
+        assert connection.raw.execute("SELECT 1").fetchall() == [(1,)]
+
+
+def test_writer_wait_does_not_reset_statement_deadline_for_short_select(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tests.fixtures.sqlite_template import ObservedWriterGate
+
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    driver = create_sqlite_driver_pool(f"sqlite://{tmp_path / 'deadline.db'}")
+    gate = ObservedWriterGate()
+    driver._writer_gate = gate
+    first, second = driver.getconn(), driver.getconn()
+    try:
+        first.raw.execute("CREATE TABLE value_table(value INTEGER)")
+        first.raw.execute("INSERT INTO value_table VALUES(0)")
+        with first.cursor() as held:
+            held.execute("UPDATE value_table SET value=1")
+        gate.observe = True
+
+        def waiting():
+            second.set_local_setting("statement_timeout", "1ms")
+            try:
+                with second.cursor() as contender:
+                    contender.execute("SELECT value FROM value_table FOR UPDATE")
+            finally:
+                second.rollback()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(waiting)
+            assert gate.waiting.wait(5)
+            observed[0] = 100.0
+            first.commit()
+            with pytest.raises(TimeoutError, match="statement deadline exceeded"):
+                future.result(5)
+        assert second.raw.execute("SELECT value FROM value_table").fetchone() == (1,)
+    finally:
+        driver.putconn(first)
+        driver.putconn(second)
+        driver.closeall()
+
+
+def test_cursor_close_clears_deadline_before_connection_reuse(database, monkeypatch):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        cursor.execute(
+            "WITH RECURSIVE sequence(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM sequence "
+            "WHERE n<100000) SELECT n FROM sequence"
+        )
+        cursor.close()
+        observed[0] = 100.0
+        assert connection.raw.execute("SELECT 1").fetchall() == [(1,)]
+
+
+def test_idle_cursor_does_not_leave_a_global_connection_progress_handler(database, monkeypatch):
+    observed = [0.0]
+    monkeypatch.setattr("astralplane.database.sqlite.time.monotonic", lambda: observed[0])
+    with database._pool.connection() as connection:
+        connection.set_local_setting("statement_timeout", "1ms")
+        cursor = connection.cursor()
+        cursor.execute("SELECT 1")
+        observed[0] = 100.0
+        assert (
+            len(
+                connection.raw.execute(
+                    "WITH RECURSIVE seq(n) AS (VALUES(0) UNION ALL "
+                    "SELECT n+1 FROM seq WHERE n<1000) "
+                    "SELECT n FROM seq"
+                ).fetchall()
+            )
+            == 1001
+        )
+        with pytest.raises(TimeoutError):
+            cursor.fetchone()
+        cursor.close()
 
 
 def test_baseline_rejects_invalid_uuid_nul_and_integer_width(database):

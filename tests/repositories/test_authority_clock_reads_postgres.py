@@ -278,22 +278,21 @@ def schema_of(database):
         return tx.fetch_one("SELECT current_schema() AS s")["s"]
 
 
-class WatchSQL:
-    def __init__(self, tx, entered):
-        self.tx, self.entered = tx, entered
+def watch_sql(tx, entered):
+    execute, fetch_one = tx.execute, tx.fetch_one
 
-    def __getattr__(self, name):
-        return getattr(self.tx, name)
-
-    def execute(self, sql, params=()):
+    def observed_execute(sql, params=()):
         if "FROM operation_record" in sql and "FOR UPDATE" in sql:
-            self.entered.set()
-        return self.tx.execute(sql, params)
+            entered.set()
+        return execute(sql, params)
 
-    def fetch_one(self, sql, params=()):
+    def observed_fetch_one(sql, params=()):
         if "FROM user_offline_grant" in sql and "FOR UPDATE" in sql:
-            self.entered.set()
-        return self.tx.fetch_one(sql, params)
+            entered.set()
+        return fetch_one(sql, params)
+
+    tx.execute, tx.fetch_one = observed_execute, observed_fetch_one
+    return tx
 
 
 @pytest.mark.parametrize("resource", ["operation", "slot", "grant"])
@@ -314,12 +313,12 @@ def test_expiry_during_real_lock_wait_uses_clock_not_transaction_start(database,
             with pytest.raises(RepositoryConflictError):
                 if resource == "grant":
                     repo.assert_current_grant(
-                        WatchSQL(tx, entered),
+                        watch_sql(tx, entered),
                         owner_id=original.owner_id,
                         grant_id=original.grant_id,
                     )
                 else:
-                    work.assert_current_execution_lease(WatchSQL(tx, entered), fence)
+                    work.assert_current_execution_lease(watch_sql(tx, entered), fence)
             assert tx.fetch_one("SELECT 1 AS usable")["usable"] == 1
 
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -391,7 +390,7 @@ def test_execution_captures_original_fence_before_owner_wait(database, work):
 
     def reader():
         with independent_database(schema) as db, db.transaction() as tx:
-            return work.assert_current_execution_lease(WatchSQL(tx, entered), fence)
+            return work.assert_current_execution_lease(watch_sql(tx, entered), fence)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         with database.transaction() as tx:
@@ -454,12 +453,12 @@ def test_locked_mutation_is_seen_by_new_read_before_delivery(database, work, mut
             with pytest.raises(RepositoryConflictError):
                 if mutation == "revoke":
                     repo.assert_current_grant(
-                        WatchSQL(tx, entered),
+                        watch_sql(tx, entered),
                         owner_id=original.owner_id,
                         grant_id=original.grant_id,
                     )
                 else:
-                    work.assert_current_execution_lease(WatchSQL(tx, entered), fence)
+                    work.assert_current_execution_lease(watch_sql(tx, entered), fence)
             assert tx.fetch_one("SELECT 1 AS usable")["usable"] == 1
 
     with ThreadPoolExecutor(max_workers=1) as executor:

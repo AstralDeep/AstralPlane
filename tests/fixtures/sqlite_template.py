@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any
 
 from astralplane.database.migrations import MigrationRunner
@@ -19,6 +20,23 @@ from astralplane.database.sqlite_migrations import (
     SQLiteBootRunner,
 )
 from astralplane.database.transaction import PlaneDatabase
+
+
+class ObservedWriterGate:
+    def __init__(self):
+        self._lock = Lock()
+        self.observe = False
+        self.waiting = Event()
+
+    def acquire(self, *, timeout=-1):
+        if self.observe:
+            if self._lock.acquire(blocking=False):
+                return True
+            self.waiting.set()
+        return self._lock.acquire(timeout=timeout)
+
+    def release(self):
+        self._lock.release()
 
 
 class SQLiteTemplate:

@@ -47,8 +47,8 @@ be reused to approve work from its old snapshot. PostgreSQL-only physical catalo
 scheduling assertions are identified separately from shared repository behavior checks.
 
 `is_lock_contention(error)` is the public classifier for genuine PostgreSQL lock-not-available
-errors and SQLite's `LockContentionError`, including unsuppressed repository wrappers. A code string
-or an unrelated repository conflict is insufficient evidence. Classification does not authorize a
+errors and SQLite's `LockContentionError`, including unsuppressed repository wrappers. A redacted repository wrapper preserves known contention in the public error type before hiding
+native details. A code string or an unrelated repository conflict is insufficient evidence. Classification does not authorize a
 retry: the host must retain its own attempt/deadline bound and ensure the authorized callback has
 not started external effects. Deep's adoption of this portable classifier remains unqualified.
 
@@ -57,6 +57,10 @@ transaction-local settings retain their respective lifetimes. Unsupported Postgr
 raise an explicit SQL contract error; raw PostgreSQL SQL is not a backend-independent API.
 Rolling back a savepoint undoes its changes and settings; SQLite retains its file-level writer
 reservation until the outer transaction ends.
+Statement deadlines remain attached to a cursor through every result step and internal locking-read
+probe. Expiry before or after a short step raises `TimeoutError` without fabricated native metadata;
+SQLite VM cancellation retains its genuine interrupt error. Idle cursors leave no connection-wide
+progress handler installed.
 
 ## Backup and restore
 

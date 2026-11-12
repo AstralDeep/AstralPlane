@@ -13,6 +13,7 @@ from typing import Any
 
 from astralplane.contracts import IsolationLevel, Transaction
 from astralplane.database.dialect import dialect_of
+from astralplane.errors import LockContentionError, is_lock_contention
 from astralplane.repositories import (
     RepositoryConflictError,
     RepositoryDataError,
@@ -136,8 +137,10 @@ class ToolPolicyStateRepository:
             if dialect_of(transaction).is_sqlite:
                 transaction.fetch_one("SELECT set_config('lock_timeout',%s,true)", (prior_timeout,))
             return snapshot
-        except Exception:
+        except Exception as exc:
             # Detail hidden on purpose; caller must still abort the txn
+            if is_lock_contention(exc):
+                raise LockContentionError("fixed reader policy unavailable") from None
             raise RepositoryConflictError("fixed reader policy unavailable") from None
 
     def list_scopes(

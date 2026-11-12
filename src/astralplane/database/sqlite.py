@@ -32,11 +32,6 @@ from astralplane.errors import InitializationError, LockContentionError
 MINIMUM_SQLITE_VERSION: Final = (3, 39, 0)
 SQLITE_URL_SCHEME: Final = "sqlite"
 LOCK_NOT_AVAILABLE: Final = "55P03"
-_LOCK_MESSAGES: Final = (
-    "database is locked",
-    "database table is locked",
-    "database schema is locked",
-)
 
 
 class SQLiteLockTimeoutError(LockContentionError):
@@ -68,8 +63,11 @@ def sqlite_path_from_url(database_url: str) -> Path:
 
 
 def _wrap_lock_error(exc: sqlite3.Error) -> BaseException:
-    if isinstance(exc, sqlite3.OperationalError) and any(
-        marker in str(exc).lower() for marker in _LOCK_MESSAGES
+    native_code = getattr(exc, "sqlite_errorcode", None)
+    if (
+        isinstance(exc, sqlite3.OperationalError)
+        and type(native_code) is int
+        and native_code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
     ):
         error = SQLiteLockTimeoutError()
         error.__cause__ = exc
@@ -89,6 +87,7 @@ class SQLiteCursor:
         self._connection = connection
         self._raw: sqlite3.Cursor | None = None
         self._closed = False
+        self._deadline: float | None = None
         self.description: list[_Description] | None = None
         self.rowcount = -1
         self.statusmessage: str | None = None
@@ -122,11 +121,12 @@ class SQLiteCursor:
         if locking_select and self._connection._holds_gate:
             locking_select = False
         deadline = self._connection.statement_deadline()
+        self._deadline = deadline
         if locking_select and not self._connection.raw.in_transaction:
             probe = self._connection.raw.cursor()
             try:
                 self._execute_raw(probe, translated, bound, deadline)
-                found = probe.fetchone() is not None
+                found = self._fetch(raw=probe, all_rows=False) is not None
             except BaseException:
                 probe.close()
                 raise
@@ -143,7 +143,7 @@ class SQLiteCursor:
         raw = self._connection.raw.cursor()
         self._raw = raw
         self._execute_raw(raw, translated, bound, deadline)
-        if locking_select and raw.fetchone() is not None:
+        if locking_select and self._fetch(raw=raw, all_rows=False) is not None:
             self._connection.reserve_writer(no_wait=no_wait)
             raw.close()
             raw = self._connection.raw.cursor()
@@ -157,32 +157,77 @@ class SQLiteCursor:
 
     def _execute_raw(self, raw, statement, bound, deadline) -> None:
         try:
-            if deadline is not None:
-                self._connection.raw.set_progress_handler(
-                    lambda: time.monotonic() >= deadline, 1000
-                )
+            self._watch_progress(deadline)
             raw.execute(statement, bound)
-        except sqlite3.Error as exc:
-            wrapped = _wrap_lock_error(exc)
+            self._check_deadline(deadline)
+        except BaseException as exc:
+            self._clear_progress()
+            raw.close()
+            if self._raw is raw:
+                self._raw = None
+            wrapped = _wrap_lock_error(exc) if isinstance(exc, sqlite3.Error) else exc
             if wrapped is exc:
                 raise
             raise wrapped from exc
         finally:
+            self._stop_progress()
+        if raw.description is None:
+            self._clear_progress()
+
+    def _watch_progress(self, deadline) -> None:
+        self._check_deadline(deadline)
+        if deadline is None:
+            self._stop_progress()
+        else:
+            self._connection.raw.set_progress_handler(lambda: time.monotonic() >= deadline, 1000)
+
+    def _check_deadline(self, deadline) -> None:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("SQLite statement deadline exceeded")
+
+    def _stop_progress(self) -> None:
+        if not self._connection.closed:
             self._connection.raw.set_progress_handler(None, 0)
+
+    def _clear_progress(self) -> None:
+        self._deadline = None
+        self._stop_progress()
+
+    def _fetch(self, *, all_rows, raw=None):
+        raw = self._raw if raw is None else raw
+        try:
+            self._watch_progress(self._deadline)
+            result = raw.fetchall() if all_rows else raw.fetchone()
+            self._check_deadline(self._deadline)
+        except BaseException as exc:
+            self._clear_progress()
+            raw.close()
+            if self._raw is raw:
+                self._raw = None
+            wrapped = _wrap_lock_error(exc) if isinstance(exc, sqlite3.Error) else exc
+            if wrapped is exc:
+                raise
+            raise wrapped from exc
+        finally:
+            self._stop_progress()
+        if all_rows or result is None:
+            self._clear_progress()
+        return result
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         if self._raw is None or self.description is None:
             raise sqlite3.ProgrammingError("the statement did not produce records")
-        rows = self._raw.fetchall()
+        rows = self._fetch(all_rows=True)
         self.rowcount = self._raw.rowcount if self.description is None else len(rows)
         return rows
 
     def fetchone(self) -> tuple[Any, ...] | None:
         if self._raw is None or self.description is None:
             raise sqlite3.ProgrammingError("the statement did not produce records")
-        return self._raw.fetchone()
+        return self._fetch(all_rows=False)
 
     def _clear(self) -> None:
+        self._clear_progress()
         if self._raw is not None:
             self._raw.close()
             self._raw = None

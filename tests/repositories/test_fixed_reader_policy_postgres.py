@@ -19,6 +19,7 @@ from psycopg2.extensions import make_dsn
 from astralplane.contracts import IsolationLevel
 from astralplane.database.pool import ConnectionPool
 from astralplane.database.transaction import PlaneDatabase
+from astralplane.errors import LockContentionError, is_lock_contention
 from astralplane.repositories import RepositoryConflictError, RepositoryValidationError
 from tests.integration.test_catalog_caller_rollback import (
     _DedicatedDriverPool,
@@ -179,10 +180,14 @@ def test_every_ordinary_writer_conflicts_immediately(catalog_database, table):
         block.execute(f"DELETE FROM {table} WHERE FALSE")
         started = time.monotonic()
         with (
-            pytest.raises(RepositoryConflictError, match=r"^fixed reader policy unavailable$"),
+            pytest.raises(
+                LockContentionError, match=r"^fixed reader policy unavailable$"
+            ) as caught,
             catalog_database.database.transaction() as tx,
         ):
             snapshot(catalog_database, tx)
+        assert is_lock_contention(caught.value)
+        assert caught.value.__suppress_context__
         assert time.monotonic() - started < 1
         assert block.fetch_one("SELECT 1 AS n")["n"] == 1
     with catalog_database.database.transaction() as tx:
@@ -332,6 +337,7 @@ def test_malformed_preferences_have_no_data_in_refusal(catalog_database, raw):
         snapshot(catalog_database, tx)
     assert str(caught.value) == "fixed reader policy unavailable"
     assert caught.value.__suppress_context__
+    assert not is_lock_contention(caught.value)
 
 
 def test_invalid_owner_does_not_touch_transaction(catalog_database):
